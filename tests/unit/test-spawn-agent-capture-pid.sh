@@ -14,6 +14,10 @@ TEST_TMP_DIR="/tmp/octopus-tests-$$"
 mkdir -p "$TEST_TMP_DIR"
 trap 'rm -rf "$TEST_TMP_DIR"' EXIT INT TERM
 
+# Keep the permanent per-id reservation files (see _octopus_next_spawn_task_id)
+# inside the test sandbox instead of the real ~/.claude-octopus.
+export WORKSPACE_DIR="$TEST_TMP_DIR"
+
 log() { printf '%s %s\n' "${1:-}" "${2:-}" >> "$TEST_TMP_DIR/log"; }
 
 # The wrapper does meaningful setup before it can print the provider PID.
@@ -103,6 +107,19 @@ if [[ "$unique" == "$total" ]]; then
     test_pass
 else
     test_fail "expected $total distinct task_ids, got only $unique unique"
+fi
+
+# The PID/RANDOM fallback only fires when mktemp itself can't run (e.g. no
+# writable tmp). Force that path and confirm it still produces a validly
+# shaped, non-empty id instead of failing silently or breaking the caller.
+test_case "falls back to PID/RANDOM when mktemp is unavailable"
+mktemp() { return 1; }
+fallback_id=$(_octopus_next_spawn_task_id)
+unset -f mktemp
+if [[ "$fallback_id" =~ ^[0-9]+-[A-Za-z0-9]+$ ]]; then
+    test_pass
+else
+    test_fail "expected a valid 'timestamp-suffix' id from the fallback path, got: $fallback_id"
 fi
 
 # spawn_agent_capture_pid must actually use the shared helper when task_id is

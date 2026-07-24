@@ -120,17 +120,22 @@ _octopus_agent_lifecycle_event() {
 # PID across every subshell forked from it (bash(1)), confirmed failing in
 # CI on macOS. mktemp's file creation is atomic at the OS/filesystem level —
 # genuinely collision-free, not just low-probability — and needs no bash
-# version at all, so use its generated suffix instead; fall back to the old
-# PID/RANDOM combination only if mktemp itself is unavailable. Shared by
-# spawn_agent() and spawn_agent_capture_pid() so both default paths — and
-# their tests — stay in sync from one definition.
+# version at all, so use its generated suffix instead. The reservation file
+# is deliberately kept (not rm'd): deleting it would free that exact name
+# for reuse by a later mktemp call, turning the "genuinely unique" guarantee
+# back into a probabilistic one. Each file is 0 bytes, so the accumulated
+# cost over a session is a handful of empty inodes, not meaningful disk use.
+# Falls back to the old PID/RANDOM combination only if mktemp itself is
+# unavailable — that path is not a hard uniqueness guarantee, only a
+# best-effort default for environments where mktemp can't run at all.
+# Shared by spawn_agent() and spawn_agent_capture_pid() so both default
+# paths — and their tests — stay in sync from one definition.
 _octopus_next_spawn_task_id() {
+    local _reservation_dir="${WORKSPACE_DIR:-${HOME}/.claude-octopus}/.octo/task-ids"
+    mkdir -p "$_reservation_dir" 2>/dev/null || true
     local _tmp _uniq
-    _tmp=$(mktemp "${TMPDIR:-/tmp}/octo-task.XXXXXX" 2>/dev/null) && {
-        _uniq="${_tmp##*.}"
-        rm -f "$_tmp" 2>/dev/null || true
-    }
-    printf '%s-%s\n' "$(date +%s)" "${_uniq:-${BASHPID:-$$}-${RANDOM}}"
+    _tmp=$(mktemp "${_reservation_dir}/XXXXXX" 2>/dev/null) && _uniq="${_tmp##*/}"
+    printf '%s-%s\n' "$(date +%s)" "${_uniq:-${BASHPID:-$$}${RANDOM}}"
 }
 
 write_agent_result_header() {
