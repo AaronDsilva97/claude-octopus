@@ -137,7 +137,7 @@ write_agent_result_header() {
 }
 
 spawn_agent() {
-    local _ts; _ts="$(date +%s)$$${RANDOM}"
+    local _ts; _ts="$(date +%s)${BASHPID:-$$}${RANDOM}"
     local agent_type="$1"
     local prompt="$2"
     local task_id="${3:-$_ts}"
@@ -1122,7 +1122,7 @@ ${heuristic_ctx}"
 spawn_agent_capture_pid() {
     local agent_type="$1"
     local prompt="$2"
-    local task_id="${3:-$(date +%s)$$${RANDOM}}"
+    local task_id="${3:-$(date +%s)${BASHPID:-$$}${RANDOM}}"
     local role="${4:-}"
     local phase="${5:-}"
     local use_fork="${6:-false}"
