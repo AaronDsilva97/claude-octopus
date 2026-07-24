@@ -214,7 +214,7 @@ _validate_openai_compatible_agent_command() {
                 ;;
             --base-url)
                 [[ -z "$base_url" ]] || return 1
-                [[ "$value" =~ ^https?://[A-Za-z0-9._/:-]+$ ]] || return 1
+                [[ "$value" =~ ^https?://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[A-Za-z0-9._/:-]*)?$ ]] || return 1
                 base_url="$value"
                 ;;
             --api-key-env)

@@ -84,14 +84,21 @@ else
 fi
 
 test_case "validate_agent_command rejects unsafe base-url"
-if validate_agent_command "$PROJECT_ROOT/scripts/helpers/openai-compatible-agent.py --provider generic --base-url 'https://example.com/\$(whoami)' --api-key-env MY_KEY --model deepseek-v4-pro --cwd /tmp/test" >/dev/null 2>&1; then
+if validate_agent_command "$PROJECT_ROOT/scripts/helpers/openai-compatible-agent.py --provider generic --base-url https://example.com/\$(whoami) --api-key-env MY_KEY --model deepseek-v4-pro --cwd /tmp/test" >/dev/null 2>&1; then
     test_fail "expected unsafe base-url to be rejected"
 else
     test_pass
 fi
 
+test_case "validate_agent_command rejects base-url without a host"
+if validate_agent_command "$PROJECT_ROOT/scripts/helpers/openai-compatible-agent.py --provider generic --base-url https:/// --api-key-env MY_KEY --model deepseek-v4-pro --cwd /tmp/test" >/dev/null 2>&1; then
+    test_fail "expected hostless base-url to be rejected"
+else
+    test_pass
+fi
+
 test_case "validate_agent_command rejects unsafe api-key-env"
-if validate_agent_command "$PROJECT_ROOT/scripts/helpers/openai-compatible-agent.py --provider generic --base-url https://example.com/v1 --api-key-env 'MY KEY' --model deepseek-v4-pro --cwd /tmp/test" >/dev/null 2>&1; then
+if validate_agent_command "$PROJECT_ROOT/scripts/helpers/openai-compatible-agent.py --provider generic --base-url https://example.com/v1 --api-key-env MY-KEY --model deepseek-v4-pro --cwd /tmp/test" >/dev/null 2>&1; then
     test_fail "expected unsafe api-key-env to be rejected"
 else
     test_pass
