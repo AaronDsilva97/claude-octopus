@@ -51,4 +51,26 @@ else
     test_pass
 fi
 
+# Regression for #661: two concurrent spawns with no explicit task_id must not
+# collide on the same-second `date +%s` value, or their result/temp files
+# interleave and get attributed to the wrong provider.
+test_case "default task_id does not collide across same-second calls"
+date() { echo 1234567890; }  # freeze every call to the same second
+spawn_agent() {
+    printf '%s\n' "$3" >> "$TEST_TMP_DIR/task_ids"
+    printf '%s\n' 424242
+}
+export "OCTOPUS_SPAWN_PID_WAIT_ATTEMPTS=20"
+: > "$TEST_TMP_DIR/task_ids"
+spawn_agent_capture_pid codex prompt >/dev/null
+spawn_agent_capture_pid gemini prompt >/dev/null
+unset -f date
+first_id=$(sed -n '1p' "$TEST_TMP_DIR/task_ids")
+second_id=$(sed -n '2p' "$TEST_TMP_DIR/task_ids")
+if [[ -n "$first_id" && -n "$second_id" && "$first_id" != "$second_id" ]]; then
+    test_pass
+else
+    test_fail "expected distinct default task_ids, got '$first_id' and '$second_id'"
+fi
+
 test_summary
