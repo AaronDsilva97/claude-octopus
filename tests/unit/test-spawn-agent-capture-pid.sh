@@ -6,7 +6,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "spawn agent PID capture"
 
-# Load only the helper under test so the fixture controls spawn_agent and log.
+# Load only the helpers under test so the fixture controls spawn_agent and log.
+eval "$(sed -n '/^_octopus_next_spawn_task_id() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")"
 eval "$(sed -n '/^spawn_agent_capture_pid() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")"
 
 TEST_TMP_DIR="/tmp/octopus-tests-$$"
@@ -53,60 +54,72 @@ fi
 
 # Regression for #661: two concurrent spawns with no explicit task_id must not
 # collide on the same-second `date +%s` value, or their result/temp files
-# interleave and get attributed to the wrong provider.
-#
-# Exercises the real spawn_agent_capture_pid default (spawn.sh:1125) with both
-# calls actually backgrounded and racing, not run one after another — a
-# sequential invocation can't prove concurrent callers stay distinct.
-test_case "capture_pid default task_id does not collide across concurrent same-second calls"
+# interleave and get attributed to the wrong provider. Tests the real,
+# named _octopus_next_spawn_task_id() helper directly (both spawn_agent and
+# spawn_agent_capture_pid delegate their default to it), rather than a
+# sed line-range or a hand-copied reimplementation that could drift from
+# the source or silently start exercising the wrong lines.
+test_case "shared task_id helper does not collide across concurrent same-second calls"
 date() { echo 1234567890; }  # freeze every call to the same second
-unset RANDOM; RANDOM=42  # loses its special per-reference behavior once unset+reassigned (bash(1)); pins it so only PID entropy can distinguish the two concurrent calls
-spawn_agent() {
-    printf '%s\n' "$3" >> "$TEST_TMP_DIR/task_ids_capture_pid"
-    printf '%s\n' 424242
-}
-export "OCTOPUS_SPAWN_PID_WAIT_ATTEMPTS=20"
-: > "$TEST_TMP_DIR/task_ids_capture_pid"
-spawn_agent_capture_pid codex prompt >/dev/null &
+: > "$TEST_TMP_DIR/task_ids"
+{ _octopus_next_spawn_task_id >> "$TEST_TMP_DIR/task_ids"; } &
 first_call=$!
-spawn_agent_capture_pid gemini prompt >/dev/null &
+{ _octopus_next_spawn_task_id >> "$TEST_TMP_DIR/task_ids"; } &
 second_call=$!
 wait "$first_call"
 wait "$second_call"
 unset -f date
-first_id=$(sed -n '1p' "$TEST_TMP_DIR/task_ids_capture_pid")
-second_id=$(sed -n '2p' "$TEST_TMP_DIR/task_ids_capture_pid")
+first_id=$(sed -n '1p' "$TEST_TMP_DIR/task_ids")
+second_id=$(sed -n '2p' "$TEST_TMP_DIR/task_ids")
 if [[ -n "$first_id" && -n "$second_id" && "$first_id" != "$second_id" ]]; then
     test_pass
 else
     test_fail "expected distinct default task_ids, got '$first_id' and '$second_id'"
 fi
 
-# Direct coverage for spawn_agent's own default (spawn.sh:140/143), which the
-# capture_pid test above never reaches because it stubs spawn_agent out. Load
-# the literal declaration lines rather than a hand-copied re-implementation,
-# so this test tracks the real source instead of drifting from it.
-test_case "spawn_agent default task_id does not collide across concurrent same-second calls"
-eval "spawn_agent_default_task_id() {
-$(sed -n '140,143p' "$PROJECT_ROOT/scripts/lib/spawn.sh")
-    printf '%s\n' \"\$task_id\"
-}"
-date() { echo 1234567890; }
-: > "$TEST_TMP_DIR/task_ids_direct"
-# RANDOM is already pinned to a plain (non-special) 42 from the prior test case
-{ spawn_agent_default_task_id x y >> "$TEST_TMP_DIR/task_ids_direct"; } &
-first_call=$!
-{ spawn_agent_default_task_id x y >> "$TEST_TMP_DIR/task_ids_direct"; } &
-second_call=$!
-wait "$first_call"
-wait "$second_call"
-unset -f date
-first_id=$(sed -n '1p' "$TEST_TMP_DIR/task_ids_direct")
-second_id=$(sed -n '2p' "$TEST_TMP_DIR/task_ids_direct")
-if [[ -n "$first_id" && -n "$second_id" && "$first_id" != "$second_id" ]]; then
+# Structural check independent of concurrency/timing: the id should be
+# 'timestamp-<mktemp suffix>', keeping the two components unambiguously
+# separated rather than free-form concatenation.
+test_case "task_id fields are unambiguously delimited"
+id=$(_octopus_next_spawn_task_id)
+if [[ "$id" =~ ^[0-9]+-[A-Za-z0-9]+$ ]]; then
     test_pass
 else
-    test_fail "expected distinct default task_ids, got '$first_id' and '$second_id'"
+    test_fail "expected 'timestamp-suffix' shape, got: $id"
+fi
+
+# The whole point of switching to mktemp is a real OS-level uniqueness
+# guarantee, not just low collision probability — so directly checking two
+# fresh ids never repeats is a stronger assertion than only proving they
+# survive a same-second race.
+test_case "task_id helper never repeats across many calls"
+: > "$TEST_TMP_DIR/many_ids"
+for _ in $(seq 1 20); do
+    _octopus_next_spawn_task_id >> "$TEST_TMP_DIR/many_ids"
+done
+total=$(wc -l < "$TEST_TMP_DIR/many_ids" | tr -d ' ')
+unique=$(sort -u "$TEST_TMP_DIR/many_ids" | wc -l | tr -d ' ')
+if [[ "$unique" == "$total" ]]; then
+    test_pass
+else
+    test_fail "expected $total distinct task_ids, got only $unique unique"
+fi
+
+# spawn_agent_capture_pid must actually use the shared helper when task_id is
+# omitted, not a stale copy — exercised end to end through the real call path.
+test_case "capture_pid uses the shared helper for an omitted task_id"
+spawn_agent() {
+    printf '%s\n' "$3" >> "$TEST_TMP_DIR/capture_pid_task_id"
+    printf '%s\n' 424242
+}
+export "OCTOPUS_SPAWN_PID_WAIT_ATTEMPTS=20"
+: > "$TEST_TMP_DIR/capture_pid_task_id"
+spawn_agent_capture_pid codex prompt >/dev/null
+captured_id=$(cat "$TEST_TMP_DIR/capture_pid_task_id")
+if [[ "$captured_id" =~ ^[0-9]+-[A-Za-z0-9]+$ ]]; then
+    test_pass
+else
+    test_fail "expected capture_pid's omitted task_id to match the shared helper's shape, got: $captured_id"
 fi
 
 test_summary

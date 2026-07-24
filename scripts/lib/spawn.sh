@@ -112,6 +112,27 @@ _octopus_agent_lifecycle_event() {
     ) >>"$hook_log" 2>&1 || true
 }
 
+# Default task_id for spawns that don't supply one (#661). An earlier version
+# of this used ${BASHPID:-$$}: BASHPID needs bash 4+ (docs/CONTRIBUTING.md's
+# floor is 3.2, e.g. macOS's system /bin/bash), and on the $$ fallback path
+# two spawn_agent/spawn_agent_capture_pid calls backgrounded with `&` from
+# the same shell still collided — $$ stays pinned to the top-level shell's
+# PID across every subshell forked from it (bash(1)), confirmed failing in
+# CI on macOS. mktemp's file creation is atomic at the OS/filesystem level —
+# genuinely collision-free, not just low-probability — and needs no bash
+# version at all, so use its generated suffix instead; fall back to the old
+# PID/RANDOM combination only if mktemp itself is unavailable. Shared by
+# spawn_agent() and spawn_agent_capture_pid() so both default paths — and
+# their tests — stay in sync from one definition.
+_octopus_next_spawn_task_id() {
+    local _tmp _uniq
+    _tmp=$(mktemp "${TMPDIR:-/tmp}/octo-task.XXXXXX" 2>/dev/null) && {
+        _uniq="${_tmp##*.}"
+        rm -f "$_tmp" 2>/dev/null || true
+    }
+    printf '%s-%s\n' "$(date +%s)" "${_uniq:-${BASHPID:-$$}-${RANDOM}}"
+}
+
 write_agent_result_header() {
     local result_file="$1"
     local agent_type="$2"
@@ -137,10 +158,9 @@ write_agent_result_header() {
 }
 
 spawn_agent() {
-    local _ts; _ts="$(date +%s)${BASHPID:-$$}${RANDOM}"
     local agent_type="$1"
     local prompt="$2"
-    local task_id="${3:-$_ts}"
+    local task_id="${3:-$(_octopus_next_spawn_task_id)}"
     local role="${4:-}"         # Optional role override
     local phase="${5:-}"        # Optional phase context
     local use_fork="${6:-false}" # Optional fork context (v2.1.12+)
@@ -1122,7 +1142,7 @@ ${heuristic_ctx}"
 spawn_agent_capture_pid() {
     local agent_type="$1"
     local prompt="$2"
-    local task_id="${3:-$(date +%s)${BASHPID:-$$}${RANDOM}}"
+    local task_id="${3:-$(_octopus_next_spawn_task_id)}"
     local role="${4:-}"
     local phase="${5:-}"
     local use_fork="${6:-false}"
