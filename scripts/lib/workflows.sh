@@ -1719,6 +1719,171 @@ ${normal_findings}
 
 # Phase 3: TANGLE (Develop) - Enhanced map-reduce with validation
 # Tentacles work together in a coordinated tangle of activity
+tangle_cleanup_verification_context() {
+    trap - EXIT INT TERM
+
+    if [[ -n "${TANGLE_VERIFY_ORIGINAL_PWD:-}" ]]; then
+        cd "$TANGLE_VERIFY_ORIGINAL_PWD" 2>/dev/null || true
+    fi
+    if [[ -n "${TANGLE_VERIFY_ORIGINAL_PROJECT_ROOT:-}" ]]; then
+        PROJECT_ROOT="$TANGLE_VERIFY_ORIGINAL_PROJECT_ROOT"
+        export PROJECT_ROOT
+    fi
+
+    if [[ -n "${TANGLE_VERIFY_SOURCE_ROOT:-}" && -n "${TANGLE_VERIFY_WORKTREE:-}" ]]; then
+        if ! git -C "$TANGLE_VERIFY_SOURCE_ROOT" worktree remove --force "$TANGLE_VERIFY_WORKTREE" >/dev/null 2>&1; then
+            log WARN "Normal verification worktree removal failed; forcing filesystem cleanup: $TANGLE_VERIFY_WORKTREE"
+            rm -rf "$TANGLE_VERIFY_WORKTREE"
+            git -C "$TANGLE_VERIFY_SOURCE_ROOT" worktree prune >/dev/null 2>&1 ||                 log ERROR "Failed to prune verification worktree registrations: $TANGLE_VERIFY_SOURCE_ROOT"
+        fi
+        if [[ -e "$TANGLE_VERIFY_WORKTREE" ]]; then
+            log ERROR "Disposable verification worktree still exists after cleanup: $TANGLE_VERIFY_WORKTREE"
+        fi
+    fi
+
+    unset TANGLE_VERIFY_SOURCE_ROOT TANGLE_VERIFY_WORKTREE
+    unset TANGLE_VERIFY_ORIGINAL_PWD TANGLE_VERIFY_ORIGINAL_PROJECT_ROOT
+}
+
+tangle_verify() {
+    local prompt="$1"
+    local run_id="${OCTOPUS_VERIFY_RUN_ID:-$(date +%s)-$$}"
+    if [[ ! "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ || "$run_id" == *..* ]]; then
+        log ERROR "Invalid OCTOPUS_VERIFY_RUN_ID: $run_id"
+        return 1
+    fi
+    local source_root source_commit verify_root verify_worktree
+    local original_project_root="${PROJECT_ROOT:-$PWD}"
+    local original_pwd="$PWD"
+    local verify_agent="agy" verify_fallback_agent="codex"
+    local raw_result="" result_file status rc=1
+    local verify_cd_succeeded=false
+
+    source_root=$(git -C "$original_project_root" rev-parse --show-toplevel 2>/dev/null) || {
+        log ERROR "Verification-only mode requires a Git repository"
+        return 1
+    }
+    source_commit=$(git -C "$source_root" rev-parse --verify HEAD 2>/dev/null) || {
+        log ERROR "Verification-only mode requires an existing commit"
+        return 1
+    }
+
+    verify_root="${OCTOPUS_VERIFY_WORKTREE_ROOT:-${WORKSPACE_DIR:-${HOME}/.claude-octopus}/worktrees/verify}"
+    verify_worktree="${verify_root}/${run_id}"
+    result_file="${RESULTS_DIR}/tangle-verification-${run_id}.json"
+
+    if [[ -e "$verify_worktree" ]]; then
+        log ERROR "Verification worktree path already exists: $verify_worktree"
+        return 1
+    fi
+    mkdir -p "$verify_root" "$RESULTS_DIR" || return 1
+    if ! git -C "$source_root" worktree add --detach "$verify_worktree" "$source_commit" >/dev/null; then
+        log ERROR "Failed to create verification worktree: $verify_worktree"
+        return 1
+    fi
+
+    TANGLE_VERIFY_SOURCE_ROOT="$source_root"
+    TANGLE_VERIFY_WORKTREE="$verify_worktree"
+    TANGLE_VERIFY_ORIGINAL_PWD="$original_pwd"
+    TANGLE_VERIFY_ORIGINAL_PROJECT_ROOT="$original_project_root"
+    export TANGLE_VERIFY_SOURCE_ROOT TANGLE_VERIFY_WORKTREE
+    export TANGLE_VERIFY_ORIGINAL_PWD TANGLE_VERIFY_ORIGINAL_PROJECT_ROOT
+    trap 'tangle_cleanup_verification_context' EXIT INT TERM
+
+    if declare -f octopus_agent_override >/dev/null 2>&1; then
+        verify_agent=$(octopus_execution_profile_provider "tangle" "verify" "researcher" "agy")
+        verify_fallback_agent=$(octopus_execution_profile_provider "tangle" "verify_fallback" "researcher" "codex")
+    fi
+
+    PROJECT_ROOT="$verify_worktree"
+    export PROJECT_ROOT
+    if cd "$verify_worktree"; then
+        verify_cd_succeeded=true
+    else
+        log ERROR "Failed to enter disposable verification worktree: $verify_worktree"
+    fi
+
+    local verify_prompt="Verification-only task. Inspect and test the committed project state without implementing fixes or changing product behavior.
+
+Task: ${prompt}
+
+Rules:
+- Reproduce the reported defect using relevant existing tests and runtime inspection.
+- Run the relevant baseline tests when practical.
+- Do not implement, refactor, add features, update dependencies, edit documentation, or weaken tests.
+- Do not launch implementation agents.
+- Return exactly one JSON object and no Markdown fences or prose.
+
+Required schema:
+{\"baselinePassed\":true|false,\"defectReproduced\":true|false,\"implementationRequired\":true|false,\"evidence\":{\"commands\":[\"...\"],\"failingTests\":[\"...\"],\"summary\":\"...\"}}
+
+Consistency rules:
+- If baseline passes and the defect is not reproduced, implementationRequired must be false.
+- If the defect is reproduced and needs a code change, implementationRequired must be true."
+
+    if [[ "$verify_cd_succeeded" != "true" || "$PWD" != "$verify_worktree" ]]; then
+        raw_result=""
+    else
+        raw_result=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="verification-only" run_agent_sync "$verify_agent" "$verify_prompt" 0 "researcher" "tangle-verify") || \
+        raw_result=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="verification-only" run_agent_sync "$verify_fallback_agent" "$verify_prompt" 0 "researcher" "tangle-verify") || raw_result=""
+    fi
+
+    cd "$original_pwd" 2>/dev/null || true
+    PROJECT_ROOT="$original_project_root"
+    export PROJECT_ROOT
+
+    if [[ -z "$raw_result" ]] || ! jq -e '
+        type == "object" and
+        (.baselinePassed | type == "boolean") and
+        (.defectReproduced | type == "boolean") and
+        (.implementationRequired | type == "boolean") and
+        (.evidence | type == "object") and
+        (.evidence.commands | type == "array") and
+        all(.evidence.commands[]; type == "string") and
+        (.evidence.failingTests | type == "array") and
+        all(.evidence.failingTests[]; type == "string") and
+        (.evidence.summary | type == "string") and
+        (
+            if (.baselinePassed == true and .defectReproduced == false)
+            then .implementationRequired == false
+            else true
+            end
+        )
+    ' >/dev/null 2>&1 <<< "$raw_result"; then
+        status="NEEDS_DIAGNOSIS"
+        jq -n --arg status "$status" --arg sourceCommit "$source_commit" --arg raw "$raw_result" \
+            '{status:$status,sourceCommit:$sourceCommit,error:"invalid verification result",raw:$raw}' > "$result_file"
+        rc=1
+    else
+        local baseline_passed defect_reproduced implementation_required
+        baseline_passed=$(jq -r '.baselinePassed' <<< "$raw_result")
+        defect_reproduced=$(jq -r '.defectReproduced' <<< "$raw_result")
+        implementation_required=$(jq -r '.implementationRequired' <<< "$raw_result")
+
+        if [[ "$baseline_passed" == "true" && "$defect_reproduced" == "false" && "$implementation_required" == "false" ]]; then
+            status="VERIFIED_NO_CHANGE"
+            rc=0
+        elif [[ "$defect_reproduced" == "true" && "$implementation_required" == "true" ]]; then
+            status="DEFECT_REPRODUCED"
+            rc=2
+        else
+            status="NEEDS_DIAGNOSIS"
+            rc=1
+        fi
+        jq --arg status "$status" --arg sourceCommit "$source_commit" \
+            '. + {status:$status,sourceCommit:$sourceCommit}' <<< "$raw_result" > "$result_file"
+    fi
+
+    tangle_cleanup_verification_context
+
+    log INFO "Verification-only result: $status"
+    log INFO "Verification artifact: $result_file"
+    TANGLE_VERIFICATION_RESULT_FILE="$result_file"
+    TANGLE_VERIFICATION_STATUS="$status"
+    export TANGLE_VERIFICATION_RESULT_FILE TANGLE_VERIFICATION_STATUS
+    return "$rc"
+}
+
 tangle_clean_baseline_guard_enabled() {
     [[ "${OCTOPUS_TANGLE_REQUIRE_CLEAN_BASELINE:-false}" == "true" ]]
 }
@@ -1745,7 +1910,55 @@ tangle_require_clean_git_baseline() {
 }
 
 tangle_run_worktree_enabled() {
-    [[ "${OCTOPUS_TANGLE_RUN_WORKTREE:-false}" == "true" ]]
+    [[ "${OCTOPUS_TANGLE_RUN_WORKTREE:-true}" == "true" ]]
+}
+
+tangle_extract_plan_file_ref() {
+    local prompt="$1"
+    local token candidate_ref candidate_basename raw_file_ref
+    local noglob_was_set=false
+    [[ "$-" == *f* ]] && noglob_was_set=true || set -f
+    for token in $prompt; do
+        candidate_ref="$token"
+        candidate_ref="${candidate_ref#plan:}"
+        candidate_ref="${candidate_ref#plan=}"
+        candidate_basename="${candidate_ref##*/}"
+        if [[ "$token" == plan:* || "$token" == plan=* || "$candidate_basename" == "plan.md" || "$candidate_basename" == *.plan.md || "$candidate_basename" == *-plan.md ]]; then
+            raw_file_ref="$token"
+            raw_file_ref="${raw_file_ref#plan:}"
+            raw_file_ref="${raw_file_ref#plan=}"
+            [[ "$noglob_was_set" == "false" ]] && set +f
+            printf '%s' "$raw_file_ref"
+            return 0
+        fi
+    done
+    [[ "$noglob_was_set" == "false" ]] && set +f
+    return 1
+}
+
+tangle_resolve_context_file_path() {
+    local file_ref="$1"
+    local base_dir="$2"
+    local expanded_ref file_dir file_name physical_dir
+
+    expanded_ref="${file_ref/#\~/$HOME}"
+    if [[ "$expanded_ref" != /* ]]; then
+        expanded_ref="${base_dir%/}/${expanded_ref}"
+    fi
+    [[ -f "$expanded_ref" ]] || return 1
+
+    file_dir=$(dirname "$expanded_ref")
+    file_name=$(basename "$expanded_ref")
+    physical_dir=$(cd "$file_dir" 2>/dev/null && pwd -P) || return 1
+    printf '%s/%s' "$physical_dir" "$file_name"
+}
+
+tangle_resolve_prompt_plan_file_path() {
+    local prompt="$1"
+    local base_dir="$2"
+    local raw_file_ref
+    raw_file_ref=$(tangle_extract_plan_file_ref "$prompt") || return 1
+    tangle_resolve_context_file_path "$raw_file_ref" "$base_dir"
 }
 
 tangle_write_run_git_metadata() {
@@ -1832,10 +2045,13 @@ tangle_prepare_run_worktree() {
 }
 
 tangle_develop() {
+    local prompt="$1"
+    local grasp_file="${2:-}"
+
     # Dry runs retain their historical side-effect-free behavior and do not
     # create an otherwise unused run worktree.
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
-        _tangle_develop_in_workspace "$@"
+        _tangle_develop_in_workspace "$prompt" "$grasp_file"
         return $?
     fi
 
@@ -1846,14 +2062,25 @@ tangle_develop() {
     fi
 
     if ! tangle_run_worktree_enabled; then
-        _tangle_develop_in_workspace "$@"
+        _tangle_develop_in_workspace "$prompt" "$grasp_file"
         return $?
     fi
 
     local task_group="${OCTOPUS_TANGLE_RUN_ID:-$(date +%s)-$$}"
     local original_project_root="${PROJECT_ROOT:-$PWD}"
     local original_pwd="$PWD"
+    local resolved_grasp_file="$grasp_file"
+    local resolved_plan_file=""
     local rc=0
+
+    # Resolve caller-supplied context while still in the source checkout.
+    # Ignored context files are valid inputs but are absent from a new Git
+    # worktree, so delegated execution must retain their canonical source paths.
+    if [[ -n "$grasp_file" ]]; then
+        resolved_grasp_file=$(tangle_resolve_context_file_path "$grasp_file" "$original_pwd" 2>/dev/null) \
+            || resolved_grasp_file="$grasp_file"
+    fi
+    resolved_plan_file=$(tangle_resolve_prompt_plan_file_path "$prompt" "$original_pwd" 2>/dev/null) || true
 
     tangle_prepare_run_worktree "$task_group" || return 1
 
@@ -1867,7 +2094,7 @@ tangle_develop() {
         return 1
     }
 
-    _tangle_develop_in_workspace "$@" || rc=$?
+    _tangle_develop_in_workspace "$prompt" "$resolved_grasp_file" "$task_group" "$resolved_plan_file" || rc=$?
 
     cd "$original_pwd" 2>/dev/null || true
     PROJECT_ROOT="$original_project_root"
@@ -1884,8 +2111,8 @@ tangle_develop() {
 _tangle_develop_in_workspace() {
     local prompt="$1"
     local grasp_file="${2:-}"
-    local task_group
-    task_group=$(date +%s)
+    local task_group="${3:-$(date +%s)}"
+    local pre_resolved_plan_file="${4:-}"
 
     echo ""
     octopus_phase_banner "DEVELOP (Phase 3/4)" "Implementation" "$MAGENTA"
@@ -1943,24 +2170,12 @@ _tangle_develop_in_workspace() {
     local resolved_prompt="$prompt"
     local file_ref=""
     local raw_file_ref=""
-    local token
-    local noglob_was_set=false
-    [[ "$-" == *f* ]] && noglob_was_set=true || set -f
-    for token in $prompt; do
-        local candidate_ref="$token"
-        local candidate_basename
-        candidate_ref="${candidate_ref#plan:}"
-        candidate_ref="${candidate_ref#plan=}"
-        candidate_basename="${candidate_ref##*/}"
-        if [[ "$token" == plan:* || "$token" == plan=* || "$candidate_basename" == "plan.md" || "$candidate_basename" == *.plan.md || "$candidate_basename" == *-plan.md ]]; then
-            raw_file_ref="$token"
-            raw_file_ref="${raw_file_ref#plan:}"
-            raw_file_ref="${raw_file_ref#plan=}"
-            file_ref="${raw_file_ref/#\~/$HOME}"
-            break
-        fi
-    done
-    [[ "$noglob_was_set" == "false" ]] && set +f
+    raw_file_ref=$(tangle_extract_plan_file_ref "$prompt") || true
+    if [[ -n "$pre_resolved_plan_file" ]]; then
+        file_ref="$pre_resolved_plan_file"
+    elif [[ -n "$raw_file_ref" ]]; then
+        file_ref=$(tangle_resolve_context_file_path "$raw_file_ref" "$PWD" 2>/dev/null) || true
+    fi
     if [[ -n "$file_ref" && -f "$file_ref" ]]; then
         local max_plan_bytes="${OCTOPUS_PLAN_INJECT_MAX_BYTES:-40000}"
         [[ "$max_plan_bytes" =~ ^[0-9]+$ ]] || max_plan_bytes=40000
