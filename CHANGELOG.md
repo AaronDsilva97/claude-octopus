@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+### Security
+
+- Destructive-delete guards cover reversed and mixed short/long recursive-force
+  options (including uppercase `-R`), long options with attached values such as
+  `--preserve-root=all`, and quoted home prefixes with unquoted suffixes such as
+  `"$HOME"/cache`.
+
+### Fixed
+
+- Factory session metadata validates exactly one maturity JSON value, numeric
+  ratios, retry counts, and satisfaction targets, and persists the effective
+  holdout/retry overrides used by `factory_run`.
+- HTTP telemetry setup fails closed when an installed Claude CLI returns no
+  parseable numeric version.
+- The codex smoke probe removes its diagnostic tempfile on every early-return
+  path.
+- Standalone context, agent, and intelligence libraries fail immediately if
+  their shared word-count helper cannot be loaded.
+- Word and provider-recommendation splitting disables globbing and uses a fixed
+  whitespace `IFS`.
+- `set_provider_model` and `reset_provider_model` accept the canonical `agy`
+  provider key used by generated configurations.
+
+### Changed
+
+- README synchronization derives smoke, unit, and integration suite counts from
+  test discovery, keeping `PRODUCT.md` current when coverage grows.
+
+### Tests
+
+- Dedicated regression coverage now exercises factory metadata, destructive
+  delete flag/path forms, telemetry version parsing, fixed-IFS word splitting,
+  `agy` model configuration, and README suite-count drift.
+
 ## [9.56.0] - 2026-07-27
 
 

@@ -1,9 +1,12 @@
 # AI Agent Handoff
 
 Last updated: 2026-07-27
-Status: v9.55.1 released; no open delivery work
+Status: v9.56.0 released; no open delivery work
 Branch: `main`
-Release: https://github.com/nyldn/claude-octopus/releases/tag/v9.55.1
+Release: https://github.com/nyldn/claude-octopus/releases/tag/v9.56.0
+Release squash: `7a5d44e5d46efd3e906b21de83ef9c3e8e6e1d1b` (pushed to
+`upstream/main`)
+Tag target: `v9.56.0` resolves to the same post-squash commit and is pushed
 
 ## Start Here
 
@@ -55,6 +58,11 @@ cheaper model tiers, user overrides, and legacy compatibility.
   repository sources rather than maintained as duplicated prose.
 - `make sync` repairs README drift and `make sync-check` rejects it. Release
   preparation updates the changelog first, then runs the same synchronization.
+- Public test-suite counts are derived from the same `test-*.sh` discovery used
+  by the smoke, unit, and integration runners.
+- Review findings are fixed on the release branch before merge; review comments
+  marked addressed are still checked against the actual head rather than
+  accepted as evidence.
 - `.octo-continue.md` predates this work and is preserved as user-owned state.
 
 ## Tracking Blocker
@@ -68,8 +76,12 @@ could not be claimed or recorded as a new Beads issue.
 
 - Public `main` includes the Council reliability queue, Tangle PRs #672-#675,
   and the Opus 5 routing squash from PR #678 (`972d9597`).
-- Release v9.55.1 contains the complete integration and corrected marketplace
-  metadata; it is the resume baseline.
+- Release v9.56.0 contains the complete Opus 5/GPT-5.6 documentation sync,
+  agy PTY salvage, and full-project security/correctness/performance review; it
+  is the resume baseline.
+- The release squash and `v9.56.0` tag both resolve to
+  `7a5d44e5d46efd3e906b21de83ef9c3e8e6e1d1b` on public `main`. The commit,
+  tag, and GitHub release were verified after the squash merge.
 - Installed Claude Code: 2.1.220.
 - Installed Codex CLI: 0.145.0.
 - Upstream model policy: `nyldn/fable5-optimizer` v2.0.0.
@@ -78,27 +90,30 @@ could not be claimed or recorded as a new Beads issue.
 - Latest focused evidence: Opus routing 21/21, Fable mode 27/27,
   SubagentStop 8/8, Tangle run-worktree 13/13, and verification-only 10/10.
 - The final #675 head passed protected smoke, unit, and integration gates on
-  Ubuntu and macOS; the complete local unit matrix passed 183/183.
+  Ubuntu and macOS.
 - Fresh configs adopt the frontier roster; existing v3 configs and explicit
   model pins remain unchanged.
 - `make sync-check` passes with no script mode changes.
+- The primary checkout's tracked working tree is clean and its only local item
+  is the preserved, user-owned untracked `.octo-continue.md`.
 - `scripts/sync-readme.py` keeps `README.md`, `.claude-plugin/README.md`, and
   `PRODUCT.md` aligned with plugin metadata, runtime capability gates, model
-  resolver defaults, and the current changelog release.
+  resolver defaults, test discovery, and the current changelog release.
 - The README release-sync regression suite passes 7/7, including deliberate
   fixture drift detection and repair; current public model guidance names
   Opus 5, GPT-5.6 Sol/Terra/Luna, Sonnet 5, and opt-in Fable 5 consistently.
-- The final integrated `make ci-local` passed 16 smoke, 183 unit, and 7
+- The final integrated `make ci-local` passed 16 smoke, 185 unit, and 7
   integration suites, including the live plugin lifecycle test.
-- PRs #678 and #681 passed protected/review checks, including Ubuntu and macOS
-  unit matrices; the v9.55.0 and v9.55.1 release PRs passed their required
-  protected gates.
+- PRs #683, #684, and #685 passed protected/review checks, including Ubuntu and
+  macOS unit matrices; the v9.56.0 release PR passed its required protected
+  gates after all CodeRabbit findings were verified against the rebased head.
 
 ## Merge Queue
 
 - Merged: #656, #658, #664, #666, #667, #668, #669, #670, #672, #673, #674,
-  #675, #678, #681, release PR #677 (v9.54.2), release PR #680 (v9.55.0), and
-  release PR #682 (v9.55.1).
+  #675, #678, #681, #683, #684, release PR #677 (v9.54.2), release PR #680
+  (v9.55.0), release PR #682 (v9.55.1), release PR #685 (v9.56.0), and review
+  follow-up PR #686.
 - No public or private pull requests or issues remained open at release.
 - Private E2E issue classification fix merged in
   `nyldn/claude-octopus-dev#4`; the target VPS remains unreachable over SSH, so
