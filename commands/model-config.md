@@ -10,12 +10,12 @@ updated: 2026-04-21
 
 # Model Configuration
 
-**Your first output line MUST be:** `🐙 Octopus Model Config`
+**Your first output line MUST be:** `🐙 Octopus Model Config | octopus model config`
 
 ## STEP 0: Emit Banner (MANDATORY — run before AskUserQuestion or any other step)
 
 ```bash
-echo "🐙 Octopus Model Config"
+echo "🐙 Octopus Model Config | octopus model config"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "provider | model | config | routing | cost"
 ```
