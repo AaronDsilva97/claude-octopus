@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Real Tangle implementation runs now require a clean Git baseline by default** (#674). Modified tracked files, untracked files, and non-Git workspaces fail before provider dispatch with each blocking status entry reported; ignored files remain allowed and direct library consumers may explicitly opt out with `OCTOPUS_TANGLE_REQUIRE_CLEAN_BASELINE=false`.
+
 ### Added
 
 - **Councils configure per-seat dispatch timeouts and salvage a finished review from a non-zero dispatch** (#667). A single global timeout was too tight for large-diff reviews and the strict pass/fail dispatch check discarded seats that had already written a complete `VERDICT:`-bearing response but were killed at the boundary. `council_seat_timeout` now resolves most-specific-first (`OCTOPUS_COUNCIL_TIMEOUT_<PROVIDER>` > the run-wide `--seat-timeout` flag > the legacy `OCTOPUS_COUNCIL_AGENT_TIMEOUT` > a 120s default), so a slow provider such as `agy` can be given more room without loosening the others. The advice phase now counts a seat whose response is non-empty, substantive, and carries an explicit verdict even when its dispatch return code was non-zero, so a complete review is no longer thrown away as a shortage.
