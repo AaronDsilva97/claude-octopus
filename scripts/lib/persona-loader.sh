@@ -15,13 +15,40 @@ _PERSONA_LOADER_LOADED=1
 # FAST OPUS MODE SELECTION (v8.5)
 #
 # IMPORTANT: Fast Opus is more expensive than standard:
-#   Opus 4.8 standard: $5/$25 per MTok (input/output)
-#   Opus 4.8 fast: $10/$50 per MTok (input/output)
+#   Opus 5 standard: $5/$25 per MTok (input/output)
+#   Opus 5 fast: $10/$50 per MTok (input/output)
 #   Legacy Opus 4.6 fast: $30/$150 per MTok (input/output)
 #
 # Fast mode trades cost for speed. Default is STANDARD (cost-efficient).
 # Only use fast when user explicitly requests it or for interactive single-shot tasks.
 # ═══════════════════════════════════════════════════════════════════════════════
+
+opus_effective_fast_pricing_model() {
+    local phase="${1:-}" role="${2:-}" model=""
+    if declare -f get_agent_model >/dev/null 2>&1; then
+        model="$(get_agent_model "claude-opus-fast" "$phase" "$role" 2>/dev/null || true)"
+    elif declare -f opus_default_model >/dev/null 2>&1; then
+        model="$(opus_default_model 2>/dev/null || true)"
+    fi
+    [[ -n "$model" ]] || model="${OCTOPUS_OPUS_MODEL:-}"
+    if [[ "$model" == "claude-fable-5" ]] && declare -f fable5_fallback_model >/dev/null 2>&1; then
+        model="$(fable5_fallback_model)"
+    fi
+    printf '%s' "$model"
+}
+
+log_opus_fast_pricing_warning() {
+    local model
+    model="$(opus_effective_fast_pricing_model "${1:-}" "${2:-}")"
+    case "$model" in
+        claude-opus-5|claude-opus-4.8|claude-opus-4.7)
+            log "WARN" "Current Opus fast is 2x standard: \$10/\$50 per MTok vs \$5/\$25 standard"
+            ;;
+        claude-opus-4.6)
+            log "WARN" "Legacy Opus 4.6 fast is 6x standard: \$30/\$150 per MTok vs \$5/\$25 standard"
+            ;;
+    esac
+}
 
 select_opus_mode() {
     local phase="${1:-}"
@@ -65,11 +92,6 @@ select_opus_mode() {
             *)
                 # Single-shot task with /fast: honor user preference
                 log "INFO" "/fast mode active - using fast Opus for single-shot task"
-                if [[ "${SUPPORTS_OPUS_4_8:-false}" == "true" && "${OCTOPUS_OPUS_MODEL:-}" != "claude-opus-4.6" ]]; then
-                    log "WARN" "Opus 4.8 fast is 2x standard: \$10/\$50 per MTok vs \$5/\$25 standard"
-                else
-                    log "WARN" "Legacy Opus 4.6 fast is 6x standard: \$30/\$150 per MTok vs \$5/\$25 standard"
-                fi
                 echo "fast"
                 ;;
         esac

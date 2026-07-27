@@ -8,11 +8,19 @@
 
 ### Added
 
+- **Frontier model routing strategy and prompt policy** (`docs/MODEL-ROUTING-STRATEGY.md`, `docs/GPT-5.6-PROMPTING.md`, `skills/blocks/frontier-model-routing.md`): defines Opus 5 as the premium lead, GPT-5.6 Sol as the independent implementation/review peer, Sonnet 5 as the standard Claude seat, and Fable 5 as an explicit capability escalation rather than an automatic default.
+- **Cross-harness continuity contract** (`AI_AGENT_HANDOFF.md`, `AGENTS.md`, `CLAUDE.md`): gives Claude Code, Codex, Copilot, OpenCode, and other coding agents one committed resume point for active decisions, evidence, blockers, verification, and branch state while retaining Beads as the task system of record.
 - **Tangle now has an explicit verification-only mode** (#675). `orchestrate.sh verify "<prompt>"` diagnoses the committed baseline in a disposable detached worktree, accepts only a structured and internally consistent result, reports `VERIFIED_NO_CHANGE`, `DEFECT_REPRODUCED`, or `NEEDS_DIAGNOSIS`, and never launches implementation agents or preserves diagnostic writes.
 - **Tangle implementation runs now execute in an isolated Git worktree by default** (#673). Each real run gets a deterministic `octopus/run/<run-id>/integration` branch, records source and run metadata, reuses that run ID for delegated tasks and validation artifacts, resolves caller-relative ignored context before changing worktrees, restores the caller's project context afterward, and preserves failed worktrees for inspection; setup failures roll back both the worktree and branch.
 
 - **Councils configure per-seat dispatch timeouts and salvage a finished review from a non-zero dispatch** (#667). A single global timeout was too tight for large-diff reviews and the strict pass/fail dispatch check discarded seats that had already written a complete `VERDICT:`-bearing response but were killed at the boundary. `council_seat_timeout` now resolves most-specific-first (`OCTOPUS_COUNCIL_TIMEOUT_<PROVIDER>` > the run-wide `--seat-timeout` flag > the legacy `OCTOPUS_COUNCIL_AGENT_TIMEOUT` > a 120s default), so a slow provider such as `agy` can be given more room without loosening the others. The advice phase now counts a seat whose response is non-empty, substantive, and carries an explicit verdict even when its dispatch return code was non-zero, so a complete review is no longer thrown away as a shortage.
 - **Council `summary.json` now records a per-seat `seats[]` array**, making quorum integrity machine-checkable without reading `responses/*` by hand. Each advice seat carries `seat` (role), `provider`, `provider_org`, `model`, `response_bytes`, `payload_kind` (currently `full`), `verdict`, `status` (`responded` / `degenerate` / `empty` / `no-response`), and `counted_as_approver`. `distinct_approving_providers` is recomputable as the count of distinct providers among seats where `counted_as_approver` is true — so a chair or degenerate seat can no longer masquerade as a distinct approving vendor. First of the sail-cruisey #2077 council-runner reliability fixes; later fixes extend `payload_kind` (agy chunking) and `status` (timeout/degraded).
+
+### Changed
+
+- **Current-model defaults now prefer Opus 5, Sonnet 5, and GPT-5.6** when the installed Claude Code and Codex versions support them. Fresh provider configurations use GPT-5.6 Sol/Terra/Luna and Opus 5/Sonnet 5/Haiku 4.5; existing environment, session, and `providers.json` pins retain precedence.
+- **Fable 5 remains opt-in and falls back to Opus 5** for security routing or a refusal/empty response. `OCTOPUS_FABLE5_FALLBACK_MODEL` can select another fallback, and automatic Opus 5 `xhigh` phase routing is now opt-in through `OCTOPUS_OPUS5_AUTO_XHIGH=1`.
+- **Provider capability gates and cost reporting recognize the new roster**: Sonnet 5 requires Claude Code v2.1.197+, Opus 5 requires v2.1.219+, and GPT-5.6 routing requires Codex CLI v0.144.0+.
 
 ### Fixed
 

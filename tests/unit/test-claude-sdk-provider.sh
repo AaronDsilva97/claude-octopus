@@ -44,7 +44,7 @@ cat
 STUB
 chmod +x "$TMP_DIR/claude-agent"
 out=$(printf 'test prompt' | PATH="$TMP_DIR:$PATH" CLAUDECODE=1 CLAUDE_SDK_API_KEY=sk-sdk-test bash "$SHIM")
-if [[ "$out" == *"--model claude-opus-4-8"* \
+if [[ "$out" == *"--model claude-opus-5"* \
    && "$out" == *"key:sk-sdk-test"* \
    && "$out" == *"nested:unset"* \
    && "$out" == *"test prompt"* ]]; then
@@ -59,6 +59,26 @@ if [[ "$out" == *"--model claude-fable-5"* ]]; then
     test_pass
 else
     test_fail "model override ignored: $out"
+fi
+
+test_case "claude CLI fallback receives the configured output-token limit"
+CLI_DIR="$TMP_DIR/claude-only"
+mkdir -p "$CLI_DIR"
+cat > "$CLI_DIR/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "argv:$*"
+echo "max:${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-unset}"
+cat
+STUB
+chmod +x "$CLI_DIR/claude"
+out=$(printf 'fallback prompt' | env "PATH=$CLI_DIR:/usr/bin:/bin" \
+    "CLAUDE_SDK_API_KEY=k" "OCTOPUS_CLAUDE_SDK_MAX_TOKENS=777" bash "$SHIM")
+if [[ "$out" == *"--model claude-opus-5"* \
+   && "$out" == *"max:777"* \
+   && "$out" == *"fallback prompt"* ]]; then
+    test_pass
+else
+    test_fail "Claude CLI token limit missing: $out"
 fi
 
 test_case "dispatch maps claude-sdk agent types before the claude* glob"
