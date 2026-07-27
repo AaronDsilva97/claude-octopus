@@ -6,8 +6,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 RELEASE_SH="$PROJECT_ROOT/scripts/release.sh"
+CI_LIB="$PROJECT_ROOT/scripts/lib/release-ci.sh"
 
 source "$SCRIPT_DIR/../helpers/test-framework.sh"
+# shellcheck source=scripts/lib/release-ci.sh
+source "$CI_LIB"
 
 test_suite "release.sh worktree/branch/remote flow"
 
@@ -55,7 +58,7 @@ test_post_merge_skips_checkout_on_release_branch() {
 
     if grep -q 'ON_RELEASE_BRANCH" == "true"' <<< "$merge_block" \
         && grep -q 'git fetch --quiet "\$REMOTE" main' <<< "$merge_block" \
-        && grep -q 'MERGE_SHA=\$(git rev-parse FETCH_HEAD)' <<< "$merge_block" \
+        && grep -q -- '--json state,mergeCommit' <<< "$merge_block" \
         && ! grep -q 'ON_RELEASE_BRANCH" == "true"' <<< "$checkout_context"; then
         test_pass
     else
@@ -63,13 +66,125 @@ test_post_merge_skips_checkout_on_release_branch() {
     fi
 }
 
-test_release_targets_merge_sha() {
-    test_case "gh release create targets the resolved merge SHA"
+test_release_tags_merge_sha() {
+    test_case "release creates and pushes an annotated tag on the resolved merge SHA"
 
-    if grep -q -- '--target "\$MERGE_SHA"' "$RELEASE_SH"; then
+    local merge_block
+    merge_block=$(awk '/# --- 6\. Merge \+ Release/,/^# --- 7\. Sync shared marketplace/' "$RELEASE_SH")
+
+    if grep -q -- '--json state,mergeCommit' <<< "$merge_block" \
+        && grep -q 'mergeCommit\.oid // empty' <<< "$merge_block" \
+        && grep -q 'MERGE_SHA" =~ \^\[0-9a-fA-F\]' <<< "$merge_block" \
+        && grep -q 'git merge-base --is-ancestor "\$MERGE_SHA" FETCH_HEAD' <<< "$merge_block" \
+        && grep -q 'git tag -a "\$TAG_NAME" "\$MERGE_SHA"' <<< "$merge_block" \
+        && grep -q 'git push --quiet "\$REMOTE" "\$TAG_NAME"' <<< "$merge_block" \
+        && grep -q -- '--verify-tag' <<< "$merge_block"; then
         test_pass
     else
-        test_fail "gh release create does not pin --target to MERGE_SHA"
+        test_fail "release does not push and verify an annotated tag on MERGE_SHA"
+    fi
+}
+
+test_release_uses_squash_merge() {
+    test_case "release PR follows the repository squash-merge convention"
+
+    local merge_commands
+    merge_commands=$(grep -E '^[[:space:]]*gh pr merge "\$PR_NUM"' "$RELEASE_SH" || true)
+
+    if grep -q -- '--squash' <<< "$merge_commands" \
+        && ! grep -q -- '--merge' <<< "$merge_commands" \
+        && ! grep -q -- '--rebase' <<< "$merge_commands"; then
+        test_pass
+    else
+        test_fail "release.sh merge commands must use --squash exclusively"
+    fi
+}
+
+test_release_ci_timeout_covers_macos() {
+    test_case "release CI timeout defaults to 900, accepts overrides, and rejects invalid values"
+
+    local default_trace override_trace invalid_output
+    default_trace=$(OCTO_RELEASE_REMOTE=__missing_release_test_remote__ \
+        bash -x "$RELEASE_SH" 9.99.0 "test release" 2>&1 || true)
+    override_trace=$(OCTO_RELEASE_REMOTE=__missing_release_test_remote__ \
+        OCTO_RELEASE_CI_TIMEOUT_SECONDS=1200 \
+        bash -x "$RELEASE_SH" 9.99.0 "test release" 2>&1 || true)
+
+    if invalid_output=$(OCTO_RELEASE_CI_TIMEOUT_SECONDS=invalid \
+        bash "$RELEASE_SH" 9.99.0 "test release" 2>&1); then
+        test_fail "release.sh accepted an invalid CI timeout"
+        return
+    fi
+
+    if grep -q '^+ CI_TIMEOUT_SECONDS=900$' <<< "$default_trace" \
+        && grep -q '^+ CI_TIMEOUT_SECONDS=1200$' <<< "$override_trace" \
+        && grep -q 'must be a positive integer' <<< "$invalid_output"; then
+        test_pass
+    else
+        test_fail "release.sh timeout default, override, or validation behavior is incorrect"
+    fi
+}
+
+test_release_requires_clean_review_state() {
+    test_case "release requires explicit approval and paginates every review thread"
+
+    local unresolved
+    gh() {
+        if [[ " $* " == *" cursor=NEXT_PAGE "* ]]; then
+            printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'
+        else
+            printf '%s\n' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true},{"isResolved":false}],"pageInfo":{"hasNextPage":true,"endCursor":"NEXT_PAGE"}}}}}}'
+        fi
+    }
+    unresolved=$(octo_release_unresolved_review_threads owner repo 687)
+    unset -f gh
+
+    if octo_release_review_gate APPROVED 0 \
+        && ! octo_release_review_gate "" 0 \
+        && ! octo_release_review_gate REVIEW_REQUIRED 0 \
+        && ! octo_release_review_gate CHANGES_REQUESTED 0 \
+        && ! octo_release_review_gate APPROVED 1 \
+        && [[ "$unresolved" == "2" ]]; then
+        test_pass
+    else
+        test_fail "release review gate accepted an unapproved or unresolved state"
+    fi
+}
+
+test_release_verifies_main_before_tag() {
+    test_case "release verifies the post-squash main commit before tagging"
+
+    local merge_block watch_line tag_line
+    merge_block=$(awk '/# --- 6\. Merge \+ Release/,/^# --- 7\. Sync shared marketplace/' "$RELEASE_SH")
+    watch_line=$(grep -n 'gh run watch "\$MAIN_RUN_ID"' <<< "$merge_block" | cut -d: -f1)
+    tag_line=$(grep -n 'git tag -a "\$TAG_NAME"' <<< "$merge_block" | cut -d: -f1)
+
+    if grep -q -- '--workflow "Test Suite"' <<< "$merge_block" \
+        && grep -q 'headSha' <<< "$merge_block" \
+        && grep -q 'MERGE_SHA' <<< "$merge_block" \
+        && grep -q 'octo_release_run_with_timeout "\$CI_TIMEOUT_SECONDS"' <<< "$merge_block" \
+        && [[ -n "$watch_line" && -n "$tag_line" && "$watch_line" -lt "$tag_line" ]]; then
+        test_pass
+    else
+        test_fail "release.sh does not verify the exact main merge SHA before tagging"
+    fi
+}
+
+test_release_timeout_is_bounded() {
+    test_case "release timeout helper terminates a stuck main-run watch"
+
+    local started elapsed
+    started=$(date +%s)
+    if octo_release_run_with_timeout 1 sleep 5 >/dev/null 2>&1; then
+        test_fail "timeout helper accepted a command that exceeded its budget"
+        return
+    fi
+    elapsed=$(( $(date +%s) - started ))
+
+    if [[ "$elapsed" -lt 5 ]] && octo_release_run_with_timeout 2 true; then
+        test_pass
+    else
+        test_fail "timeout helper did not bound the command or rejected a fast command"
     fi
 }
 
@@ -141,7 +256,12 @@ test_remote_configurable
 test_preflight_accepts_release_branch
 test_plugin_manifest_staged
 test_post_merge_skips_checkout_on_release_branch
-test_release_targets_merge_sha
+test_release_tags_merge_sha
+test_release_uses_squash_merge
+test_release_ci_timeout_covers_macos
+test_release_requires_clean_review_state
+test_release_verifies_main_before_tag
+test_release_timeout_is_bounded
 test_fetch_head_approach_works_when_main_checked_out_elsewhere
 
 test_summary

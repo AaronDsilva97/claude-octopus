@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [9.56.1] - 2026-07-27
+
+
 ### Security
 
 - Destructive-delete guards cover reversed and mixed short/long recursive-force
@@ -29,6 +32,10 @@
 
 - README synchronization derives smoke, unit, and integration suite counts from
   test discovery, keeping `PRODUCT.md` current when coverage grows.
+- Release automation waits for the real macOS CI duration, fails closed on
+  anything short of explicit approval or on any paginated unresolved thread,
+  squash-merges release PRs, boundedly verifies the exact post-squash main
+  commit, and only then pushes an annotated tag and publishes.
 
 ### Tests
 

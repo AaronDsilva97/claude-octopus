@@ -40,6 +40,12 @@ SUMMARY="$2"
 DATE=$(date +%Y-%m-%d)
 BRANCH="release/v${VERSION}"
 REMOTE="${OCTO_RELEASE_REMOTE:-origin}"
+CI_TIMEOUT_SECONDS="${OCTO_RELEASE_CI_TIMEOUT_SECONDS:-900}"
+
+if [[ ! "$CI_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: OCTO_RELEASE_CI_TIMEOUT_SECONDS must be a positive integer."
+    exit 1
+fi
 
 cd "$PLUGIN_ROOT"
 
@@ -47,6 +53,13 @@ cd "$PLUGIN_ROOT"
 # clone pointing $REMOTE at the canonical repo (with origin left on a fork)
 # would otherwise create the PR/release against the wrong repo. Pin it.
 REPO_SLUG="$(git remote get-url "$REMOTE" | sed -E 's#^(git@|https://)([^:/]+)[:/]##; s#\.git$##')"
+REPO_OWNER="${REPO_SLUG%%/*}"
+REPO_NAME="${REPO_SLUG#*/}"
+
+if [[ -z "$REPO_OWNER" || -z "$REPO_NAME" || "$REPO_OWNER" == "$REPO_NAME" ]]; then
+    echo "Error: could not parse owner/repository from remote ${REMOTE}: ${REPO_SLUG}"
+    exit 1
+fi
 
 # --- Preflight ---
 
@@ -292,8 +305,9 @@ echo ""
 # --- 5. Wait for CI ---
 
 echo "5/8 Waiting for CI..."
-# Poll until required checks finish (max 5 minutes)
-DEADLINE=$((SECONDS + 300))
+# macOS unit jobs routinely take around 10 minutes, so leave enough headroom
+# while keeping the wait configurable for slower or faster repositories.
+DEADLINE=$((SECONDS + CI_TIMEOUT_SECONDS))
 while [[ $SECONDS -lt $DEADLINE ]]; do
     CHECKS=$(gh pr checks "$PR_NUM" -R "$REPO_SLUG" --json name,state 2>&1 || true)
     SMOKE=$(octo_pr_check_state "$CHECKS" "Smoke Tests")
@@ -307,7 +321,7 @@ while [[ $SECONDS -lt $DEADLINE ]]; do
 
     if [[ "$SMOKE" == "fail" || "$UNIT" == "fail" || "$INTEG" == "fail" ]]; then
         echo "   CI FAILED — Smoke: ${SMOKE} | Unit: ${UNIT} | Integration: ${INTEG}"
-        echo "   Fix failures, then run: gh pr merge ${PR_NUM} --merge -R ${REPO_SLUG}"
+        echo "   Fix failures, then run: gh pr merge ${PR_NUM} --squash -R ${REPO_SLUG}"
         exit 1
     fi
 
@@ -315,34 +329,125 @@ while [[ $SECONDS -lt $DEADLINE ]]; do
 done
 
 if [[ $SECONDS -ge $DEADLINE ]]; then
-    echo "   CI timed out after 5 minutes."
+    echo "   CI timed out after ${CI_TIMEOUT_SECONDS} seconds."
     echo "   Check manually: gh pr checks ${PR_NUM} -R ${REPO_SLUG}"
-    echo "   Then merge: gh pr merge ${PR_NUM} --merge -R ${REPO_SLUG}"
+    echo "   Then merge: gh pr merge ${PR_NUM} --squash -R ${REPO_SLUG}"
     exit 1
 fi
+echo ""
+
+# Required checks can pass while a review still has actionable findings.
+# Fail closed instead of relying on an owner/admin merge bypass.
+echo "   Checking review gate..."
+if ! REVIEW_DECISION=$(gh pr view "$PR_NUM" -R "$REPO_SLUG" --json reviewDecision --jq '.reviewDecision // ""'); then
+    echo "   ERROR: Could not read the PR review decision."
+    exit 1
+fi
+if ! UNRESOLVED_THREADS=$(octo_release_unresolved_review_threads \
+    "$REPO_OWNER" "$REPO_NAME" "$PR_NUM"); then
+    echo "   ERROR: Could not read PR review threads."
+    exit 1
+fi
+if ! octo_release_review_gate "$REVIEW_DECISION" "$UNRESOLVED_THREADS"; then
+    echo "   REVIEW BLOCKED — decision=${REVIEW_DECISION:-none} | unresolved threads=${UNRESOLVED_THREADS}"
+    echo "   An explicit approval and zero unresolved threads are required."
+    exit 1
+fi
+echo "   Review: ${REVIEW_DECISION} | unresolved threads: 0"
 echo ""
 
 # --- 6. Merge + Release ---
 
 echo "6/8 Merging and creating release..."
-gh pr merge "$PR_NUM" -R "$REPO_SLUG" --merge --quiet 2>/dev/null || gh pr merge "$PR_NUM" -R "$REPO_SLUG" --merge
+merge_release_pr() {
+    gh pr merge "$PR_NUM" -R "$REPO_SLUG" --squash "$@"
+}
+
+read_release_pr_state() {
+    gh pr view "$PR_NUM" -R "$REPO_SLUG" --json state --jq '.state'
+}
+
+if ! merge_release_pr --quiet 2>/dev/null; then
+    if ! PR_STATE=$(read_release_pr_state); then
+        echo "   ERROR: Merge failed and the PR state could not be read."
+        exit 1
+    fi
+    if [[ "$PR_STATE" != "MERGED" ]]; then
+        if ! merge_release_pr; then
+            if ! PR_STATE=$(read_release_pr_state); then
+                echo "   ERROR: Merge retry failed and the PR state could not be read."
+                exit 1
+            fi
+            if [[ "$PR_STATE" != "MERGED" ]]; then
+                echo "   ERROR: Release PR is still ${PR_STATE} after the merge retry."
+                exit 1
+            fi
+        fi
+    fi
+fi
+
+if ! MERGE_SHA=$(gh pr view "$PR_NUM" \
+    -R "$REPO_SLUG" \
+    --json state,mergeCommit \
+    --jq 'select(.state == "MERGED") | .mergeCommit.oid // empty'); then
+    echo "   ERROR: Could not read the merged PR commit."
+    exit 1
+fi
+if [[ ! "$MERGE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "   ERROR: Merged PR returned an invalid merge commit: ${MERGE_SHA:-empty}"
+    exit 1
+fi
+
+git fetch --quiet "$REMOTE" main
+if ! git merge-base --is-ancestor "$MERGE_SHA" FETCH_HEAD; then
+    echo "   ERROR: PR merge commit ${MERGE_SHA} is not present on ${REMOTE}/main."
+    exit 1
+fi
 
 if [[ "$ON_RELEASE_BRANCH" == "true" ]]; then
     # main is normally still checked out in the worktree this release branch
-    # was cut from; don't touch this worktree's checkout or delete the
-    # branch we're standing on. Just fetch the merge commit to tag it.
-    git fetch --quiet "$REMOTE" main
-    MERGE_SHA=$(git rev-parse FETCH_HEAD)
+    # was cut from; don't touch this worktree's checkout or delete the branch
+    # we're standing on. The PR API above is the release SHA source of truth.
+    :
 else
     git checkout main --quiet
     git pull --quiet "$REMOTE" main
     git branch -d "$BRANCH" --quiet 2>/dev/null || true
-    MERGE_SHA=$(git rev-parse main)
 fi
+
+# Do not publish a tag while the exact post-squash main commit is unverified.
+echo "   Waiting for main Test Suite on ${MERGE_SHA}..."
+MAIN_RUN_ID=""
+MAIN_RUN_DEADLINE=$((SECONDS + 120))
+while [[ -z "$MAIN_RUN_ID" && $SECONDS -lt $MAIN_RUN_DEADLINE ]]; do
+    MAIN_RUN_ID=$(gh run list \
+        -R "$REPO_SLUG" \
+        --workflow "Test Suite" \
+        --branch main \
+        --event push \
+        --limit 20 \
+        --json databaseId,headSha \
+        --jq ".[] | select(.headSha == \"${MERGE_SHA}\") | .databaseId" \
+        | head -n 1)
+    [[ -n "$MAIN_RUN_ID" ]] || sleep 5
+done
+if [[ -z "$MAIN_RUN_ID" ]]; then
+    echo "   ERROR: Main Test Suite run did not appear for ${MERGE_SHA}."
+    exit 1
+fi
+if ! octo_release_run_with_timeout "$CI_TIMEOUT_SECONDS" \
+    gh run watch "$MAIN_RUN_ID" -R "$REPO_SLUG" --exit-status; then
+    echo "   ERROR: Main Test Suite failed for ${MERGE_SHA}; tag and release were not created."
+    exit 1
+fi
+
+TAG_NAME="v${VERSION}"
+git tag -a "$TAG_NAME" "$MERGE_SHA" -m "${TAG_NAME}: ${SUMMARY}"
+git push --quiet "$REMOTE" "$TAG_NAME"
 
 gh release create "v${VERSION}" \
     -R "$REPO_SLUG" \
-    --target "$MERGE_SHA" \
+    --verify-tag \
     --title "v${VERSION} — ${SUMMARY}" \
     --notes "### Changed
 - ${SUMMARY}
@@ -351,7 +456,7 @@ gh release create "v${VERSION}" \
     --quiet 2>/dev/null || \
 gh release create "v${VERSION}" \
     -R "$REPO_SLUG" \
-    --target "$MERGE_SHA" \
+    --verify-tag \
     --title "v${VERSION} — ${SUMMARY}" \
     --notes "### Changed
 - ${SUMMARY}

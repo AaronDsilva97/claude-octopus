@@ -71,10 +71,18 @@ Must be empty. Shell scripts and Python helpers must stay `100755`; both contrib
 - Open the PR against `main`. Same-repo branches run CI immediately; **fork PRs stall at `action_required`** until approved: `gh api -X POST repos/nyldn/claude-octopus/actions/runs/<run-id>/approve` (needed after every push to the fork branch).
 - Known flake: macOS runner timing in `tests/unit/test-agent-lifecycle-events.sh` ("hook timeout did not return promptly"). If it hits, `gh run rerun <run-id> --failed` once before investigating.
 - Squash-merge is the repo convention.
+- `scripts/release.sh` waits up to 15 minutes by default so the macOS unit
+  matrix can finish. Override only when necessary with
+  `OCTO_RELEASE_CI_TIMEOUT_SECONDS=<seconds>`.
+- Automatic merge requires an explicit approved review and zero unresolved
+  review threads across every paginated result page.
 
 ## 7. Tag AFTER the squash-merge
 
 The tag must point at the merge commit on `main`, not at the branch head (squash rewrites the SHA):
+
+`scripts/release.sh` creates and pushes this annotated tag automatically. If a
+release is being recovered manually, use:
 
 ```bash
 sha=$(gh pr view <pr> --json mergeCommit --jq .mergeCommit.oid)
@@ -86,11 +94,13 @@ git push origin vX.Y.Z
 ## 8. GitHub Release
 
 ```bash
-gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <(awk '/^## \[X.Y.Z\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md)
+gh release create vX.Y.Z --verify-tag --title "vX.Y.Z" --notes-file <(awk '/^## \[X.Y.Z\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md)
 ```
 
 Marketplace consumers pin by release; a bare tag is not enough.
 
 ## 9. Post-merge verification
 
-Watch the main-branch Test Suite run on the merge commit until `completed/success`. A release is not done while main is red.
+`scripts/release.sh` waits for the main-branch Test Suite on the exact squash
+commit before it creates the tag or GitHub release. For manual recovery, watch
+that run until `completed/success`. A release is not done while main is red.
