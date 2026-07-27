@@ -1351,6 +1351,83 @@ test_council_all_approve_meets_quorum() {
     fi
 }
 
+_council_run_advice_with_roster() {
+    # Drive council_run_advice_phase against a hand-crafted roster in fixture mode.
+    # Provider assignment per seat can't be pinned through the public council_run path
+    # (diversity is auto-enforced among non-chair seats), so inject the roster directly.
+    local roster="$1" depth="${2:-standard}"
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/advice.XXXXXX")"; mkdir -p "$d/responses"
+    COUNCIL_RUN_DIR="$d"; COUNCIL_DEPTH="$depth"; COUNCIL_FIXTURE="full-success"
+    COUNCIL_EXECUTION_MODE=""; COUNCIL_TASK="x"; COUNCIL_GOAL="advice"
+    COUNCIL_DOMAIN="auto"; COUNCIL_STYLE="balanced"
+    COUNCIL_ROSTER_JSON="$roster"
+    # The prompt builder and fail-check need deep state that's irrelevant in fixture
+    # mode; stub them. load_council_lib re-sources the lib for the next test, restoring them.
+    council_prompt_for_member() { echo "prompt"; }
+    council_persona_should_fail() { return 1; }
+    council_run_advice_phase >/dev/null 2>&1 || true
+}
+
+test_council_chair_only_vendor_excluded_from_quorum() {
+    test_case "A chair-only vendor is excluded from the approving-provider quorum tally (#670)"
+    load_council_lib || return 1
+
+    # agy sits ONLY on the chair; the two independent (non-chair) reviewers are both
+    # codex. The chair is the synthesizer, not a cross-lab vote, so agy must NOT count
+    # as a distinct approving vendor — leaving a single non-chair approver (codex) that
+    # can't satisfy the 2-vendor standard quorum. Before the fix, agy leaked in and the
+    # council falsely reported a 2-vendor consensus.
+    _council_run_advice_with_roster '[
+      {"persona":"strategy-analyst","provider":"agy","seat":"chair"},
+      {"persona":"code-reviewer","provider":"codex","seat":"member"},
+      {"persona":"backend-architect","provider":"codex","seat":"member"}
+    ]'
+    local chair_only_ok="no"
+    if [[ "$COUNCIL_DISTINCT_APPROVING_PROVIDERS" == "1" ]] &&
+       [[ "$COUNCIL_APPROVING_PROVIDERS" == *codex* ]] &&
+       [[ "$COUNCIL_APPROVING_PROVIDERS" != *agy* ]] &&
+       [[ "$COUNCIL_QUORUM_MET" == "false" ]] &&
+       jq -e '
+         .[0].seat == "chair"
+         and .[0].status == "responded"
+         and .[0].verdict == "APPROVE"
+         and .[0].counted_as_approver == false
+         and ([.[] | select(.counted_as_approver) | .provider] | unique) == ["codex"]
+       ' <<< "$COUNCIL_SEAT_RECORDS_JSON" >/dev/null; then
+        chair_only_ok="yes"
+    fi
+
+    # Complement: the SAME vendor on the chair AND an independent seat still counts via
+    # its non-chair seat — proving the exclusion is seat-scoped, not vendor-scoped.
+    _council_run_advice_with_roster '[
+      {"persona":"strategy-analyst","provider":"agy","seat":"chair"},
+      {"persona":"code-reviewer","provider":"codex","seat":"member"},
+      {"persona":"backend-architect","provider":"agy","seat":"member"}
+    ]'
+    local also_member_ok="no"
+    if [[ "$COUNCIL_DISTINCT_APPROVING_PROVIDERS" == "2" ]] &&
+       [[ "$COUNCIL_APPROVING_PROVIDERS" == *codex* ]] &&
+       [[ "$COUNCIL_APPROVING_PROVIDERS" == *agy* ]] &&
+       [[ "$COUNCIL_QUORUM_MET" == "true" ]] &&
+       jq -e '
+         .[0].seat == "chair"
+         and .[0].status == "responded"
+         and .[0].counted_as_approver == false
+         and .[2].seat == "member"
+         and .[2].provider == "agy"
+         and .[2].counted_as_approver == true
+       ' <<< "$COUNCIL_SEAT_RECORDS_JSON" >/dev/null; then
+        also_member_ok="yes"
+    fi
+
+    if [[ "$chair_only_ok" == "yes" && "$also_member_ok" == "yes" ]]; then
+        test_pass
+    else
+        test_fail "chair exclusion wrong: chair_only_ok=$chair_only_ok also_member_ok=$also_member_ok (last: approving=[$COUNCIL_APPROVING_PROVIDERS] distinct=$COUNCIL_DISTINCT_APPROVING_PROVIDERS met=$COUNCIL_QUORUM_MET)"
+        return 1
+    fi
+}
+
 test_council_seats_array_makes_quorum_inspectable() {
     test_case "summary.json seats[] records per-seat state and quorum is recomputable from it"
     load_council_lib || return 1
@@ -1424,5 +1501,6 @@ test_council_verdict_parsing
 test_council_approving_providers_failsafe
 test_council_split_double_seat_fails_quorum
 test_council_all_approve_meets_quorum
+test_council_chair_only_vendor_excluded_from_quorum
 test_council_seats_array_makes_quorum_inspectable
 test_summary

@@ -1696,12 +1696,22 @@ council_run_advice_phase() {
             # a non-APPROVE marks the vendor dissenting so its seat can't count as an
             # approval, and a split double-seated vendor (one APPROVE, one REVISE)
             # can't cherry-pick its yes-seat into the quorum (#1992/#1994/#1983).
+            #
+            # The CHAIR seat is excluded from this vendor tally. The chair is the
+            # synthesizer, not an independent cross-lab reviewer, and the count gate
+            # already excludes it (received_non_chair). Counting its provider here let a
+            # chair-only vendor inflate distinct_approving_providers — so a single
+            # independent approver plus the chair's own vendor could pass a 2-vendor
+            # quorum. The chair-fallback path never added to this set either, so gating
+            # on non-chair seats keeps seats[] and quorum consistent (#670).
             if council_response_nonempty "$output_path" && council_response_is_substantive "$output_path"; then
-                COUNCIL_RESPONDING_PROVIDERS="${COUNCIL_RESPONDING_PROVIDERS} ${mprovider}"
                 verdict="$(council_response_verdict "$output_path")"
                 seat_status="responded"
-                if [[ "$verdict" != "APPROVE" ]]; then
-                    dissenting_providers="${dissenting_providers} ${mprovider}"
+                if [[ "$seat" != "chair" ]]; then
+                    COUNCIL_RESPONDING_PROVIDERS="${COUNCIL_RESPONDING_PROVIDERS} ${mprovider}"
+                    if [[ "$verdict" != "APPROVE" ]]; then
+                        dissenting_providers="${dissenting_providers} ${mprovider}"
+                    fi
                 fi
             elif council_response_nonempty "$output_path"; then
                 seat_status="degenerate"   # produced bytes but reviewed nothing (host stub / "cannot access")
@@ -1754,7 +1764,8 @@ council_run_advice_phase() {
     # counted_as_approver == true equals distinct_approving_providers.
     COUNCIL_SEAT_RECORDS_JSON="$(jq -c --arg approving " ${COUNCIL_APPROVING_PROVIDERS} " '
         map(.provider as $p
-            | .counted_as_approver = (.status == "responded" and .verdict == "APPROVE"
+            | .counted_as_approver = (.seat != "chair"
+                and .status == "responded" and .verdict == "APPROVE"
                 and ($approving | contains(" " + $p + " "))))' <<< "${COUNCIL_SEAT_RECORDS_JSON:-[]}")"
 
     if [[ "$COUNCIL_CHAIR_RESPONSE_RECEIVED" == "true" ]] && (( received_non_chair >= required )) \
