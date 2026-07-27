@@ -271,6 +271,72 @@ MOCK_AGY
     fi
 }
 
+test_agy_pty_fallback_salvages_tty_error() {
+    test_case "agy-exec retries under a pseudo-terminal when agy dies demanding a TTY"
+    command -v script >/dev/null 2>&1 || { test_skip "script (PTY allocator) not available"; return 0; }
+
+    local tmp_bin="$TEST_TMP_DIR/agy-pty-bin"
+    mkdir -p "$tmp_bin"
+    # Mimic agy's bubbletea failure: die 'could not open TTY' with NO controlling
+    # terminal, but produce a real answer once a PTY is present.
+cat > "$tmp_bin/agy" <<'MOCK_AGY'
+#!/usr/bin/env bash
+if [ -t 1 ] || [ -t 0 ]; then
+    expected=$'review this diff\npreserve a '\''quoted'\'' token'
+    actual="${!#}"
+    if [[ "$actual" != "$expected" ]]; then
+        printf 'prompt corrupted: <%s>\n' "$actual" >&2
+        exit 3
+    fi
+    printf 'reviewed\nVERDICT: APPROVE\n'
+    exit 0
+fi
+echo "bubbletea: could not open TTY" >&2
+exit 1
+MOCK_AGY
+    chmod +x "$tmp_bin/agy"
+
+    local out rc=0 err="$TEST_TMP_DIR/agy-pty.err"
+    out="$(printf '%s' $'review this diff\npreserve a '\''quoted'\'' token' | OCTOPUS_AGY_FORCE_INLINE=0 \
+        PATH="$tmp_bin:$PATH" bash "$PROJECT_ROOT/scripts/helpers/agy-exec.sh" 2>"$err")" || rc=$?
+
+    # Salvaged: real verdict returned, exit 0, PTY path announced, and the answer is
+    # byte-clean (no caret-notation ^D echo leaked from the pseudo-terminal).
+    if [[ $rc -eq 0 ]] && [[ "$out" == *"VERDICT: APPROVE"* ]] &&
+       ! printf '%s' "$out" | grep -q '\^D' &&
+       grep -q 'pseudo-terminal' "$err"; then
+        test_pass
+    else
+        test_fail "PTY fallback did not salvage: rc=$rc out=[$(printf '%s' "$out" | tr '\n' '|')] fired=$(grep -q pseudo-terminal "$err" && echo yes || echo no)"
+    fi
+}
+
+test_agy_pty_fallback_opt_out() {
+    test_case "OCTOPUS_AGY_NO_PTY_FALLBACK=1 disables the pseudo-terminal retry"
+
+    local tmp_bin="$TEST_TMP_DIR/agy-pty-off-bin"
+    mkdir -p "$tmp_bin"
+    cat > "$tmp_bin/agy" <<'MOCK_AGY'
+#!/usr/bin/env bash
+if [ -t 1 ] || [ -t 0 ]; then printf 'VERDICT: APPROVE\n'; exit 0; fi
+echo "bubbletea: could not open TTY" >&2
+exit 1
+MOCK_AGY
+    chmod +x "$tmp_bin/agy"
+
+    local out rc=0 err="$TEST_TMP_DIR/agy-pty-off.err"
+    out="$(printf 'review this diff' | OCTOPUS_AGY_NO_PTY_FALLBACK=1 OCTOPUS_AGY_FORCE_INLINE=0 \
+        PATH="$tmp_bin:$PATH" bash "$PROJECT_ROOT/scripts/helpers/agy-exec.sh" 2>"$err")" || rc=$?
+
+    # With the fallback off, the TTY failure propagates: non-zero exit, no salvage.
+    if [[ $rc -ne 0 ]] && [[ "$out" != *"VERDICT: APPROVE"* ]] &&
+       ! grep -q 'pseudo-terminal' "$err"; then
+        test_pass
+    else
+        test_fail "opt-out still retried: rc=$rc out=[$(printf '%s' "$out" | tr '\n' '|')]"
+    fi
+}
+
 test_gemini_via_agy_option() {
     test_case "OCTOPUS_GEMINI_VIA_AGY serves gemini seats through agy"
 
@@ -911,6 +977,8 @@ test_agy_oversize_payload_skips_gracefully
 test_agy_oversize_ceiling_is_configurable
 test_agy_oversize_uses_documented_default_ceiling
 test_agy_oversize_default_ceiling_dispatches_at_the_limit
+test_agy_pty_fallback_salvages_tty_error
+test_agy_pty_fallback_opt_out
 test_gemini_via_agy_option
 test_agy_dynamic_model_validation
 test_agy_command_validation

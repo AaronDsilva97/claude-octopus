@@ -93,7 +93,8 @@ fi
 # the --print argument. Buffer stdout to a file to preserve output fidelity.
 prompt_file=""
 stdout_file=$(mktemp -t "octo-agy-stdout.XXXXXX")
-trap 'rm -f "${prompt_file:-}" "${stdout_file:-}"' EXIT
+stderr_file=$(mktemp -t "octo-agy-stderr.XXXXXX")
+trap 'rm -f "${prompt_file:-}" "${stdout_file:-}" "${stderr_file:-}"' EXIT
 # INT/TERM must actually terminate (bash otherwise resumes after the handler);
 # the EXIT trap still runs the cleanup on the way out.
 trap 'exit 130' INT
@@ -211,7 +212,62 @@ fi
 
 run_agy() {
     : > "$stdout_file"
-    "${cmd[@]}" > "$stdout_file" < /dev/null
+    : > "$stderr_file"
+    "${cmd[@]}" > "$stdout_file" 2> "$stderr_file" < /dev/null
+}
+
+# agy is a bubbletea TUI app. In --print mode it is headless, but when it must render
+# an INTERACTIVE screen anyway — a folder-trust prompt on a brand-new worktree, or an
+# auth/login flow — it opens /dev/tty and, in a session with no controlling terminal,
+# dies with "bubbletea: could not open TTY" before producing any answer. Detect that
+# specific failure so we only pay the pseudo-TTY cost when it actually happens.
+_agy_tty_error() {
+    # Match only TTY-specific phrasing. A bare "bubbletea" would also catch unrelated
+    # TUI failures a pseudo-terminal can't fix; the real error ("bubbletea: could not
+    # open TTY") is already covered by the "could not open tty" alternative. Count
+    # matches rather than `grep -q`: -q exits on first match and can SIGPIPE an upstream
+    # writer under pipefail, which the repo's portability lint forbids.
+    LC_ALL=C grep -ciE 'could not open( a)? tty|open /dev/tty|inappropriate ioctl|/dev/tty.*(no such device|not a)' \
+        "$stderr_file" "$stdout_file" >/dev/null 2>&1
+}
+
+# PTY-fallback: re-run agy under a pseudo-terminal via `script` so a TUI it insists on
+# rendering (already auto-dismissed by --dangerously-skip-permissions) has a TTY to draw
+# on. Only invoked on a confirmed TTY error — a blanket wrap would fire on EVERY
+# autonomous dispatch (which never has a TTY) and leak the PTY's control-char echo (^D,
+# CR) into the answer. Opt out with OCTOPUS_AGY_NO_PTY_FALLBACK=1.
+run_agy_pty() {
+    # Bail BEFORE truncating the captures: agy's original stderr (the TTY error the
+    # caller matched on) must survive if we can't actually run the fallback.
+    command -v script >/dev/null 2>&1 || return 127
+    : > "$stdout_file"
+    : > "$stderr_file"
+    if [[ "$(uname -s 2>/dev/null)" == Darwin* || "$(uname -s 2>/dev/null)" == *BSD ]]; then
+        # BSD script: trailing command args preserve argv (safe for a large --print value).
+        script -q /dev/null "${cmd[@]}" > "$stdout_file" 2> "$stderr_file" < /dev/null
+    else
+        # util-linux script: the command must be one -c string and may be
+        # interpreted by /bin/sh rather than Bash. Quote every argument with
+        # POSIX single-quote syntax; Bash printf %q can emit $'...' for
+        # multiline values, which is not portable to /bin/sh.
+        local _q="" _a _escaped
+        for _a in "${cmd[@]}"; do
+            _escaped="${_a//\'/\'\\\'\'}"
+            _q+="'${_escaped}' "
+        done
+        script -qec "$_q" /dev/null > "$stdout_file" 2> "$stderr_file" < /dev/null
+    fi
+    local _rc=$?
+    # Clean the pseudo-terminal's echo artifacts so the captured answer is byte-clean
+    # for the council response parser. Feeding /dev/null as stdin makes the line
+    # discipline echo the EOF as caret-notation "^D" (literal ^ + D) followed by
+    # backspaces to erase it — plus trailing carriage returns. Drop CR/BS/EOT, then
+    # strip any leading run of caret-notation control sequences (^@..^_ ^?) left on the
+    # first line. A real answer never starts with those.
+    LC_ALL=C tr -d '\r\010\004' < "$stdout_file" \
+        | LC_ALL=C sed -E '1s/^(\^[]@-_?])+//' > "${stdout_file}.clean" 2>/dev/null \
+        && mv -f "${stdout_file}.clean" "$stdout_file"
+    return "$_rc"
 }
 
 set +e
@@ -224,7 +280,20 @@ if [[ $rc -eq 0 && -z "${content//[$' \t\r\n']/}" && -n "$prompt_file" && "${OCT
     run_agy
     rc=$?
 fi
+# Hardening (not a live-bug fix): if agy died demanding a TTY, retry once under a
+# pseudo-terminal so a first-touch folder-trust TUI on a fresh worktree can't sink an
+# autonomous council seat. Gated on the real error so the working headless path is
+# untouched.
+if [[ "${OCTOPUS_AGY_NO_PTY_FALLBACK:-}" != "1" ]] && (( rc != 0 )) \
+        && command -v script >/dev/null 2>&1 && _agy_tty_error; then
+    echo "agy-exec.sh: agy demanded a TTY; retrying once under a pseudo-terminal (disable with OCTOPUS_AGY_NO_PTY_FALLBACK=1)" >&2
+    run_agy_pty
+    rc=$?
+fi
 set -e
 
+# Surface agy's own stderr (folder-trust notes, diagnostics) that used to flow straight
+# through, now that we capture it to detect the TTY error.
+[[ -s "$stderr_file" ]] && cat "$stderr_file" >&2
 cat "$stdout_file"
 exit "$rc"
