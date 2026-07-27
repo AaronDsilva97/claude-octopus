@@ -2,9 +2,7 @@
 
 ## [Unreleased]
 
-### Changed
-
-- **Real Tangle implementation runs now require a clean Git baseline by default** (#674). Modified tracked files, untracked files, and non-Git workspaces fail before provider dispatch with each blocking status entry reported; ignored files remain allowed and direct library consumers may explicitly opt out with `OCTOPUS_TANGLE_REQUIRE_CLEAN_BASELINE=false`.
+## [9.55.0] - 2026-07-27
 
 ### Added
 
@@ -18,6 +16,7 @@
 
 ### Changed
 
+- **Real Tangle implementation runs now require a clean Git baseline by default** (#674). Modified tracked files, untracked files, and non-Git workspaces fail before provider dispatch with each blocking status entry reported; ignored files remain allowed and direct library consumers may explicitly opt out with `OCTOPUS_TANGLE_REQUIRE_CLEAN_BASELINE=false`.
 - **Current-model defaults now prefer Opus 5, Sonnet 5, and GPT-5.6** when the installed Claude Code and Codex versions support them. Fresh provider configurations use GPT-5.6 Sol/Terra/Luna and Opus 5/Sonnet 5/Haiku 4.5; existing environment, session, and `providers.json` pins retain precedence.
 - **Fable 5 remains opt-in and falls back to Opus 5** for security routing or a refusal/empty response. `OCTOPUS_FABLE5_FALLBACK_MODEL` can select another fallback, and automatic Opus 5 `xhigh` phase routing is now opt-in through `OCTOPUS_OPUS5_AUTO_XHIGH=1`.
 - **Provider capability gates and cost reporting recognize the new roster**: Sonnet 5 requires Claude Code v2.1.197+, Opus 5 requires v2.1.219+, and GPT-5.6 routing requires Codex CLI v0.144.0+.
