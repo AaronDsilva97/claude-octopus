@@ -70,7 +70,10 @@ _gemini_mark_dead() {
         # shellcheck source=/dev/null
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/quota-watcher.sh" 2>/dev/null || true
     fi
-    declare -f octo_quota_mark_dead >/dev/null 2>&1 && octo_quota_mark_dead "gemini" || true
+    # ttl 0 = permanent. IneligibleTierError is not a quota window: Google sunset
+    # Gemini Code Assist free-tier OAuth, so the seat cannot recover on its own and
+    # expiring the marker only re-launches the CLI (and its keychain prompt).
+    declare -f octo_quota_mark_dead >/dev/null 2>&1 && octo_quota_mark_dead "gemini" 0 || true
 }
 
 last_exit=0
