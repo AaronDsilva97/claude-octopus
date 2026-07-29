@@ -24,6 +24,13 @@ source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/auth.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/qwen.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/grok.sh" 2>/dev/null || true
+# Provider liveness. check-providers.sh reports a quota/auth-dead seat as
+# `degraded`, but nothing downstream consumed that: this script built its fleet
+# from `command -v` plus the allowlist alone, so a seat known to be dead was
+# still handed a role and dispatched into an immediate failure. For gemini that
+# also means launching the CLI, which triggers a macOS keychain prompt for
+# gemini-cli-workspace-oauth on every review.
+source "${SCRIPT_DIR}/../lib/quota-watcher.sh" 2>/dev/null || true
 
 WORKFLOW="${1:-research}"
 INTENSITY="${2:-standard}"
@@ -72,6 +79,29 @@ if octo_provider_allowed cursor-agent && declare -f _is_cursor_agent_binary >/de
 fi
 octo_provider_allowed perplexity && [[ -n "${PERPLEXITY_API_KEY:-}" ]] && AVAILABLE_CLI+=(perplexity)
 octo_provider_allowed openrouter && [[ -n "${OPENROUTER_API_KEY:-}" ]] && AVAILABLE_CLI+=(openrouter)
+
+# Drop seats already known quota/auth-dead this session. Applied as a filter over
+# the assembled list rather than as another condition on each detection line: the
+# detection conditions differ per provider (binary, API key, health function), and
+# adding a 13th variant of the same check to each was how the original omission
+# happened. One choke point, same as provider_status() in check-providers.sh.
+if declare -f octo_quota_is_dead >/dev/null 2>&1 && [[ -n "${AVAILABLE_CLI[*]:-}" ]]; then
+    _LIVE_CLI=()
+    for _p in "${AVAILABLE_CLI[@]}"; do
+        if octo_quota_is_dead "$_p"; then
+            [[ "${OCTOPUS_FLEET_DEBUG:-0}" == "1" ]] && \
+                echo "build-fleet: skipping ${_p} (quota/auth-dead this session)" >&2
+            continue
+        fi
+        _LIVE_CLI+=("$_p")
+    done
+    AVAILABLE_CLI=("${_LIVE_CLI[@]:-}")
+    # An all-dead list collapses to a single empty element under bash 3.2's
+    # ${arr[@]:-} expansion; normalise so CLI_COUNT does not report a phantom seat.
+    if [[ ${#AVAILABLE_CLI[@]} -eq 1 && -z "${AVAILABLE_CLI[0]}" ]]; then
+        AVAILABLE_CLI=()
+    fi
+fi
 
 CLI_COUNT=0
 if [[ -n "${AVAILABLE_CLI[*]:-}" ]]; then

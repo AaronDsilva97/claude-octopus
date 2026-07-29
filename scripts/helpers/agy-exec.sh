@@ -237,6 +237,25 @@ _agy_quota_reset_window() {
     LC_ALL=C grep -hoiE 'resets in [0-9]+h[0-9]+m([0-9]+s)?' "$stderr_file" "$stdout_file" 2>/dev/null | head -1
 }
 
+# Convert agy's "Resets in 156h13m[45s]" into seconds, so the quota-dead marker
+# expires when the quota actually resets. Without this the marker inherits the
+# generic 1h default and a ~156h window is re-tried roughly 156 times, each retry
+# dispatching into the same instant failure. Echoes nothing when unparseable, and
+# the caller then falls back to the default TTL.
+_agy_reset_window_seconds() {
+    local w h m s
+    w="$(_agy_quota_reset_window)"
+    [[ -n "$w" ]] || return 0
+    h="$(printf '%s\n' "$w" | LC_ALL=C sed -nE 's/.*[^0-9]([0-9]+)h.*/\1/p')"
+    m="$(printf '%s\n' "$w" | LC_ALL=C sed -nE 's/.*h([0-9]+)m.*/\1/p')"
+    s="$(printf '%s\n' "$w" | LC_ALL=C sed -nE 's/.*m([0-9]+)s.*/\1/p')"
+    [[ "$h" =~ ^[0-9]+$ ]] || h=0
+    [[ "$m" =~ ^[0-9]+$ ]] || m=0
+    [[ "$s" =~ ^[0-9]+$ ]] || s=0
+    (( h == 0 && m == 0 && s == 0 )) && return 0
+    printf '%s\n' "$(( h * 3600 + m * 60 + s ))"
+}
+
 _agy_tty_error() {
     # Match only TTY-specific phrasing. A bare "bubbletea" would also catch unrelated
     # TUI failures a pseudo-terminal can't fix; the real error ("bubbletea: could not
@@ -320,7 +339,10 @@ if (( rc != 0 )) && _agy_quota_error; then
         # shellcheck source=/dev/null
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/quota-watcher.sh" 2>/dev/null || true
     fi
-    declare -f octo_quota_mark_dead >/dev/null 2>&1 && octo_quota_mark_dead "agy" || true
+    # Expire the marker when the quota actually resets, not on the generic
+    # default. An unparseable window yields an empty ttl and mark_dead falls back.
+    _agy_reset_ttl="$(_agy_reset_window_seconds)"
+    declare -f octo_quota_mark_dead >/dev/null 2>&1 && octo_quota_mark_dead "agy" "${_agy_reset_ttl}" || true
 fi
 
 # Surface agy's own stderr (folder-trust notes, diagnostics) that used to flow straight
