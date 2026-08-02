@@ -215,6 +215,7 @@ octo_provider_identity_from_agent_type() {
         openai-compatible|openai-tools|openai-compatible-agent) echo "openai-compatible" ;;
         atlascloud-agent|atlascloud) echo "atlascloud" ;;
         codex*) echo "codex" ;;
+        commandcode*) echo "commandcode" ;;
         claude*) echo "anthropic" ;;
         gemini*) echo "google" ;;
         perplexity*) echo "perplexity" ;;
@@ -234,6 +235,27 @@ octo_extract_runtime_model() {
         -e 's/^OCTOPUS_RUNTIME_MODEL=([^[:space:]]+)$/\1/p' \
         | head -1 || true)
     printf '%s\n' "${value:-unknown}"
+}
+
+
+# Render a human-facing identity label for a configured executor alias.
+# Used by ceremonies and other summaries that must not expose historical slot names
+# as if they were the runtime provider.
+octo_provider_identity_label() {
+    local executor_alias="${1:-unknown}"
+    local role="${2:-unknown}"
+    local configured_provider="unknown"
+    local configured_model="unresolved"
+
+    configured_provider="$(octo_provider_identity_from_agent_type "$executor_alias" 2>/dev/null || echo unknown)"
+    if declare -f get_agent_model >/dev/null 2>&1; then
+        configured_model="$(get_agent_model "$executor_alias" "ceremony" "$role" 2>/dev/null || echo unresolved)"
+    fi
+
+    printf '%s / %s (executor: %s)' \
+        "${configured_provider:-unknown}" \
+        "${configured_model:-unresolved}" \
+        "$executor_alias"
 }
 
 octo_append_runtime_identity() {

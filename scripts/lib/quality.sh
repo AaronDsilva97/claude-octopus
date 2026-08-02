@@ -501,7 +501,7 @@ Be concise and specific. This is a planning exercise, not implementation."
 
     # Gather approaches from available providers. Keep these configurable so
     # operators can pick cheaper/faster review models without patching code.
-    local codex_approach="" gemini_approach="" sonnet_approach=""
+    local seat_1_approach="" seat_2_approach="" seat_3_approach=""
     local design_codex_agent="${OCTOPUS_DESIGN_REVIEW_CODEX_AGENT:-codex-mini}"
     local design_agy_agent="${OCTOPUS_DESIGN_REVIEW_AGY_AGENT:-${OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT:-agy}}"
     local design_claude_agent="${OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT:-claude-sonnet}"
@@ -522,12 +522,33 @@ Be concise and specific. This is a planning exercise, not implementation."
     local _synth_timeout_label="none"
     [[ "$design_synth_timeout" != "0" ]] && _synth_timeout_label="${design_synth_timeout}s"
 
-    log INFO "Design review: gathering provider approaches..."
-    log INFO "Design review agents: codex=${design_codex_agent}, agy=${design_agy_agent}, claude=${design_claude_agent}, synthesis=${design_synthesis_agent}, timeout=${_design_timeout_label}, synth_timeout=${_synth_timeout_label}"
+    local seat_1_label seat_2_label seat_3_label synthesis_label
+    seat_1_label="$(octo_provider_identity_label "$design_codex_agent" "implementer")"
+    seat_2_label="$(octo_provider_identity_label "$design_agy_agent" "researcher")"
+    seat_3_label="$(octo_provider_identity_label "$design_claude_agent" "code-reviewer")"
+    synthesis_label="$(octo_provider_identity_label "$design_synthesis_agent" "synthesizer")"
 
-    codex_approach=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_codex_agent" "$ceremony_prompt" "$design_timeout" "implementer" "ceremony" 2>/dev/null) || true
-    gemini_approach=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_agy_agent" "$ceremony_prompt" "$design_timeout" "researcher" "ceremony" 2>/dev/null) || true
-    sonnet_approach=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_claude_agent" "$ceremony_prompt" "$design_timeout" "code-reviewer" "ceremony" 2>/dev/null) || true
+    log INFO "Design review: gathering provider approaches..."
+    log INFO "Design review seats: seat_1=${seat_1_label}, seat_2=${seat_2_label}, seat_3=${seat_3_label}, synthesis=${synthesis_label}, timeout=${_design_timeout_label}, synth_timeout=${_synth_timeout_label}"
+
+    seat_1_approach="$(
+        (
+            export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+            run_agent_sync_consultative "$design_codex_agent" "$ceremony_prompt" "$design_timeout" "implementer" "ceremony"
+        ) 2>/dev/null
+    )" || true
+    seat_2_approach="$(
+        (
+            export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+            run_agent_sync_consultative "$design_agy_agent" "$ceremony_prompt" "$design_timeout" "researcher" "ceremony"
+        ) 2>/dev/null
+    )" || true
+    seat_3_approach="$(
+        (
+            export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+            run_agent_sync_consultative "$design_claude_agent" "$ceremony_prompt" "$design_timeout" "code-reviewer" "ceremony"
+        ) 2>/dev/null
+    )" || true
 
     # Synthesize conflicts and resolution.
     # synthesis.start/end bracket the call so the event stream shows how long the
@@ -543,16 +564,16 @@ Be concise and specific. This is a planning exercise, not implementation."
     local synthesis
     synthesis=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_synthesis_agent" "You are synthesizing a design review ceremony.
 
-Three providers stated their approach to this task:
+Three review seats stated their approach to this task. The headings below reflect configured runtime identity rather than historical provider slot names:
 
-CODEX APPROACH:
-${codex_approach:-[unavailable]}
+SEAT 1 - ${seat_1_label}:
+${seat_1_approach:-[unavailable]}
 
-GEMINI APPROACH:
-${gemini_approach:-[unavailable]}
+SEAT 2 - ${seat_2_label}:
+${seat_2_approach:-[unavailable]}
 
-SONNET APPROACH:
-${sonnet_approach:-[unavailable]}
+SEAT 3 - ${seat_3_label}:
+${seat_3_approach:-[unavailable]}
 
 Identify:
 1. CONFLICTS: Where do the approaches disagree?

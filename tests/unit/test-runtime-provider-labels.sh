@@ -73,4 +73,31 @@ else
   test_fail "one or more role events still lack stable identity/role fields"
 fi
 
+test_case "design review seat labels use resolved provider and model identity"
+get_agent_model() {
+  case "$1:$3" in
+    commandcode:implementer) echo "deepseek/deepseek-v4-pro" ;;
+    commandcode-research:researcher) echo "minimaxai/minimax-m3" ;;
+    *) echo "unresolved" ;;
+  esac
+}
+label=$(octo_provider_identity_label commandcode implementer)
+research_label=$(octo_provider_identity_label commandcode-research researcher)
+if [[ "$label" == "commandcode / deepseek/deepseek-v4-pro (executor: commandcode)" ]] && \
+   [[ "$research_label" == "commandcode / minimaxai/minimax-m3 (executor: commandcode-research)" ]]; then
+  test_pass
+else
+  test_fail "design review labels did not expose resolved runtime identity: $label | $research_label"
+fi
+
+test_case "design review synthesis prompt no longer uses historical provider headings"
+if ! grep -q '^CODEX APPROACH:' "$PROJECT_ROOT/scripts/lib/quality.sh" && \
+   ! grep -q '^GEMINI APPROACH:' "$PROJECT_ROOT/scripts/lib/quality.sh" && \
+   ! grep -q '^SONNET APPROACH:' "$PROJECT_ROOT/scripts/lib/quality.sh" && \
+   grep -q 'SEAT 1 - ${seat_1_label}:' "$PROJECT_ROOT/scripts/lib/quality.sh"; then
+  test_pass
+else
+  test_fail "historical provider headings remain in the design review synthesis prompt"
+fi
+
 test_summary
