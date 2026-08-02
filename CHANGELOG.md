@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [9.57.1] - 2026-08-02
+
+### Fixed
+
+- **Legacy `OCTOPUS_REVIEWER_FLIP` truthy/falsy values (`1`/`on`/`true`/`yes`/`0`/`off`/`false`/`no`) were silently dropped on the normal dispatch path.** `_octo_reviewer_flip_active()` deferred to `octo_features_choice()`, which only passes an env value through when it matches a declared choice (`claude`/`codex`) — so any legacy value fell back to the `codex` default instead of honoring the documented aliases. The legacy values are now normalized locally before the feature-choice ledger is consulted. (#720)
+- **`gemini-via-agy`, the migration path off the sunset Gemini Code Assist free-tier OAuth, shipped silently disabled and was never offered**, leaving affected users stuck on a dispatch path that can only fail. The feature is now `decision: required`, prompting once so users can route gemini seats through Antigravity or opt out explicitly. (#715)
+- **`OCTOPUS_COMMANDCODE_PERMISSION_MODE` had no effect on the dispatch path**, unlike the equivalent Codex sandbox override — the role-derived default always won regardless of the env var. (#710)
+- Design review seats were labeled by role instead of runtime identity.
+- Tests resolved `PROJECT_ROOT` without `cd -P`, diverging from how `features.sh` resolves it on symlinked checkouts. (#712)
+- `WORKSPACE_DIR` was not forwarded into isolated provider environments, hiding dead-marks from providers that needed to see them.
+- The human-only skill list no longer matched what skills actually declare.
+
+### Added
+
+- **Agent topology audit skill, and agency allocation in the intent contract** — classify a task for organisation-form and human/AI agency tradeoffs before a workflow is chosen. (#699, #700)
+- Four workflow skills adapted from mattpocock/skills.
+
+### Documentation
+
+- User-facing command examples now consistently use the `/octo:` prefix.
+- Cross-harness handoff doc updated to the v9.57.0 baseline.
+
 ## [9.57.0] - 2026-08-02
 
 
