@@ -59,6 +59,10 @@ if [[ "$rc" -eq 7 ]]; then test_pass; else test_fail "expected exit 7, got $rc";
 test_case "dispatch selects yolo for implementers and plan for verifiers"
 export PLUGIN_DIR="$PROJECT_ROOT" OCTOPUS_PLATFORM=Linux HOME="$FIXTURE_DIR/home"
 mkdir -p "$HOME/.claude-octopus/config"
+# dispatch.sh's log() lives in orchestrate.sh, which this harness never
+# sources; stub it so ERROR-path assertions can see the emitted text
+# instead of a bare "log: command not found".
+log() { local level="$1"; shift; printf '%s: %s\n' "$level" "$*" >&2; }
 source "$PROJECT_ROOT/scripts/lib/validation.sh"
 source "$PROJECT_ROOT/scripts/lib/model-cache-path.sh"
 source "$PROJECT_ROOT/scripts/lib/model-resolver.sh"
@@ -71,6 +75,51 @@ if [[ "$impl_cmd" == *'commandcode-exec.sh deepseek/deepseek-v4-pro yolo' ]] && 
     test_pass
 else
     test_fail "unexpected role permission mapping"
+fi
+
+# Issue #710: OCTOPUS_COMMANDCODE_PERMISSION_MODE was accepted by
+# commandcode-exec.sh but dispatch always passed an explicit positional
+# argument, so the env var was dead on the dispatch path.
+test_case "OCTOPUS_COMMANDCODE_PERMISSION_MODE override is honoured on the dispatch path"
+override_mismatch=""
+for mode in plan default dont-ask auto-accept yolo; do
+    export OCTOPUS_COMMANDCODE_PERMISSION_MODE="$mode"
+    override_cmd="$(get_agent_command commandcode tangle implementer)"
+    if [[ "$override_cmd" != *"commandcode-exec.sh deepseek/deepseek-v4-pro ${mode}" ]]; then
+        override_mismatch="mode=${mode} got: ${override_cmd}"
+        break
+    fi
+done
+unset OCTOPUS_COMMANDCODE_PERMISSION_MODE
+if [[ -z "$override_mismatch" ]]; then
+    test_pass
+else
+    test_fail "expected env override to win over the role-derived default, ${override_mismatch}"
+fi
+
+test_case "invalid OCTOPUS_COMMANDCODE_PERMISSION_MODE is rejected and falls back to the role default"
+export OCTOPUS_COMMANDCODE_PERMISSION_MODE=danger-full-access
+error_log="$FIXTURE_DIR/invalid-commandcode-permission-mode.err"
+invalid_cmd="$(get_agent_command commandcode tangle implementer 2>"$error_log")"
+unset OCTOPUS_COMMANDCODE_PERMISSION_MODE
+if [[ "$invalid_cmd" == *'commandcode-exec.sh deepseek/deepseek-v4-pro yolo' ]] &&
+   grep -F -- 'ERROR: Invalid OCTOPUS_COMMANDCODE_PERMISSION_MODE value:' "$error_log" >/dev/null; then
+    test_pass
+else
+    test_fail "expected fallback to role default (yolo) with logged error, got: $invalid_cmd"
+fi
+
+test_case "override dispatch command passes validate_agent_command"
+source "$PROJECT_ROOT/scripts/lib/utils.sh"
+export OCTOPUS_COMMANDCODE_PERMISSION_MODE=auto-accept
+override_valid_cmd="$(get_agent_command commandcode verify verifier)"
+unset OCTOPUS_COMMANDCODE_PERMISSION_MODE
+if [[ "$override_valid_cmd" != *' auto-accept' ]]; then
+    test_fail "expected auto-accept override to be forwarded, got: $override_valid_cmd"
+elif validate_agent_command "$override_valid_cmd" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "override dispatch command rejected by validate_agent_command"
 fi
 
 # The command dispatch actually returns must survive validate_agent_command, or
