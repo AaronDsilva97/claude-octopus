@@ -688,9 +688,13 @@ ${_blind_spot_checklist}"
     log DEBUG "Synthesis marker removed (synthesis completed successfully)"
 
     # v7.19.0 P2.4: Stop progressive synthesis monitor
+    # `kill`/`wait` on a monitor that already exited on its own return non-zero —
+    # under `set -eo pipefail` that would abort this function (and skip
+    # display_progress_summary below) right after synthesis succeeded. Same
+    # class as the subshell kill fixed in #336/#739. (#751)
     if [[ -n "$synthesis_monitor_pid" ]]; then
-        kill "$synthesis_monitor_pid" 2>/dev/null
-        wait "$synthesis_monitor_pid" 2>/dev/null
+        kill "$synthesis_monitor_pid" 2>/dev/null || true
+        wait "$synthesis_monitor_pid" 2>/dev/null || true
         log "DEBUG" "Progressive synthesis monitor stopped"
     fi
 

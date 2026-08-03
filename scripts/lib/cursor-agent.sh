@@ -52,8 +52,15 @@ _cursor_agent_run_with_timeout() {
     ( /bin/sleep "$timeout_secs"; kill -TERM "$cmd_pid" 2>/dev/null; /bin/sleep 1; kill -KILL "$cmd_pid" 2>/dev/null ) &
     monitor_pid=$!
 
-    wait "$cmd_pid" 2>/dev/null
-    exit_code=$?
+    # `wait` returns the command's own exit status, so a non-zero exit under
+    # `set -eo pipefail` would abort this function before exit_code=$? runs.
+    # The if/else keeps the wait inside a tested context so set -e doesn't
+    # fire, while still capturing the real exit code. (#751)
+    if wait "$cmd_pid" 2>/dev/null; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 
     kill "$monitor_pid" 2>/dev/null || true
     wait "$monitor_pid" 2>/dev/null || true
