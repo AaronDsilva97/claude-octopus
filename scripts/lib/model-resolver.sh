@@ -250,6 +250,55 @@ resolve_octopus_model() {
         fi
 
         # 2. Role/Phase Routing
+        # Object routes are literal, explicit provider/model selections. Unlike
+        # legacy string routes (for example "codex:spark"), their model field
+        # must not be reinterpreted as a capability alias. This makes one
+        # providers.json entry sufficient for provider + exact model routing.
+        if [[ -z "$resolved_model" || "$resolved_model" == "null" ]]; then
+            local role_route_json=""
+            local phase_route_json=""
+            local role_route_type=""
+            local role_route_provider=""
+            local role_route_model=""
+            local phase_route_provider=""
+            local phase_route_model=""
+            local role_route_blocks_phase="false"
+
+            if [[ -n "$role" ]]; then
+                role_route_json=$(echo "$config_data" | jq -c --arg role "$role" '.routing.roles[$role] // empty' 2>/dev/null)
+                if [[ -n "$role_route_json" && "$role_route_json" != "null" ]]; then
+                    role_route_type=$(echo "$role_route_json" | jq -r 'type' 2>/dev/null)
+                    if [[ "$role_route_type" == "object" ]]; then
+                        role_route_provider=$(echo "$role_route_json" | jq -r '.provider // empty' 2>/dev/null)
+                        role_route_model=$(echo "$role_route_json" | jq -r '.model // empty' 2>/dev/null)
+                        if [[ -z "$role_route_provider" || "$role_route_provider" == "$canonical_provider" ]]; then
+                            role_route_blocks_phase="true"
+                            if [[ -n "$role_route_model" ]]; then
+                                resolved_model="$role_route_model"
+                                [[ -n "$_trace" ]] && echo "[model-trace] Tier 3 (literal role route): $resolved_model ← SELECTED" >&2
+                            fi
+                        fi
+                    else
+                        # Legacy string routes retain their existing alias/provider semantics.
+                        role_route_blocks_phase="true"
+                    fi
+                fi
+            fi
+
+            if [[ ( -z "$resolved_model" || "$resolved_model" == "null" ) && "$role_route_blocks_phase" != "true" && -n "$phase" ]]; then
+                phase_route_json=$(echo "$config_data" | jq -c --arg phase "$phase" '.routing.phases[$phase] // empty' 2>/dev/null)
+                if [[ -n "$phase_route_json" && "$phase_route_json" != "null" ]] && [[ "$(echo "$phase_route_json" | jq -r 'type' 2>/dev/null)" == "object" ]]; then
+                    phase_route_provider=$(echo "$phase_route_json" | jq -r '.provider // empty' 2>/dev/null)
+                    phase_route_model=$(echo "$phase_route_json" | jq -r '.model // empty' 2>/dev/null)
+                    if [[ ( -z "$phase_route_provider" || "$phase_route_provider" == "$canonical_provider" ) && -n "$phase_route_model" ]]; then
+                        resolved_model="$phase_route_model"
+                        [[ -n "$_trace" ]] && echo "[model-trace] Tier 3 (literal phase route): $resolved_model ← SELECTED" >&2
+                    fi
+                fi
+            fi
+        fi
+
+        # Legacy string role/phase routes remain supported below.
         # Role routes are more specific than phase routes. In review fleets this
         # lets `logic-reviewer` use an independent model even when the broad
         # `review` phase route points at the default coding provider/model.
