@@ -689,8 +689,11 @@ ${_blind_spot_checklist}"
 
     # v7.19.0 P2.4: Stop progressive synthesis monitor
     if [[ -n "$synthesis_monitor_pid" ]]; then
-        kill "$synthesis_monitor_pid" 2>/dev/null
-        wait "$synthesis_monitor_pid" 2>/dev/null
+        # `kill`/`wait` on a monitor that already exited on its own return non-zero —
+        # under `set -e` that would abort this function (skipping display_progress_summary
+        # below) after synthesis already succeeded. Same class as #739/#751.
+        kill "$synthesis_monitor_pid" 2>/dev/null || true
+        wait "$synthesis_monitor_pid" 2>/dev/null || true
         log "DEBUG" "Progressive synthesis monitor stopped"
     fi
 

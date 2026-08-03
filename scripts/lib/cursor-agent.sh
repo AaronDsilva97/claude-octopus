@@ -49,11 +49,20 @@ _cursor_agent_run_with_timeout() {
 
     "$@" >"$output_file" 2>&1 <&0 &
     cmd_pid=$!
-    ( /bin/sleep "$timeout_secs"; kill -TERM "$cmd_pid" 2>/dev/null; /bin/sleep 1; kill -KILL "$cmd_pid" 2>/dev/null ) &
+    # Bare `kill`/`wait` here return non-zero once the target has already exited;
+    # under the parent's `set -e` (inherited into this subshell) that would abort
+    # the monitor mid-sequence, skipping the SIGKILL fallback. Same class as #751.
+    ( /bin/sleep "$timeout_secs"; kill -TERM "$cmd_pid" 2>/dev/null || true; /bin/sleep 1; kill -KILL "$cmd_pid" 2>/dev/null || true ) &
     monitor_pid=$!
 
-    wait "$cmd_pid" 2>/dev/null
-    exit_code=$?
+    # Preserve the real exit code (needed for the 137/143 signal check below) —
+    # a bare `wait` would abort this function under `set -e` before exit_code=$?
+    # ever ran whenever "$@" exited non-zero. Same class as #739/#751.
+    if wait "$cmd_pid" 2>/dev/null; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 
     kill "$monitor_pid" 2>/dev/null || true
     wait "$monitor_pid" 2>/dev/null || true

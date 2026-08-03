@@ -194,10 +194,13 @@ run_with_timeout() {
         # 10s later so a TERM-ignoring tree cannot wedge the workflow.
         (
             sleep "$timeout_secs"
-            kill -TERM "$cmd_pid" 2>/dev/null
+            # Bare `kill` on an already-exited cmd_pid returns non-zero — under
+            # `set -e` (inherited into this subshell) that would abort before the
+            # pkill/sleep/SIGKILL steps below ever ran. Same class as #739/#751.
+            kill -TERM "$cmd_pid" 2>/dev/null || true
             pkill -TERM -P "$cmd_pid" 2>/dev/null || true
             sleep 10
-            kill -KILL "$cmd_pid" 2>/dev/null
+            kill -KILL "$cmd_pid" 2>/dev/null || true
             pkill -KILL -P "$cmd_pid" 2>/dev/null || true
         ) &
         monitor_pid=$!
