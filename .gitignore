@@ -139,3 +139,8 @@ coverage-report.html
 .dolt/
 *.db
 .beads-credential-key
+
+# Separate canonical clone used for the scheduled daily bug-triage routine
+# (RELEASING.md / triage prompt requires a clean checkout, not this worktree).
+# Its work ships via its own pushed branches/PRs against the same remote.
+/claude-octopus-triage/
