@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "nyldn plugins for Claude Code workflows.",
-    "version": "9.58.0"
+    "version": "9.59.0"
   },
   "plugins": [
     {
@@ -15,8 +15,8 @@
         "source": "url",
         "url": "https://github.com/nyldn/claude-octopus.git"
       },
-      "description": "v9.58.0 - Agent topology audit, four adapted workflow skills, and the Gemini migration offered as a real choice. 32 personas, 50 commands, 63 skills. Run /octo:setup.",
-      "version": "9.58.0",
+      "description": "v9.59.0 - Ten reliability fixes: orphaned provider children are reaped, council seats cancel without a race or pgrep, the OpenRouter seat works again, and debate-gate checkpoints are readable. Adds literal provider-model routing. 32 personas, 50 commands, 63 skills. Run /octo:setup.",
+      "version": "9.59.0",
       "author": {
         "name": "nyldn",
         "url": "https://github.com/nyldn"
