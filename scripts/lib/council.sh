@@ -1554,6 +1554,22 @@ council_dispatch_member() {
     council_live_response "$provider" "$persona" "$prompt" "$phase"
 }
 
+_council_child_pids() {
+    # Prefer pgrep when available, but keep cancellation safe on minimal systems
+    # where procps is absent. Both GNU/Linux and macOS support the ps form below.
+    # Parse with Bash read rather than awk so the fallback adds no extra dependency.
+    local parent_pid="$1" child_pid child_parent
+    if command -v pgrep >/dev/null 2>&1; then
+        pgrep -P "$parent_pid" 2>/dev/null || true
+        return 0
+    fi
+    command -v ps >/dev/null 2>&1 || return 0
+    while read -r child_pid child_parent; do
+        [[ "$child_parent" == "$parent_pid" ]] && printf '%s\n' "$child_pid"
+    done < <(ps -ax -o pid= -o ppid= 2>/dev/null)
+    return 0
+}
+
 _council_kill_descendants_frozen() {
     # Freeze a subtree before killing descendants. Freezing prevents an intermediate
     # shell from advancing to its next command when a child process is terminated.
@@ -1562,13 +1578,11 @@ _council_kill_descendants_frozen() {
     # children and exit cleanly.
     local pid="$1" child
     kill -STOP "$pid" 2>/dev/null || true
-    if command -v pgrep >/dev/null 2>&1; then
-        while IFS= read -r child; do
-            [[ -n "$child" ]] || continue
-            _council_kill_descendants_frozen "$child"
-            kill -KILL "$child" 2>/dev/null || true
-        done < <(pgrep -P "$pid" 2>/dev/null)
-    fi
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        _council_kill_descendants_frozen "$child"
+        kill -KILL "$child" 2>/dev/null || true
+    done < <(_council_child_pids "$pid")
 }
 
 _council_cancel_tree() {
