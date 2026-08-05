@@ -207,6 +207,22 @@ _octopus_is_safe_openai_compatible_value() {
     return 0
 }
 
+# Grok/claude-sdk dispatch commands take the shape
+# `env OCTOPUS_<PROVIDER>_MODEL=<model> <shim path>` with nothing else — bind
+# the env assignment to the shim being the *next* token (not merely appearing
+# later in the string), so `env OCTOPUS_GROK_MODEL=x echo pwned <shim>` is
+# rejected instead of matching on a fixed prefix/suffix pair.
+_validate_env_prefixed_shim_command() {
+    local cmd="$1" env_prefix="$2" shim_suffix="$3"
+    local -a parts
+    read -r -a parts <<< "$cmd"
+    [[ "${#parts[@]}" -eq 3 ]] || return 1
+    [[ "${parts[0]}" == "env" ]] || return 1
+    [[ "${parts[1]}" == "${env_prefix}="* ]] || return 1
+    [[ "${parts[2]}" == *"$shim_suffix" ]] || return 1
+    return 0
+}
+
 _validate_openai_compatible_agent_command() {
     local cmd="$1"
     local -a parts
@@ -294,8 +310,17 @@ validate_agent_command() {
     fi
     if [[ "$cmd_executable" == */vibe-exec.sh || "$cmd_executable" == */ollama-run.sh || "$cmd_executable" == */codex-run.sh \
         || "$cmd_executable" == */scripts/helpers/agy-exec.sh || "$cmd_executable" == */scripts/helpers/copilot-exec.sh \
-        || "$cmd_executable" == */scripts/helpers/commandcode-exec.sh ]]; then
+        || "$cmd_executable" == */scripts/helpers/commandcode-exec.sh || "$cmd_executable" == */scripts/helpers/grok-exec.sh \
+        || "$cmd_executable" == */scripts/helpers/claude-sdk-exec.sh ]]; then
         return 0
+    fi
+    if [[ "$cmd_executable" == "env" ]]; then
+        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_GROK_MODEL" "/scripts/helpers/grok-exec.sh"; then
+            return 0
+        fi
+        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_CLAUDE_SDK_MODEL" "/scripts/helpers/claude-sdk-exec.sh"; then
+            return 0
+        fi
     fi
 
     # Whitelist of allowed command prefixes (v7.19.0: tightened to exact patterns)
