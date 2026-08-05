@@ -1,13 +1,15 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-02
-Status: v9.57.0 released; two open PRs (#714 gemini marker fix, #713 test path fix)
+Last updated: 2026-08-05
+Status: v9.59.0 released and tagged; `main` green; one open PR (#762, an
+external contributor's draft) and six open issues, all blocked or awaiting a
+maintainer decision
 Branch: `main`
-Release: https://github.com/nyldn/claude-octopus/releases/tag/v9.57.0
-Release squash: `37ba2af322766674b75d443126ce5b9005a81da4` (pushed to
+Release: https://github.com/nyldn/claude-octopus/releases/tag/v9.59.0
+Release squash: `a5d38ee325a823ba2cd4f9ef71f256cae4dec712` (pushed to
 `upstream/main`)
-Tag target: `v9.57.0` is annotated, resolves to the same post-squash commit,
-and is pushed
+Tag target: `v9.59.0` is annotated, resolves to that exact squash commit, and
+is pushed; the main-branch Test Suite passed on that commit before tagging
 
 ## Start Here
 
@@ -75,86 +77,90 @@ could not be claimed or recorded as a new Beads issue.
 
 ## Current Evidence
 
-- Public `main` includes the Council reliability queue, Tangle PRs #672-#675,
-  and the Opus 5 routing squash from PR #678 (`972d9597`).
-- Release v9.57.0 is the resume baseline. It adds the Command Code CLI
-  provider (#696), selective Fable 5 escalation and authorship-aware review
-  (#691), and the progressive feature-disclosure framework (#691); it fixes
-  global flags after the subcommand (#706), helper-shim allowlist anchoring
-  (#702), `USAGE_FILE` ordering (#694), Linux `stat` age checks and the
-  provider quota-dead lifecycle (#690, #692).
-- Release PR #711 squash-merged as
-  `37ba2af322766674b75d443126ce5b9005a81da4`. The annotated `v9.57.0` tag
-  peels to that exact public `main` commit, all required checks (Smoke, Unit,
-  Integration on both platforms) passed on it, the GitHub release is
-  published, and the shared `nyldn/plugins` marketplace advertises octo
-  v9.57.0.
-- Version choice was a minor, not the 9.56.2 patch that PR #707 proposed:
-  #696 adds a provider and #691 adds hooks and env vars, which `RELEASING.md`
-  step 1 classifies as additive. `config/features.json` independently declares
-  `added_in: 9.57.0`, and the disclosure watermark compares that exact string.
-  #707 was closed in favour of #711.
-- Open at handoff: #714 forwards `WORKSPACE_DIR` into the `env -i` provider
-  isolation so quota dead-marks written by `gemini-exec.sh` and `agy-exec.sh`
-  are visible to the reader (they were landing under the `$HOME` fallback
-  while readers used `$CLAUDE_PLUGIN_DATA`); #713 resolves a symlinked-checkout
-  path mismatch in `test-feature-disclosure.sh`. Both verified locally.
-- Known gap, not yet fixed: `gemini-via-agy` is `decision: none` / default `0`,
-  so the migration path off the sunset Gemini Code Assist OAuth is never
-  offered. Tracked in #715. Note the keychain dialog precedes
-  `IneligibleTierError`, so a reactive dead-mark cannot suppress the first
-  prompt of a session that reseats gemini — #714 is necessary but not
-  sufficient.
-- `Vendor Freshness` fails on `main` pushes (exit 2 on any warning) because the
-  vendored `ui-ux-pro-max-skill` is one minor behind (v2.11.0 vs v2.12.0). Not
-  a required check and unrelated to the release.
-- Installed Claude Code: 2.1.220.
-- Installed Codex CLI: 0.145.0.
-- Upstream model policy: `nyldn/fable5-optimizer` v2.0.0.
-- Targeted routing, resolver, provider activation, model config, SDK, Fable,
-  execution-mechanism, marketplace-sync, smoke-version, and council tests pass.
-- Latest focused evidence: Opus routing 21/21, Fable mode 27/27,
-  SubagentStop 8/8, Tangle run-worktree 13/13, and verification-only 10/10.
-- The final #675 head passed protected smoke, unit, and integration gates on
-  Ubuntu and macOS.
-- Fresh configs adopt the frontier roster; existing v3 configs and explicit
-  model pins remain unchanged.
-- `make sync-check` passes with no script mode changes.
-- The primary checkout's tracked working tree is clean and its only local item
-  is the preserved, user-owned untracked `.octo-continue.md`.
-- `scripts/sync-readme.py` keeps `README.md`, `.claude-plugin/README.md`, and
-  `PRODUCT.md` aligned with plugin metadata, runtime capability gates, model
-  resolver defaults, test discovery, and the current changelog release.
-- The README release-sync regression suite passes 8/8, including deliberate
-  fixture drift detection, repair, and the cross-harness controller contract;
-  current public model guidance names
-  Opus 5, GPT-5.6 Sol/Terra/Luna, Sonnet 5, and opt-in Fable 5 consistently.
-- `RTK.md` now provides the missing harness-neutral start/change/finish
-  controller. `AGENTS.md` and `CLAUDE.md` identify the generated README
-  surfaces and point agents to the same synchronization workflow.
-- The final integrated `make ci-local` passed 16 smoke, 185 unit, and 7
-  integration suites, including the live plugin lifecycle test.
-- PRs #683, #684, and #685 passed protected/review checks, including Ubuntu and
-  macOS unit matrices; the v9.56.0 release PR passed its required protected
-  gates after all CodeRabbit findings were verified against the rebased head.
-- PR #687 passed all protected and review checks with zero unresolved review
-  threads. Exact-commit `main` Test Suite run 30310609791 then passed smoke,
-  Ubuntu/macOS unit, integration, E2E, and summary gates before publication.
+- Release v9.59.0 is the resume baseline: ten reliability fixes plus literal
+  provider-model routing (#734) and three test systems (#749, #752). Tagged on
+  the squash commit per `RELEASING.md` step 7, with main verified green first
+  per step 9.
+- The release notes were rewritten before publication because they described
+  three fixes while `main` had gained fifteen more. Every cited PR was verified
+  by content, not by label: the batch PRs show CLOSED rather than MERGED
+  because #764 squashed them, so a label check reads as though they never
+  landed.
+- #762 (provider-registry consolidation) is verified, CI-green and Bash 3.2
+  clean, but is still the author's **draft**. It was deliberately excluded from
+  v9.59.0 and the registry claim was removed from the notes rather than
+  shipping a description of a change users would not have. It should lead the
+  next release.
+- Main went red on the v9.59.0 commit and the tag was held. Root cause was a
+  single macOS timing flake, not the release: `integration-heavy` declares
+  `needs: [unit-required]`, so a failed unit gate skips it and the `integration`
+  gate then fails on `heavy_tests=true` with result `skipped`. One flake, two
+  red checks. Both halves fixed in #771.
+- The flake was never reproduced locally across eleven runs including three
+  under CPU load. What established nondeterminism was a re-run of the identical
+  commit going green with no code change.
+- #769 fixed a live dispatch break: `grok-exec.sh` and `claude-sdk-exec.sh`
+  existed but were absent from `validate_agent_command`'s allowlist, so every
+  grok and claude-sdk dispatch aborted before the CLI ran. Third occurrence of
+  this pattern after #697 and #705. The fix requires exactly three tokens
+  (`env`, `VAR=`, shim), and four injection shapes were confirmed rejected.
+- #774 lowered both SessionEnd timeouts to Codex's 3s cap. This reversed an
+  earlier judgement made without measurement: `session-end.sh` runs 142 ms
+  nominal and 360 ms against a 2.7 MB session file with 6000 errors, 3000
+  phases and 300 memory dirs; `workflow-verification.sh` runs 20 ms. Codex
+  clamps to 3s regardless, so the declared 15s only ever produced a startup
+  warning. `main` now declares zero async hooks and zero over-cap timeouts.
+- #775 registered `/octo:whats-new`, which had shipped unregistered since
+  2026-07-30 (51 command files, 50 registered). Found by
+  `tests/test-command-registration.sh`, one of the 34 files no CI gate runs.
+  That is the concrete payoff #752 predicted.
+- All 34 unreachable files are triaged: 27 pass and are misplaced (including
+  `test-credential-isolation.sh`, which is clean); 1 found the bug above; 1
+  (`test-enforcement-pattern.sh`) is stale, demanding an attribution footer
+  that **0 of 57** skills carry; 2 are version-named and need reading; 1
+  baseline entry points at a deleted file.
+- Relocating those 27 is **not** a `git mv`. `tests/` root resolves
+  `PROJECT_ROOT` as `$SCRIPT_DIR/..` while `tests/unit/` uses
+  `$SCRIPT_DIR/../..`. Demonstrated: a moved test dies on
+  `tests/unit/helpers/test-framework.sh: No such file or directory`. A path
+  error that resolves rather than errors yields a green test asserting nothing,
+  so each move needs verifying by content.
+- Three consecutive releases filed identical E2E reports. #717 and #735 are
+  closed: their `B2c /octo:model-config` failure no longer reproduces, with no
+  root cause identified — treat a recurrence as nondeterministic. The surviving
+  `gemini:degraded` is correct behaviour, not a defect:
+  `check-providers.sh:30-32` names "gemini exhausted" as a case that should
+  report degraded. The stale assertion lives in an external harness. Tracked
+  in #772.
+- Merged this session with `main` green on every commit: #771 (`ec52a786`),
+  #769 (`49e036c0`), #774 (`1b078482`), #775 (`a595a264`), #773 (`be1534b2`).
+- `make ci-local` on the #762 branch passed 16 smoke, 201 unit, 7 integration.
+  `test-hud-smart-mode.sh` fails in one long-lived local checkout and passes in
+  a fresh worktree and in CI; treat it as environmental.
+- Auto-merge is disabled at the repository level and merge queues are
+  org-only, so under `strict: true` every merge invalidates every other PR.
+  Five sequential rebases were needed today. Enabling auto-merge is a one-line
+  repository setting and was left for the maintainer.
+- `make sync-check` passes with no script mode changes; no stashes; working
+  tree clean on `main`.
 
 ## Merge Queue
 
-- Merged: #656, #658, #664, #666, #667, #668, #669, #670, #672, #673, #674,
-  #675, #678, #681, #683, #684, release PR #677 (v9.54.2), release PR #680
-  (v9.55.0), release PR #682 (v9.55.1), release PR #685 (v9.56.0), and review
-  follow-up PR #686, and release PR #687 (v9.56.1).
-- No public or private pull requests or issues remained open at release.
-- Private E2E issue classification fix merged in
-  `nyldn/claude-octopus-dev#4`; the target VPS remains unreachable over SSH, so
-  the repository fix is complete but the live script has not been refreshed.
+- Merged this session: #771, #769, #774, #775, #773. Earlier in the same cycle:
+  #765, #767, and the nine-PR integration batch #764 (#740, #742, #743, #744,
+  #747, #757, #758, #759, #761), plus #763, #734, #760, #754, #739, #737, and
+  release PR #748 (v9.59.0).
+- Open: **#762 only**, an external contributor's draft. Do not convert someone
+  else's draft to ready; the author has been asked and told it missed v9.59.0.
+- Open issues, none of them available work without a decision or an unblock:
+  #768 and the structural half of #750 are blocked on #762; #772 needs a change
+  in an external E2E harness; #724 is a phase-handoff contract change needing
+  design; #701 is a product-scope call (recommendation given: fold into
+  `octopus-ui-ux-design` rather than add a 58th skill); #741 has a scoped plan
+  and a ratchet preventing growth.
 
 ## Next Action
 
-No delivery action remains. Future sessions should start from current `main`,
-read this file and the routing strategy, then use `bd ready` for new work. The
-private E2E repository fix is complete; retry the VPS refresh separately when
-the host is reachable.
+Merge #762 when its author clears the draft flag, then fix all three #768 items
+in one pass. Two decisions belong to the maintainer: enabling repository
+auto-merge, and the Beads migration below.
