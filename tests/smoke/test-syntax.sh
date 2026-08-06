@@ -86,10 +86,47 @@ test_executable_permissions() {
     fi
 }
 
+# One authoritative syntax sweep over the shipped scripts.
+#
+# Previously only orchestrate.sh and tests/helpers/*.sh were checked here, so
+# scripts/lib/*.sh and scripts/helpers/*.sh had no syntax gate in CI at all.
+# Seven unit suites had each grown their own `workflows.sh has valid bash
+# syntax` case to compensate, and the only comprehensive sweeps lived in the
+# tests/ root files that no CI gate runs (#741). That is the worst of both:
+# the same file checked seven times, and 95 others not checked at all.
+test_shipped_scripts_syntax() {
+    test_case "All shipped scripts have valid bash syntax"
+
+    local failed=0 checked=0 script
+    for script in "$PROJECT_ROOT"/scripts/lib/*.sh "$PROJECT_ROOT"/scripts/helpers/*.sh; do
+        [[ -f "$script" ]] || continue
+        checked=$((checked + 1))
+        if ! bash -n "$script" 2>/dev/null; then
+            echo "  Syntax error in: ${script#"$PROJECT_ROOT"/}"
+            failed=1
+        fi
+    done
+
+    # Guards a vacuous pass: if the globs stop matching, every file would be
+    # skipped and this would report success having checked nothing.
+    if [[ "$checked" -lt 50 ]]; then
+        test_fail "only ${checked} scripts matched — the glob is wrong, so this assertion proves nothing"
+        return 1
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "One or more shipped scripts have syntax errors"
+        return 1
+    fi
+}
+
 # Run tests
 test_orchestrate_syntax
 test_main_skill_syntax
 test_helper_scripts_syntax
+test_shipped_scripts_syntax
 test_executable_permissions
 
 test_summary

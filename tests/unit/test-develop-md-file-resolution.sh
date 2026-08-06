@@ -37,13 +37,6 @@ assert_lacks() {
     fi
 }
 
-test_case "workflows.sh has valid bash syntax"
-if bash -n "$WORKFLOWS" 2>/dev/null; then
-    test_pass
-else
-    test_fail "syntax error in workflows.sh"
-fi
-
 assert_lacks 'grep -oE .*\.\.md.*head -1|grep -oE .*\\.md.*head -1' \
     "plan reference scan avoids grep|head pipeline"
 

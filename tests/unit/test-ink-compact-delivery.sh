@@ -12,13 +12,6 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 
 test_suite "ink compact delivery"
 
-test_case "workflows.sh has valid bash syntax"
-if bash -n "$WORKFLOWS" 2>/dev/null; then
-    test_pass
-else
-    test_fail "syntax error in workflows.sh"
-fi
-
 # shellcheck source=/dev/null
 source "$WORKFLOWS"
 

@@ -15,13 +15,6 @@ test_suite "tangle subtask context preservation"
 # These tests exercise tangle dispatch/validation behavior, not contextual review.
 export OCTOPUS_TANGLE_CODE_REVIEW=false
 
-test_case "workflows.sh has valid bash syntax"
-if bash -n "$WORKFLOWS" 2>/dev/null; then
-    test_pass
-else
-    test_fail "syntax error in workflows.sh"
-fi
-
 # shellcheck source=/dev/null
 source "$WORKFLOWS"
 

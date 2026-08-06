@@ -120,9 +120,11 @@ for arg in "$@"; do
         --integration) CATEGORIES+=("integration") ;;
         --root)        CATEGORIES+=("root") ;;
         --live)        CATEGORIES+=("live") ;;
-        --regression)  CATEGORIES+=("root") ;;  # backward compat
-        --e2e)         CATEGORIES+=("integration") ;;  # backward compat
-        --performance) CATEGORIES+=("live") ;;  # backward compat
+        # Removed compat aliases: --e2e ran "integration" and --performance ran
+        # "live", so each category was reachable under two names. --e2e made
+        # `make test-all` run the integration suites twice, and --performance
+        # dispatched real provider sessions without the warning `test-live`
+        # prints. --regression ran "root", which is now reachable as --root.
         --all)         CATEGORIES=("smoke" "unit" "integration" "root") ;;
         --everything)  CATEGORIES=("smoke" "unit" "integration" "root" "live") ;;
         --fail-fast)   FAIL_FAST=true ;;
