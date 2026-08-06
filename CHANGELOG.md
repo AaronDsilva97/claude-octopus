@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [9.60.0] - 2026-08-06
+
+### Changed
+
+- **Provider identity and capability contracts now come from one registry.** `scripts/lib/provider-registry.sh` is the single declaration of provider IDs and per-surface capability sets, and `OCTO_MODEL_CONFIG_PROVIDERS` is derived from it rather than hand-maintained. Duplicated whitelists were a standing hazard: a provider could be accepted on one surface and rejected on another, which is how the Command Code dispatch rejection (#696) happened, and how grok and claude-sdk broke below. Unsafe first-hyphen provider parsing is replaced with canonical ID resolution, and a failed registry load now fails loudly instead of silently leaving an empty whitelist that rejects every provider with no diagnostic. Three files still carry independent lists (`intelligence.sh`, `provider-policy.sh`, `permissions-manager.sh`); consolidating those is follow-up work. (#762, closes #768)
+- **Duplicate test targets removed.** `make test-e2e` ran the integration suites, so `make test-all` executed them twice and the help text advertised a "15-30min E2E run" that was really the ~1min integration run. `make test-performance` ran the `live` category — the same suites as `test-live`, but without its "real API calls" warning, so it billed provider sessions silently. `make test-regression` ran the `root` category and is renamed `test-root` to match. (#776)
+
+### Fixed
+
+- **Grok and claude-sdk dispatch was rejected before the CLI ever ran.** `grok-exec.sh` and `claude-sdk-exec.sh` were never added to `validate_agent_command`'s shim allowlist, so every dispatch to either provider aborted with "Invalid agent command". Reproduced on `main` before the fix: both shims present, both rejected, while `agy-exec.sh` and `commandcode-exec.sh` passed. The env-prefixed form is validated by requiring exactly three tokens (`env`, `VAR=`, shim) rather than a prefix/suffix pair, so `env OCTOPUS_GROK_MODEL=x echo pwned <shim>` is rejected. Third occurrence of this pattern after #697 and #705. (#769)
+- **`/octo:whats-new` shipped unregistered.** The command file has had valid frontmatter since 2026-07-30 but was absent from `plugin.json` — 51 command files on disk, 50 registered. Found by `tests/test-command-registration.sh`, one of the 34 suites no CI gate runs (#741). (#775)
+- **Codex printed three compatibility warnings on every fresh process.** Both SessionEnd hooks declared timeouts above Codex's 3s cap, which it clamps and warns about. Measurement did not support the earlier concern that lowering them would truncate real work: `session-end.sh` runs 142 ms nominally and 360 ms against a 2.7 MB session file with 6000 errors, 3000 phases and 300 memory dirs; `workflow-verification.sh` runs 20 ms. Codex clamped to 3s regardless, so the declared 15s only ever bought a warning. (closes #766)
+- **A macOS timing flake could block a release, and reported itself twice.** The retry-wait case raced a fixed poll budget against the waiter's own detection cycle; it now blocks on the waiter's exit under a watchdog. Separately, `integration-heavy` declares `needs: [unit-required]`, so a failed unit gate skipped it and the `integration` gate then failed on a *skip* — one flaky test produced two red required checks, the second misattributing a skip as an integration failure. (#771, refs #770)
+- **Syntax checking was both duplicated and missing.** Seven unit suites each asserted `workflows.sh has valid bash syntax` while `scripts/lib` (77 files) and `scripts/helpers` (19) had no CI syntax gate at all — their only comprehensive sweeps lived in the `tests/` root files no gate runs. Replaced with one sweep over all 96 in the smoke suite, with a guard against a vacuous pass. (#776)
+- **`tests/run-all.sh` silently discarded its extra arguments.** It never forwarded `"$@"`, so `--list` was dropped and asking to *list* a category ran it instead. For the `live` category that meant dispatching real `claude -p` sessions to answer a question about which files exist. (#776)
+
+### Documentation
+
+- CLAUDE.md points at `scripts/helpers/check-providers.sh` for provider detection instead of restating how each provider is detected, which had already drifted. (#773)
+
 ## [9.59.0] - 2026-08-04
 
 ### Added
