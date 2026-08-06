@@ -117,8 +117,11 @@ fi
 
 # Guards the derivation itself: if someone points the Makefile at a category the
 # runner does not implement, reachability would silently compute as empty.
-# Follows compat aliases: run-all-tests.sh:124 maps `--e2e` to the integration
-# category, so `e2e` is implemented even though no `e2e)` arm exists.
+# A category counts as implemented if the runner has either a bare `<cat>)` arm
+# or a `--<cat>) CATEGORIES` flag arm; the flag form is what the real categories
+# use. This previously also absorbed the compat aliases (`--e2e` resolving to
+# integration, `--performance` to live), which have since been removed because
+# each made a category reachable under a second name.
 test_case "every category the Makefile invokes resolves to a real runner category"
 bad=""
 while IFS= read -r cat; do
