@@ -40,6 +40,23 @@ ci_categories() {
     done < <(grep -ohE 'make test-[a-z0-9]+' "$WORKFLOW" 2>/dev/null | awk '{print $2}' | sort -u) | sort -u
 }
 
+# Every `make test-<x>` the workflow invokes must actually exist as a Makefile
+# target. ci_categories() silently drops a target it cannot resolve, so a
+# workflow step calling a deleted target produced an empty category here and no
+# complaint — while CI died with `No rule to make target`.
+#
+# That is not hypothetical: #776 removed `test-e2e` (it ran the integration
+# suites under a second name), the workflow's `e2e` job still called it, and the
+# job's `if:` limited it to main pushes — so every PR skipped it, PR CI was
+# green, and main went red immediately after the merge.
+workflow_make_targets() {
+    grep -ohE 'make test-[a-z0-9-]+' "$WORKFLOW" 2>/dev/null | awk '{print $2}' | sort -u
+}
+
+makefile_has_target() {
+    grep -qE "^${1}:" "$MAKEFILE"
+}
+
 # Mirror discover_tests(): find <dir> -maxdepth 1 -name 'test-*.sh'
 reachable_files() {
     local cat
@@ -134,6 +151,28 @@ if [[ -z "$bad" ]]; then
     test_pass
 else
     test_fail "Makefile invokes categories the runner does not implement:$bad"
+fi
+
+test_case "every 'make test-*' the workflow invokes exists as a Makefile target"
+missing_targets=""
+while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    makefile_has_target "$target" || missing_targets="$missing_targets $target"
+done < <(workflow_make_targets)
+if [[ -z "$missing_targets" ]]; then
+    test_pass
+else
+    test_fail "workflow calls make target(s) that do not exist:${missing_targets} — CI will die with 'No rule to make target'. Remove the step or restore the target."
+fi
+
+# Paired with the above: a target that exists but resolves to no runner
+# category is equally broken, just later in the pipeline.
+test_case "the workflow invokes at least one make target (guards a silent empty set)"
+n_targets="$(workflow_make_targets | grep -c . || true)"
+if [[ "${n_targets:-0}" -ge 3 ]]; then
+    test_pass
+else
+    test_fail "found only ${n_targets} 'make test-*' invocations in the workflow — the grep or the workflow changed, so the assertion above would be vacuous"
 fi
 
 test_case "at least one test is actually discovered (guards a silent empty set)"
