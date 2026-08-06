@@ -216,11 +216,12 @@ test_provider_health_gemini_google_key() {
 }
 
 test_provider_all_includes_gemini() {
-    test_case "providers: check_all_providers includes gemini"
-    if grep 'for provider in' "$PROVIDERS" | grep -q 'gemini'; then
+    test_case "providers: health registry includes gemini"
+    source "$PROJECT_ROOT/scripts/lib/provider-registry.sh"
+    if octo_provider_has_capability gemini health; then
         test_pass
     else
-        test_fail "check_all_providers loop should include gemini"
+        test_fail "gemini should have the health capability"
     fi
 }
 
@@ -262,11 +263,22 @@ test_model_resolver_gemini_model_name() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 test_circuit_breaker_includes_gemini() {
-    test_case "circuit breaker: iterates over gemini"
-    if grep 'for provider in' "$PROVIDER_ROUTER" | grep -q 'gemini'; then
+    test_case "circuit breaker: reports Gemini at runtime"
+    local tmp_home old_home status
+    tmp_home="$TEST_TMP_DIR/gemini-circuit-home"
+    mkdir -p "$tmp_home"
+    old_home="$HOME"
+    HOME="$tmp_home"
+    source "$PROVIDER_ROUTER"
+    mkdir -p "$_PROVIDER_STATE_DIR"
+    printf '%s
+' "$(( $(date +%s) + 60 ))" > "$_PROVIDER_STATE_DIR/gemini.cooldown"
+    status=$(get_circuit_breaker_status)
+    HOME="$old_home"
+    if [[ "$status" == *"gemini: OPEN"* || "$status" == *"gemini: half-open"* ]]; then
         test_pass
     else
-        test_fail "circuit breaker loop should include gemini"
+        test_fail "runtime circuit breaker omitted Gemini: $status"
     fi
 }
 
@@ -320,11 +332,18 @@ test_embrace_gemini_in_strategy() {
 
 test_detect_providers_gemini() {
     test_case "detect_providers: detects Gemini CLI"
-    if grep -A20 'detect_providers()' "$ALL_SRC" | grep -q 'gemini'; then
-        test_pass
-    else
-        test_fail "detect_providers should detect gemini"
+    local stub_dir out
+    stub_dir=$(mktemp -d)
+    printf '#!/usr/bin/env bash
+exit 0
+' > "$stub_dir/gemini"
+    chmod +x "$stub_dir/gemini"
+    local detected=false out=""
+    if out=$(env "HOME=$stub_dir" "PATH=$stub_dir:$PATH" "OCTO_ALLOWED_PROVIDERS=gemini" "GEMINI_API_KEY=test" bash -c 'source "'$PROJECT_ROOT'/scripts/lib/providers.sh"; detect_providers'); then
+        [[ "$out" == *"gemini:"* ]] && detected=true
     fi
+    rm -rf "$stub_dir"
+    if [[ "$detected" == true ]]; then test_pass; else test_fail "detect_providers should detect gemini: $out"; fi
 }
 
 test_preflight_gemini_status() {

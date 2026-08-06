@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
+source "$PROJECT_ROOT/scripts/lib/provider-registry.sh"
+source "$PROJECT_ROOT/scripts/lib/provider-allowlist.sh"
+source "$PROJECT_ROOT/scripts/lib/council.sh"
+
+test_suite "Provider registry parity and collision safety"
+
+all_ids=$(octo_provider_ids)
+
+test_case "every canonical provider round-trips exactly"
+for id in $all_ids; do
+    [[ "$(octo_provider_canonical "$id")" == "$id" ]] || { test_fail "$id canonicalized incorrectly"; exit 0; }
+done
+test_pass
+
+test_case "every alias resolves to its declared provider without collisions"
+while IFS='|' read -r id aliases command org caps; do
+    old_ifs="$IFS"; IFS=','
+    for alias in $aliases; do
+        IFS="$old_ifs"
+        [[ -n "$alias" ]] || { IFS=','; continue; }
+        probe="$alias"
+        case "$alias" in *'*') probe="${alias%\*}probe" ;; esac
+        actual=$(octo_provider_canonical "$probe" || true)
+        [[ "$actual" == "$id" ]] || { test_fail "alias $probe expected $id, got $actual"; exit 0; }
+        IFS=','
+    done
+    IFS="$old_ifs"
+done <<EOF
+$(octo_provider_registry_rows)
+EOF
+test_pass
+
+test_case "all providers expose command organization and capabilities metadata"
+for id in $all_ids; do
+    [[ -n "$(octo_provider_command "$id")" ]] || { test_fail "$id missing command"; exit 0; }
+    [[ -n "$(octo_provider_org "$id")" ]] || { test_fail "$id missing organization"; exit 0; }
+    [[ -n "$(octo_provider_field "$id" capabilities)" ]] || { test_fail "$id missing capabilities"; exit 0; }
+done
+test_pass
+
+test_case "model-config consumers exactly match registry capability"
+source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+expected=$(octo_provider_ids model-config)
+[[ "$OCTO_MODEL_CONFIG_PROVIDERS" == "$expected" ]] || { test_fail "provider-routing model list drift"; exit 0; }
+source "$PROJECT_ROOT/scripts/helpers/octo-model-config.sh"
+[[ "$KNOWN_PROVIDERS" == "$expected" ]] || { test_fail "model-config helper list drift"; exit 0; }
+test_pass
+
+test_case "Council accepts every council-capable provider and rejects the rest"
+failed=false
+for id in $all_ids; do
+    if octo_provider_has_capability "$id" council; then
+        council_validate_provider_list "$id" >/dev/null 2>&1 || { test_fail "Council rejected $id"; exit 0; }
+    else
+        if council_validate_provider_list "$id" >/dev/null 2>&1; then test_fail "Council accepted unsupported $id"; failed=true; break; fi
+    fi
+done
+[[ "$failed" == true ]] || test_pass
+
+test_case "allowlist accepts every provider ID and declared alias"
+had_allowlist=false; previous_allowlist=""; failed=false
+if [[ ${OCTO_ALLOWED_PROVIDERS+x} ]]; then had_allowlist=true; previous_allowlist="$OCTO_ALLOWED_PROVIDERS"; fi
+for id in $all_ids; do
+    OCTO_ALLOWED_PROVIDERS="$id"
+    if ! octo_provider_allowed "$id"; then test_fail "allowlist rejected $id"; failed=true; break; fi
+done
+if [[ "$failed" == false ]]; then
+    while IFS='|' read -r id aliases command org caps; do
+        old_ifs="$IFS"; IFS=','
+        for alias in $aliases; do
+            IFS="$old_ifs"; [[ -n "$alias" ]] || { IFS=','; continue; }
+            probe="$alias"; case "$alias" in *'*') probe="${alias%\*}probe" ;; esac
+            OCTO_ALLOWED_PROVIDERS="$probe"
+            if ! octo_provider_allowed "$id"; then test_fail "allowlist alias $probe rejected canonical $id"; failed=true; break 2; fi
+            IFS=','
+        done
+        IFS="$old_ifs"
+    done <<EOF
+$(octo_provider_registry_rows)
+EOF
+fi
+if [[ "$had_allowlist" == true ]]; then OCTO_ALLOWED_PROVIDERS="$previous_allowlist"; else unset OCTO_ALLOWED_PROVIDERS; fi
+[[ "$failed" == true ]] || test_pass
+
+test_case "compound provider IDs are not truncated by router or bridge"
+if grep -q 'split("-")\[0\]' "$PROJECT_ROOT/scripts/provider-router.sh" "$PROJECT_ROOT/scripts/agent-teams-bridge.sh" || \
+   grep -q '\${candidate%%-\*}' "$PROJECT_ROOT/scripts/provider-router.sh"; then
+    test_fail "unsafe first-hyphen provider parsing remains"
+else
+    test_pass
+fi
+
+test_case "Council default policy is configurable without changing registry support"
+defaults=$(bash -c 'source "'$PROJECT_ROOT'/scripts/lib/council.sh"; printf "%s" "$COUNCIL_DEFAULT_PROVIDERS"')
+override=$(env "OCTOPUS_COUNCIL_DEFAULT_PROVIDERS=commandcode,claude" bash -c 'source "'$PROJECT_ROOT'/scripts/lib/council.sh"; printf "%s" "$COUNCIL_DEFAULT_PROVIDERS"')
+if [[ "$defaults" == "claude,codex,agy,gemini,qwen,opencode,openrouter,openai-compatible,openai-tools" && "$override" == "commandcode,claude" ]]; then
+    test_pass
+else
+    test_fail "Council default/override mismatch"
+fi
+
+
+test_case "shared provider policy removes duplicated ordered defaults"
+source "$PROJECT_ROOT/scripts/lib/provider-policy.sh"
+if grep -q 'octo_council_default_providers' "$PROJECT_ROOT/scripts/lib/council.sh" && \
+   grep -q 'octo_council_default_providers' "$PROJECT_ROOT/scripts/lib/usage-help.sh" && \
+   grep -q 'octo_smoke_routing_providers' "$PROJECT_ROOT/scripts/lib/smoke.sh"; then
+    for id in $(printf '%s' "$OCTOPUS_COUNCIL_DEFAULT_PROVIDERS_DEFAULT" | tr ',' ' ') $OCTOPUS_SMOKE_ROUTING_PROVIDERS_DEFAULT; do
+        octo_provider_valid "$id" || { test_fail "policy references unknown provider $id"; exit 0; }
+    done
+    test_pass
+else
+    test_fail "provider policy still duplicated or hardcoded"
+fi
+
+test_summary

@@ -96,12 +96,13 @@ else
     test_fail "dispatch.sh does not reference claude-sdk-exec.sh"
 fi
 
-test_case "provider routing whitelists claude-sdk"
-count=$(grep -c 'claude-sdk' "$PROJECT_ROOT/scripts/lib/provider-routing.sh" || true)
-if (( count >= 2 )); then
+test_case "provider registry exposes claude-sdk for model configuration"
+source "$PROJECT_ROOT/scripts/lib/provider-registry.sh"
+source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+if octo_provider_has_capability claude-sdk model-config && octo_model_config_provider_valid claude-sdk; then
     test_pass
 else
-    test_fail "expected claude-sdk in provider-routing.sh whitelists, found $count references"
+    test_fail "claude-sdk must be accepted through the provider registry"
 fi
 
 test_case "provider detection reports claude-sdk when key is set"

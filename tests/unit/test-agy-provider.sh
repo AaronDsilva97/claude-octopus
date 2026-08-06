@@ -648,17 +648,16 @@ test_agy_status_visibility() {
 test_agy_fleet_scoring() {
     test_case "smoke fleet scoring can select agy"
 
-    local scorer_block select_block
+    source "$PROJECT_ROOT/scripts/lib/provider-policy.sh"
+    local scorer_block select_block routing_providers
     scorer_block="$(sed -n '/score_provider()/,/^}/p' "$PROJECT_ROOT/scripts/lib/smoke.sh")"
     select_block="$(sed -n '/select_provider()/,/^}/p' "$PROJECT_ROOT/scripts/lib/smoke.sh")"
+    routing_providers="$(octo_smoke_routing_providers)"
 
-    if [[ "$scorer_block" == *"agy)"* ]] && \
-       [[ "$scorer_block" == *"PROVIDER_AGY_INSTALLED"* ]] && \
-       [[ "$select_block" == *"codex gemini agy claude opencode openrouter"* ]] && \
-       [[ "$select_block" == *'echo "agy"'* ]]; then
+    if [[ "$scorer_block" == *"agy)"* ]] &&        [[ "$scorer_block" == *"PROVIDER_AGY_INSTALLED"* ]] &&        [[ " $routing_providers " == *" agy "* ]] &&        [[ "$select_block" == *"octo_smoke_routing_providers"* ]] &&        [[ "$select_block" == *'echo "agy"'* ]]; then
         test_pass
     else
-        test_fail "score_provider/select_provider should include agy"
+        test_fail "score_provider/select_provider should include agy through shared smoke policy"
     fi
 }
 
@@ -701,10 +700,20 @@ test_agy_fleet_builder() {
 test_agy_allowlist_alias() {
     test_case "provider allowlist accepts agy and antigravity"
 
-    if grep -q 'agy|antigravity' "$PROJECT_ROOT/scripts/lib/provider-allowlist.sh"; then
+    source "$PROJECT_ROOT/scripts/lib/provider-allowlist.sh"
+    local agy_ok=false alias_ok=false
+    local had_allowlist=false previous_allowlist=""
+    if [[ ${OCTO_ALLOWED_PROVIDERS+x} ]]; then had_allowlist=true; previous_allowlist="$OCTO_ALLOWED_PROVIDERS"; fi
+    OCTO_ALLOWED_PROVIDERS=agy
+    octo_provider_allowed agy && agy_ok=true
+    OCTO_ALLOWED_PROVIDERS=antigravity
+    octo_provider_allowed agy && alias_ok=true
+    if [[ "$had_allowlist" == true ]]; then OCTO_ALLOWED_PROVIDERS="$previous_allowlist"; else unset OCTO_ALLOWED_PROVIDERS; fi
+
+    if [[ "$agy_ok" == true && "$alias_ok" == true ]]; then
         test_pass
     else
-        test_fail "provider allowlist should accept agy and antigravity"
+        test_fail "provider allowlist should accept agy and antigravity behaviorally"
     fi
 }
 

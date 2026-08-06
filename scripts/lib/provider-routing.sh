@@ -11,13 +11,16 @@
 #   build_provider_context
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_provider_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_provider_registry_dir}/provider-registry.sh" || { echo "provider-routing: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
+
 # Providers accepted by set_provider_model / reset_provider_model.
 #
 # Single source of truth. This used to be four hand-maintained copies (two
 # matchers plus two user-facing messages) and they had drifted: the reset error
 # message omitted openai-compatible and openai-tools even though the matcher
 # accepted them. Add a provider here and every site follows.
-OCTO_MODEL_CONFIG_PROVIDERS="codex gemini agy claude claude-sdk perplexity opencode openrouter atlascloud openai-compatible openai-tools openai-compatible-agent cursor-agent commandcode"
+OCTO_MODEL_CONFIG_PROVIDERS="$(octo_provider_ids model-config)"
 
 octo_model_config_provider_valid() {
     case " ${OCTO_MODEL_CONFIG_PROVIDERS} " in

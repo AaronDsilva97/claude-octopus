@@ -2,11 +2,25 @@
 # lib/preflight.sh — Preflight checks and provider detection
 # Extracted from orchestrate.sh (v9.7.x decomposition)
 # shellcheck source=/dev/null
+_preflight_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_preflight_registry_dir}/provider-registry.sh" 2>/dev/null || true
 
 if ! declare -f _is_cursor_agent_binary >/dev/null 2>&1; then
     _preflight_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     source "${_preflight_lib_dir}/cursor-agent.sh" 2>/dev/null || true
 fi
+
+_preflight_commandcode_auth_mode() {
+    if declare -f _commandcode_auth_mode >/dev/null 2>&1; then
+        _commandcode_auth_mode
+        return $?
+    fi
+    if [[ -n "${COMMAND_CODE_API_KEY:-}" ]]; then printf '%s\n' "api-key"; return 0; fi
+    command -v command-code >/dev/null 2>&1 || { printf '%s\n' "missing"; return 1; }
+    command-code status --json >/dev/null 2>&1 && { printf '%s\n' "cli"; return 0; }
+    printf '%s\n' "none"
+    return 1
+}
 
 # Command: detect-providers
 # Output parseable provider status for Claude Code skill
@@ -67,6 +81,21 @@ cmd_detect_providers() {
     else
         echo "CODEX_STATUS=missing"
         echo "CODEX_AUTH=none"
+    fi
+    echo ""
+
+    # Check Command Code CLI
+    local commandcode_auth
+    commandcode_auth="$(_preflight_commandcode_auth_mode 2>/dev/null || true)"
+    if [[ "$commandcode_auth" == "api-key" || "$commandcode_auth" == "cli" ]]; then
+        echo "COMMANDCODE_STATUS=ok"
+        echo "COMMANDCODE_AUTH=$commandcode_auth"
+    elif command -v command-code >/dev/null 2>&1; then
+        echo "COMMANDCODE_STATUS=unauthenticated"
+        echo "COMMANDCODE_AUTH=none"
+    else
+        echo "COMMANDCODE_STATUS=missing"
+        echo "COMMANDCODE_AUTH=none"
     fi
     echo ""
 
@@ -206,6 +235,12 @@ cmd_detect_providers() {
     mkdir -p "$WORKSPACE_DIR"
     local codex_status=$(command -v codex &>/dev/null && echo "ok" || echo "missing")
     local codex_auth=$([[ -f "$HOME/.codex/auth.json" ]] && echo "oauth" || [[ -n "${OPENAI_API_KEY:-}" ]] && echo "api-key" || echo "none")
+    local commandcode_auth commandcode_status
+    commandcode_auth="$(_preflight_commandcode_auth_mode 2>/dev/null || true)"
+    if [[ "$commandcode_auth" == "api-key" || "$commandcode_auth" == "cli" ]]; then commandcode_status="ok"
+    elif command -v command-code >/dev/null 2>&1; then commandcode_status="unauthenticated"
+    else commandcode_status="missing"; commandcode_auth="none"
+    fi
     local gemini_status=$(command -v gemini &>/dev/null && echo "ok" || echo "missing")
     local gemini_auth=$([[ -f "$HOME/.gemini/oauth_creds.json" ]] && echo "oauth" || [[ -n "${GEMINI_API_KEY:-}" ]] && echo "api-key" || echo "none")
     local agy_status=$(command -v agy &>/dev/null && echo "ok" || echo "not-installed")
@@ -233,6 +268,10 @@ cmd_detect_providers() {
 # Codex Status
 CODEX_STATUS=$(printf '%q' "$codex_status")
 CODEX_AUTH=$(printf '%q' "$codex_auth")
+
+# Command Code Status
+COMMANDCODE_STATUS=$(printf '%q' "$commandcode_status")
+COMMANDCODE_AUTH=$(printf '%q' "$commandcode_auth")
 
 # Gemini Status
 GEMINI_STATUS=$(printf '%q' "$gemini_status")
@@ -278,6 +317,14 @@ EOF
         echo "  ⚠ Codex: Installed but not authenticated (run: codex login  OR  export OPENAI_API_KEY=\"sk-...\")"
     else
         echo "  ✗ Codex: Not installed (run: npm install -g @openai/codex)"
+    fi
+
+    if [[ "$commandcode_status" == "ok" ]]; then
+        echo "  ✓ Command Code: Installed and authenticated (${commandcode_auth})"
+    elif [[ "$commandcode_status" == "unauthenticated" ]]; then
+        echo "  ⚠ Command Code: Installed but unauthenticated"
+    else
+        echo "  ○ Command Code: Not installed (optional)"
     fi
 
     if [[ "$gemini_status" == "ok" && "$gemini_auth" != "none" ]]; then

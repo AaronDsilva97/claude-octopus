@@ -13,7 +13,11 @@ COUNCIL_IMPLEMENT=""
 COUNCIL_WORKTREE=""
 COUNCIL_BENCHMARK=""
 COUNCIL_PROVIDERS=""
-COUNCIL_DEFAULT_PROVIDERS="claude,codex,agy,gemini,qwen,opencode,openrouter,openai-compatible,openai-tools"
+_council_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_council_registry_dir}/provider-registry.sh" 2>/dev/null || true
+source "${_council_registry_dir}/provider-policy.sh" 2>/dev/null || true
+COUNCIL_PROVIDER_POLICY_VALID="true"
+COUNCIL_DEFAULT_PROVIDERS="$(octo_council_default_providers)" || COUNCIL_PROVIDER_POLICY_VALID="false"
 COUNCIL_MAX_COST=""
 COUNCIL_SEAT_TIMEOUT=""
 COUNCIL_DRY_RUN=""
@@ -181,7 +185,11 @@ council_validate_choice() {
 
 council_validate_provider_list() {
     local providers="$1"
-    local allowed="$COUNCIL_DEFAULT_PROVIDERS"
+
+    if [[ "$COUNCIL_PROVIDER_POLICY_VALID" != "true" ]]; then
+        council_error_usage "invalid OCTOPUS_COUNCIL_DEFAULT_PROVIDERS policy"
+        return 2
+    fi
 
     if [[ "$providers" == "auto" ]]; then
         return 0
@@ -192,7 +200,7 @@ council_validate_provider_list() {
         return 2
     fi
 
-    local provider
+    local provider canonical
     IFS=',' read -r -a provider_list <<< "$providers"
     for provider in "${provider_list[@]}"; do
         provider="${provider// /}"
@@ -200,13 +208,11 @@ council_validate_provider_list() {
             council_error_usage "--providers contains an empty provider"
             return 2
         fi
-        case ",$allowed," in
-            *,"$provider",*) ;;
-            *)
-                council_error_usage "unknown provider '$provider'. Allowed providers: ${allowed//,/|}"
-                return 2
-                ;;
-        esac
+        canonical="$(octo_provider_canonical "$provider" 2>/dev/null || true)"
+        if [[ -z "$canonical" ]] || ! octo_provider_has_capability "$canonical" council; then
+            council_error_usage "unknown provider '$provider'. Allowed providers: $(octo_provider_ids council | tr ' ' '|')"
+            return 2
+        fi
     done
 }
 
@@ -520,28 +526,11 @@ council_check_cost_cap() {
 }
 
 council_provider_command() {
-    case "$1" in
-        claude) echo "claude" ;;
-        codex) echo "codex" ;;
-        gemini) echo "gemini" ;;
-        agy) echo "agy" ;;
-        opencode) echo "opencode" ;;
-        openrouter) echo "openrouter" ;;
-        openai-compatible|openai-tools|openai-compatible-agent) echo "openai-compatible" ;;
-        *) echo "$1" ;;
-    esac
+    octo_provider_command "$1" 2>/dev/null || echo "$1"
 }
 
 council_provider_org() {
-    case "$1" in
-        claude) echo "anthropic" ;;
-        codex) echo "openai" ;;
-        gemini|agy) echo "google" ;;
-        opencode) echo "opencode" ;;
-        openrouter) echo "openrouter" ;;
-        openai-compatible|openai-tools|openai-compatible-agent) echo "openai-compatible" ;;
-        *) echo "$1" ;;
-    esac
+    octo_provider_org "$1" 2>/dev/null || echo "$1"
 }
 
 council_agent_config_value() {
@@ -568,15 +557,7 @@ council_agent_config_value() {
 }
 
 council_cli_to_provider() {
-    case "$1" in
-        claude*|opus*|sonnet*) echo "claude" ;;
-        gemini*) echo "gemini" ;;
-        agy*) echo "agy" ;;
-        opencode*) echo "opencode" ;;
-        openrouter*) echo "openrouter" ;;
-        codex*|gpt*) echo "codex" ;;
-        *) echo "$1" ;;
-    esac
+    octo_provider_canonical "$1" 2>/dev/null || echo "$1"
 }
 
 council_persona_default_provider() {

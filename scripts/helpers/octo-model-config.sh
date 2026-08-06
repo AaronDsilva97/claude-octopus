@@ -6,7 +6,8 @@ set -eo pipefail
 
 CONFIG_FILE="${HOME}/.claude-octopus/config/providers.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" || { echo "ERROR: failed to load provider-allowlist.sh" >&2; exit 1; }
+source "${SCRIPT_DIR}/../lib/provider-registry.sh" || { echo "ERROR: failed to load provider-registry.sh" >&2; exit 1; }
 source "${SCRIPT_DIR}/../lib/model-cache-path.sh" 2>/dev/null || true
 # Must match the path lib/model-resolver.sh writes; this was hardcoded to /tmp
 # while the resolver honoured $TMPDIR, so `clear_cache` was a no-op on macOS.
@@ -17,7 +18,7 @@ else
 fi
 
 # Known providers and phases for validation
-KNOWN_PROVIDERS="codex gemini agy grok claude perplexity openrouter opencode copilot ollama qwen cursor-agent vibe"
+KNOWN_PROVIDERS="$(octo_provider_ids model-config)"
 KNOWN_PHASES="discover define develop deliver quick debate review security research"
 
 # Colors
@@ -170,7 +171,7 @@ canonical_provider() {
         google) echo "gemini" ;;
         cursor|xai) echo "cursor-agent" ;;
         local) echo "ollama" ;;
-        *) echo "$provider" ;;
+        *) octo_provider_canonical "$provider" 2>/dev/null || echo "$provider" ;;
     esac
 }
 

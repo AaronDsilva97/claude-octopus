@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+_provider_allowlist_registry_dir="${BASH_SOURCE[0]%/*}"
+[[ "$_provider_allowlist_registry_dir" == "${BASH_SOURCE[0]}" ]] && _provider_allowlist_registry_dir="."
+_provider_allowlist_registry_dir="$(cd "$_provider_allowlist_registry_dir" && pwd)"
+source "${_provider_allowlist_registry_dir}/provider-registry.sh" || { echo "provider-allowlist: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
 # Sourced by orchestrator scripts. Deliberately sets NO shell options: `set -e`
 # and `set -o pipefail` in a sourced file leak into the caller's shell and stay
 # there after this file returns. Callers such as lib/providers.sh document
@@ -86,9 +90,10 @@ octo_provider_allowlist_value() {
 }
 
 octo_provider_allowed() {
-    local provider
+    local provider requested_canonical
     provider="$(octo_normalize_provider_name "${1:-}")"
     [[ -n "$provider" ]] || return 1
+    requested_canonical="$(octo_provider_canonical "$provider" 2>/dev/null || printf '%s' "$provider")"
 
     local allowed
     allowed="$(octo_provider_allowlist_value)"
@@ -96,65 +101,24 @@ octo_provider_allowed() {
         return 0
     fi
 
-    local token normalized
+    local token normalized token_canonical
     # shellcheck disable=SC2086 # Intentional word splitting: space separated allowlist.
     for token in ${allowed//,/ }; do
         normalized="$(octo_normalize_provider_name "$token")"
         [[ -n "$normalized" ]] || continue
 
-        [[ "$provider" == "$normalized" ]] && return 0
+        token_canonical="$(octo_provider_canonical "$normalized" 2>/dev/null || printf '%s' "$normalized")"
+        [[ "$requested_canonical" == "$token_canonical" ]] && return 0
 
+        # Ambiguous organization/group aliases remain policy rather than
+        # provider identity. `google` intentionally authorizes both Gemini and
+        # Antigravity; `xai` retains the historical Cursor/Grok grouping.
         case "$normalized" in
-            claude|anthropic|sonnet)
-                case "$provider" in
-                    claude|claude-sonnet|claude-opus|sonnet) return 0 ;;
-                esac
-                ;;
-            codex|openai)
-                case "$provider" in
-                    codex|codex-*) return 0 ;;
-                esac
-                ;;
-            gemini)
-                case "$provider" in
-                    gemini|gemini-*) return 0 ;;
-                esac
-                ;;
-            # "google" is the Google-seat alias. Post Gemini-CLI sunset (#524) the
-            # seat is agy (Antigravity), so a legacy `google` allowlist must keep
-            # authorizing agy during/after migration — not just the Gemini CLI.
             google)
-                case "$provider" in
-                    gemini|gemini-*|agy|agy-*|antigravity) return 0 ;;
-                esac
-                ;;
-            agy|antigravity)
-                case "$provider" in
-                    agy|agy-*|antigravity) return 0 ;;
-                esac
-                ;;
-            grok|grok-*)
-                case "$provider" in
-                    grok|grok-*) return 0 ;;
-                esac
-                ;;
-            atlas|atlas-cloud|atlascloud)
-                case "$provider" in
-                    atlascloud|atlascloud-agent) return 0 ;;
-                esac
-                ;;
-            # Keep `xai` OUT of this arm: it would shadow the dedicated `xai)`
-            # arm below and silently deny grok seats (shellcheck SC2221/SC2222).
-            cursor|cursor-agent)
-                [[ "$provider" == "cursor-agent" ]] && return 0
+                case "$requested_canonical" in gemini|agy) return 0 ;; esac
                 ;;
             xai)
-                case "$provider" in
-                    cursor-agent|grok|grok-*) return 0 ;;
-                esac
-                ;;
-            local)
-                [[ "$provider" == "ollama" ]] && return 0
+                case "$requested_canonical" in cursor-agent|grok) return 0 ;; esac
                 ;;
         esac
     done

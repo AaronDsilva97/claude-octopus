@@ -19,10 +19,10 @@ USAGE="$PROJECT_ROOT/scripts/lib/usage-help.sh"
 test_qwen_in_auto_list() {
     test_case "council auto provider list includes qwen"
 
-    if grep -Eq 'claude,codex,.*qwen,.*opencode,openrouter' "$COUNCIL"; then
+    if ( source "$COUNCIL" && [[ ",$COUNCIL_DEFAULT_PROVIDERS," == *",qwen,"* ]] ); then
         test_pass
     else
-        test_fail "council.sh auto provider list should include qwen"
+        test_fail "Council default provider policy should include qwen"
     fi
 }
 
@@ -62,10 +62,12 @@ test_qwen_persona_seat() {
 test_qwen_usage_doc() {
     test_case "usage help lists qwen as a --providers option"
 
-    if grep -Eq 'claude,codex,.*qwen,.*opencode,openrouter' "$USAGE"; then
+    local rendered
+    rendered=$(bash -c 'source "'$USAGE'"; usage_command council' 2>/dev/null || true)
+    if [[ "$rendered" == *"qwen"* ]]; then
         test_pass
     else
-        test_fail "usage-help.sh should document qwen in the --providers list"
+        test_fail "rendered Council usage should document qwen"
     fi
 }
 

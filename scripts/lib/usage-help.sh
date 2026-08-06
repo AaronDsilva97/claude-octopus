@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Usage help functions extracted from orchestrate.sh
 # Part of the lib/ decomposition wave
+_usage_help_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_usage_help_registry_dir}/provider-registry.sh" || { echo "usage-help: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
+source "${_usage_help_registry_dir}/provider-policy.sh" || { echo "usage-help: failed to load provider-policy.sh" >&2; return 1 2>/dev/null || exit 1; }
 
 generate_zsh_completion() {
     cat << 'ZSH_COMPLETION'
@@ -509,7 +512,7 @@ ${YELLOW}Options:${NC}
   --implement never|after-approval|plan-only
   --worktree auto|on|off
   --benchmark auto|on|off
-  --providers auto|claude,codex,agy,gemini,qwen,opencode,openrouter
+  --providers auto|$(octo_council_default_providers)
   --max-cost <usd>
   --dry-run
   --json
@@ -708,6 +711,7 @@ ${YELLOW}Examples:${NC}
 ${YELLOW}Environment:${NC}
   CLAUDE_OCTOPUS_WORKSPACE  Override workspace (default: ~/.claude-octopus)
   OPENAI_API_KEY            Codex CLI (or 'codex login' OAuth)
+  COMMAND_CODE_API_KEY       Command Code CLI (or authenticated CLI session)
   GEMINI_API_KEY            Gemini CLI (or 'gemini' OAuth; GOOGLE_API_KEY also accepted)
   PERPLEXITY_API_KEY        Perplexity Sonar web search
   OPENROUTER_API_KEY        OpenRouter models

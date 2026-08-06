@@ -12,6 +12,7 @@ if ! declare -f _is_cursor_agent_binary >/dev/null 2>&1; then
     source "${_providers_lib_dir}/cursor-agent.sh" 2>/dev/null || true
 fi
 source "${_providers_lib_dir}/provider-allowlist.sh" 2>/dev/null || true
+source "${_providers_lib_dir}/provider-registry.sh" 2>/dev/null || true
 source "${_providers_lib_dir}/auth.sh" 2>/dev/null || true
 source "${_providers_lib_dir}/qwen.sh" 2>/dev/null || true
 source "${_providers_lib_dir}/openai-compatible.sh" 2>/dev/null || true
@@ -705,6 +706,30 @@ detect_fast_mode() {
 
 # Check if a provider is healthy (CLI available + credentials present)
 # Returns 0 if healthy, 1 if unhealthy. Prints diagnostic to stderr.
+_commandcode_auth_mode() {
+    local cc_bin="${OCTOPUS_COMMANDCODE_BIN:-}"
+    if [[ -z "$cc_bin" ]]; then
+        if command -v command-code >/dev/null 2>&1; then
+            cc_bin="command-code"
+        elif command -v cmd >/dev/null 2>&1; then
+            cc_bin="cmd"
+        else
+            printf '%s\n' "missing"
+            return 1
+        fi
+    fi
+    if [[ -n "${COMMAND_CODE_API_KEY:-}" ]]; then
+        printf '%s\n' "api-key"
+        return 0
+    fi
+    if "$cc_bin" status --json >/dev/null 2>&1; then
+        printf '%s\n' "cli"
+        return 0
+    fi
+    printf '%s\n' "none"
+    return 1
+}
+
 check_provider_health() {
     local provider="$1"
     local errors=0
@@ -749,12 +774,10 @@ check_provider_health() {
             if [[ -z "${COMMAND_CODE_API_KEY:-}" ]]; then
                 resolve_provider_env "COMMAND_CODE_API_KEY" 2>/dev/null || true
             fi
-            if [[ -z "${COMMAND_CODE_API_KEY:-}" ]]; then
-                "$cc_bin" status --json >/dev/null 2>&1 || {
-                    echo "commandcode: no API key or authenticated CLI session" >&2
-                    return 1
-                }
-            fi
+            _commandcode_auth_mode >/dev/null || {
+                echo "commandcode: no API key or authenticated CLI session" >&2
+                return 1
+            }
             ;;
         gemini)
             if ! command -v gemini &>/dev/null; then
@@ -942,7 +965,7 @@ check_all_providers() {
     local healthy=0 unhealthy=0
     local -a results=()
 
-    for provider in codex gemini agy claude claude-sdk perplexity openrouter atlascloud ollama copilot qwen cursor-agent grok vibe; do
+    for provider in $(octo_provider_ids health); do
         local diag
         if diag=$(check_provider_health "$provider" 2>&1); then
             results+=("  ✓ $provider")
@@ -1098,6 +1121,13 @@ detect_providers() {
             codex_auth="api-key"
         fi
         result="${result}codex:${codex_auth} "
+    fi
+
+    # Detect Command Code CLI
+    if { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed commandcode; } && command -v command-code >/dev/null 2>&1; then
+        local commandcode_auth
+        commandcode_auth="$(_commandcode_auth_mode 2>/dev/null || true)"
+        [[ "$commandcode_auth" == "api-key" || "$commandcode_auth" == "cli" ]] && result="${result}commandcode:${commandcode_auth} "
     fi
 
     # Detect Gemini CLI
