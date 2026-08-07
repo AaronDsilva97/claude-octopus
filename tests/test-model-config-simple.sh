@@ -6,10 +6,10 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/../helpers/test-framework.sh"
+source "$SCRIPT_DIR/helpers/test-framework.sh"
 test_suite "Model Configuration (Issue #16)"
 
-PLUGIN_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
 ALL_SRC=$(mktemp)
 cat "$PLUGIN_DIR/scripts/orchestrate.sh" "$PLUGIN_DIR/scripts/lib/"*.sh > "$ALL_SRC" 2>/dev/null
 trap 'rm -f "$ALL_SRC"' EXIT

@@ -1,4 +1,26 @@
+# Test files no CI gate runs (#741). 34 -> 9.
+#
+# The five provider-dependent entries below are NOT merely misplaced. They
+# passed locally and failed on a clean CI runner, because they assert that
+# multiple provider CLIs are present ("Deep research only uses 1 providers:
+# expected >2"). A developer machine with codex/gemini installed satisfies
+# them; an Ubuntu runner does not. Moving them into the unit gate makes CI
+# depend on installed third-party binaries, so they stay out until they are
+# rewritten to stub provider detection or relocated to a gate that declares
+# that dependency:
+#
+#   test-fleet-diversity.sh        test-provider-activation.sh
+#   test-model-config-simple.sh    test-v8.2.0-sonnet-workflows.sh
+#   test-version-check.sh
+#
+# The remaining four need a read before moving: two name long-past versions
+# and two have assertion failures that may be stale expectations.
 tests/test-continuation.sh
 tests/test-execution-profile.sh
+tests/test-fleet-diversity.sh
+tests/test-model-config-simple.sh
 tests/test-model-config-v849.sh
+tests/test-provider-activation.sh
+tests/test-v8.2.0-sonnet-workflows.sh
 tests/test-v8.24.0-perplexity-integration.sh
+tests/test-version-check.sh
