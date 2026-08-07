@@ -31,13 +31,47 @@ WORKFLOW="$PROJECT_ROOT/.github/workflows/test.yml"
 # the runner category its Makefile recipe passes. Adding a `test-root` target and
 # a CI step for it therefore widens what counts as reachable automatically, and
 # this suite stops reporting those files.
+# The single extractor for "which make targets does CI actually invoke".
+#
+# Both consumers below read through this rather than each running their own
+# grep: two spellings of the same parse is the duplication class this repo keeps
+# getting bitten by, and I introduced an instance of it here — one copy matched
+# `test-[a-z0-9]+` and the other `test-[a-z0-9-]+`, so a hyphenated target like
+# `test-plugin-name` would parse as `test-plugin` in one and correctly in the
+# other. They agree today only because no hyphenated target is invoked yet.
+#
+# Comment lines are stripped first. A commented-out step is not an invocation,
+# and treating one as active would either demand a target nobody calls or let a
+# deleted step keep satisfying the count guard below.
+workflow_make_targets() {
+    sed 's/#.*//' "$WORKFLOW" 2>/dev/null \
+        | grep -ohE 'make test-[a-z0-9-]+' \
+        | awk '{print $2}' | sort -u
+}
+
+makefile_has_target() {
+    grep -qE "^${1}:" "$MAKEFILE"
+}
+
+# Derived, not hardcoded: read the make targets CI invokes, then resolve each to
+# the runner category its Makefile recipe passes. Adding a `test-root` target and
+# a CI step for it therefore widens what counts as reachable automatically, and
+# this suite stops reporting those files.
+#
+# The awk stops at the next target definition, so a recipe further down the
+# Makefile cannot donate its `run-all.sh` line to a target whose own recipe has
+# none.
 ci_categories() {
     local target cat
     while IFS= read -r target; do
         [[ -n "$target" ]] || continue
-        cat=$(awk -v t="^${target}:" '$0 ~ t {f=1} f && /run-all\.sh/ {print $NF; exit}' "$MAKEFILE")
+        cat=$(awk -v t="^${target}:" '
+            $0 ~ t { f = 1; next }
+            f && /^[a-zA-Z0-9_.-]+:/ { exit }
+            f && /run-all\.sh/ { print $NF; exit }
+        ' "$MAKEFILE")
         [[ -n "$cat" ]] && printf '%s\n' "$cat"
-    done < <(grep -ohE 'make test-[a-z0-9]+' "$WORKFLOW" 2>/dev/null | awk '{print $2}' | sort -u) | sort -u
+    done < <(workflow_make_targets) | sort -u
 }
 
 # Mirror discover_tests(): find <dir> -maxdepth 1 -name 'test-*.sh'
@@ -134,6 +168,28 @@ if [[ -z "$bad" ]]; then
     test_pass
 else
     test_fail "Makefile invokes categories the runner does not implement:$bad"
+fi
+
+test_case "every 'make test-*' the workflow invokes exists as a Makefile target"
+missing_targets=""
+while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    makefile_has_target "$target" || missing_targets="$missing_targets $target"
+done < <(workflow_make_targets)
+if [[ -z "$missing_targets" ]]; then
+    test_pass
+else
+    test_fail "workflow calls make target(s) that do not exist:${missing_targets} — CI will die with 'No rule to make target'. Remove the step or restore the target."
+fi
+
+# Paired with the above: a target that exists but resolves to no runner
+# category is equally broken, just later in the pipeline.
+test_case "the workflow invokes at least one make target (guards a silent empty set)"
+n_targets="$(workflow_make_targets | grep -c . || true)"
+if [[ "${n_targets:-0}" -ge 3 ]]; then
+    test_pass
+else
+    test_fail "found only ${n_targets} 'make test-*' invocations in the workflow — the grep or the workflow changed, so the assertion above would be vacuous"
 fi
 
 test_case "at least one test is actually discovered (guards a silent empty set)"

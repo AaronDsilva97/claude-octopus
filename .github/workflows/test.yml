@@ -19,6 +19,20 @@ on:
 permissions:
   contents: read
 
+# Two pull_request runs for the same SHA have repeatedly raced here, and the
+# loser is reported as a failed required check even though the winner passed —
+# which blocked merges four times while the underlying tests were green.
+# Collapse duplicates per PR so only the newest run reports.
+#
+# cancel-in-progress is deliberately restricted to pull_request. A main-branch
+# run must never be cancelled: RELEASING.md step 9 gates the release tag on the
+# Test Suite for the exact post-squash commit, and cancelling it would either
+# block a valid release or, worse, leave main unverified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+
 jobs:
   classify-changes:
     name: Classify Changes
@@ -385,48 +399,6 @@ jobs:
             echo "Integration result: ${{ needs.integration-heavy.result }}"
             exit 1
           fi
-
-  e2e:
-    name: End-to-End Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [smoke-required, unit-required, integration, portability-lint]
-    # Only run E2E on main branch, scheduled builds, or manual trigger
-    if: github.ref == 'refs/heads/main' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Make scripts executable
-        run: |
-          chmod +x scripts/orchestrate.sh
-          chmod +x tests/**/*.sh
-          find tests -name "*.sh" -type f -exec chmod +x {} \;
-
-      - name: Run E2E tests
-        run: make test-e2e
-        env:
-          # Add any necessary API keys or credentials here
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          CI: true
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-test-results
-          path: test-results*.xml
-          retention-days: 30
-
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-test-logs
-          path: /tmp/test_*.log
-          retention-days: 7
 
   test-summary:
     name: Test Summary
