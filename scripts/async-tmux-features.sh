@@ -208,19 +208,26 @@ wait_async_agents() {
 
     log INFO "Waiting for ${#pids[@]} async agents to complete"
 
-    local -A completed_pids=()
+    # Bash 3.2 floor (macOS /bin/bash 3.2.57) has no associative arrays, so
+    # completion is tracked as a space-delimited set of PIDs rather than
+    # `local -A`. That construct aborted this function outright with
+    # `local: -A: invalid option`, which mattered because orchestrate.sh
+    # sources this file unconditionally.
+    local completed_set=" "
+    local completed_count=0
     local start_time=$(date +%s)
 
-    while [[ ${#completed_pids[@]} -lt ${#pids[@]} ]]; do
+    while [[ "$completed_count" -lt "${#pids[@]}" ]]; do
         for pid in "${pids[@]}"; do
             # Skip already completed PIDs
-            [[ -n "${completed_pids[$pid]:-}" ]] && continue
+            [[ "$completed_set" == *" ${pid} "* ]] && continue
 
             # Check if process is still running
             if ! kill -0 "$pid" 2>/dev/null; then
                 # Reap zombie process and capture exit code
                 wait "$pid" 2>/dev/null
-                completed_pids[$pid]=$?
+                completed_set="${completed_set}${pid} "
+                completed_count=$((completed_count + 1))
             fi
         done
 
@@ -230,7 +237,7 @@ wait_async_agents() {
         local secs=$((elapsed % 60))
 
         # Show progress with elapsed time
-        echo -ne "\r${CYAN}Progress: ${#completed_pids[@]}/${#pids[@]} agents complete (${mins}m ${secs}s elapsed)${NC}     "
+        echo -ne "\r${CYAN}Progress: ${completed_count}/${#pids[@]} agents complete (${mins}m ${secs}s elapsed)${NC}     "
 
         sleep 0.5
     done
