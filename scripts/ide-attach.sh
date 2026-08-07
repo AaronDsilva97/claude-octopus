@@ -247,7 +247,7 @@ remove_config() {
 
   # If octopus is the only server, remove the file
   local server_count
-  server_count=$(grep -c '"command"' "$config_path" 2>/dev/null || echo "0")
+  server_count=$(grep -c '"command"' "$config_path" 2>/dev/null) || server_count=0
   if [[ "$server_count" -le 1 ]]; then
     rm "$config_path"
     log_ok "Removed $config_path"

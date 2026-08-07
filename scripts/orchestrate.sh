@@ -795,7 +795,7 @@ earn_skill() {
     # Count existing occurrences to determine confidence
     local occurrence=1
     if [[ -f "$skill_file" ]]; then
-        occurrence=$(( $(grep -c "^#### Occurrence" "$skill_file" 2>/dev/null || echo "0") + 1 ))
+        occurrence=$(( $(grep -c "^#### Occurrence" "$skill_file" 2>/dev/null) + 1 )) || occurrence=0
     fi
 
     # Confidence lifecycle: 1=low, 3+=medium, 5+=high
@@ -839,7 +839,7 @@ SKILLEOF
         local lowest_file="" lowest_count=999
         for sf in "$skills_dir"/*.md; do
             local sc
-            sc=$(grep -c "^#### Occurrence" "$sf" 2>/dev/null || echo "0")
+            sc=$(grep -c "^#### Occurrence" "$sf" 2>/dev/null) || sc=0
             if [[ $sc -lt $lowest_count ]]; then
                 lowest_count=$sc
                 lowest_file="$sf"

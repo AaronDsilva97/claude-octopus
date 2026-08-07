@@ -145,7 +145,7 @@ cmd_detect_providers() {
     if command -v ollama &>/dev/null; then
         if curl -sf http://localhost:11434/api/tags &>/dev/null; then
             local model_count
-            model_count=$(curl -sf http://localhost:11434/api/tags 2>/dev/null | grep -c '"name"' 2>/dev/null || echo "0")
+            model_count=$(curl -sf http://localhost:11434/api/tags 2>/dev/null | grep -c '"name"' 2>/dev/null) || model_count=0
             echo "OLLAMA_STATUS=running"
             echo "OLLAMA_MODELS=$model_count"
         else

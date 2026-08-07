@@ -129,7 +129,7 @@ record_error() {
     # Cap at 100 entries: count existing, trim oldest if needed
     if [[ -f "$error_file" ]]; then
         local entry_count
-        entry_count=$(grep -c "^### ERROR |" "$error_file" 2>/dev/null || echo "0")
+        entry_count=$(grep -c "^### ERROR |" "$error_file" 2>/dev/null) || entry_count=0
         if [[ "$entry_count" -ge 100 ]]; then
             # Remove first entry (everything up to second ### ERROR)
             local second_entry_line

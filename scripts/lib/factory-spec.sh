@@ -142,7 +142,7 @@ parse_factory_spec() {
 
     # Extract behaviors (lines starting with "### " under Behaviors section, or numbered items)
     local behavior_count
-    behavior_count=$(echo "$spec_content" | grep -c '^\(### \|[0-9]\+\.\s\+\*\*\)' || echo "0")
+    behavior_count=$(echo "$spec_content" | grep -c '^\(### \|[0-9]\+\.\s\+\*\*\)') || behavior_count=0
     if [[ "$behavior_count" -eq 0 ]]; then
         behavior_count=$(echo "$spec_content" | grep -c '^- \*\*' || echo "3")
     fi
