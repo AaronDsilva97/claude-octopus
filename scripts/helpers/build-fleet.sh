@@ -32,6 +32,10 @@ source "${SCRIPT_DIR}/../lib/grok.sh" 2>/dev/null || true
 # gemini-cli-workspace-oauth on every review.
 source "${SCRIPT_DIR}/../lib/quota-watcher.sh" 2>/dev/null || true
 
+_octo_session_health_enabled() {
+    [[ -n "${WORKSPACE_DIR:-}" || -n "${CLAUDE_PLUGIN_DATA:-}" ]]
+}
+
 WORKFLOW="${1:-research}"
 INTENSITY="${2:-standard}"
 PROMPT="${3:-}"
@@ -100,7 +104,8 @@ octo_provider_allowed openrouter && [[ -n "${OPENROUTER_API_KEY:-}" ]] && AVAILA
 # detection conditions differ per provider (binary, API key, health function), and
 # adding a 13th variant of the same check to each was how the original omission
 # happened. One choke point, same as provider_status() in check-providers.sh.
-if declare -f octo_quota_is_dead >/dev/null 2>&1 && [[ -n "${AVAILABLE_CLI[*]:-}" ]]; then
+if _octo_session_health_enabled && declare -f octo_quota_is_dead >/dev/null 2>&1 \
+   && [[ -n "${AVAILABLE_CLI[*]:-}" ]]; then
     _LIVE_CLI=()
     for _p in "${AVAILABLE_CLI[@]}"; do
         if octo_quota_is_dead "$_p"; then

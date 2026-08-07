@@ -27,12 +27,21 @@ source "${SCRIPT_DIR}/../lib/qwen.sh" 2>/dev/null || true   # qwen_is_usable (oc
 source "${SCRIPT_DIR}/../lib/events.sh" 2>/dev/null || true  # opt-in JSONL lifecycle stream
 source "${SCRIPT_DIR}/../lib/quota-watcher.sh" 2>/dev/null || true  # octo_quota_is_dead (oco-cbb)
 
+# Standalone helper invocations (including E2E smoke) should report baseline
+# install/auth availability, not inherit a sticky dead-seat marker from an
+# unrelated prior session under ~/.claude-octopus. Orchestrated runs export an
+# explicit workspace path, so only those should consume the session marker.
+_octo_session_health_enabled() {
+    [[ -n "${WORKSPACE_DIR:-}" || -n "${CLAUDE_PLUGIN_DATA:-}" ]]
+}
+
 # oco-cbb: report degraded when a key/binary-present provider was marked
 # quota/auth-dead earlier this session (perplexity 401, gemini exhausted), so it
 # is skipped instead of re-dispatched into the same failure + timeout.
 _octo_provider_state() {
     local provider="$1" present_state="$2"
-    if [[ "$present_state" == "available" ]] && declare -f octo_quota_is_dead >/dev/null 2>&1 \
+    if [[ "$present_state" == "available" ]] && _octo_session_health_enabled \
+       && declare -f octo_quota_is_dead >/dev/null 2>&1 \
        && octo_quota_is_dead "$provider"; then
         echo "degraded"
     else
