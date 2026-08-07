@@ -130,6 +130,28 @@ jobs:
           fi
           echo "OK: No non-portable sed patterns found."
 
+      # CLAUDE.md sets a Bash 3.2 floor because macOS ships /bin/bash 3.2.57,
+      # which has no associative arrays or namerefs. Nothing caught this before:
+      # the macOS runner resolves `#!/usr/bin/env bash` to Homebrew bash 5 on
+      # PATH, so a `declare -A` passes CI and then dies on a maintainer's stock
+      # shell with `line N: <key>: unbound variable`. tests/ is included because
+      # that is where the violation landed (#782).
+      - name: Check for Bash 4+ constructs below the 3.2 floor
+        run: |
+          FAIL=0
+          if grep -rnE '^[[:space:]]*(declare|local|typeset)[[:space:]]+-[A-Za-z]*A' \
+              scripts/ hooks/ tests/ 2>/dev/null; then
+            echo "::error::associative arrays require Bash 4; the floor is 3.2 (macOS /bin/bash)"
+            FAIL=1
+          fi
+          if grep -rnE '^[[:space:]]*(declare|local)[[:space:]]+-n[[:space:]]' \
+              scripts/ hooks/ tests/ 2>/dev/null; then
+            echo "::error::namerefs require Bash 4.3; the floor is 3.2 (macOS /bin/bash)"
+            FAIL=1
+          fi
+          if [ "$FAIL" -eq 1 ]; then exit 1; fi
+          echo "No Bash 4+ constructs found."
+
       - name: Install ShellCheck
         run: |
           sudo apt-get install -y shellcheck
