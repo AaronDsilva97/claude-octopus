@@ -3,12 +3,12 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "Simple test suite for debug mode (v7.25.0)"
 
 set +o pipefail  # restore: original did not use pipefail
 
-PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ORCHESTRATE="${PLUGIN_DIR}/scripts/orchestrate.sh"
 # v9.12: Search orchestrate.sh + lib/*.sh for functions that may have been decomposed
 ALL_SRC=$(mktemp)

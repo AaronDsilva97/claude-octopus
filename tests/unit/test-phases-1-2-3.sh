@@ -4,8 +4,8 @@
 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "Comprehensive test suite for Phases 1-3"
 
 set -euo pipefail
@@ -17,7 +17,7 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 
 # Change to plugin directory
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}  Phase 1-3 Integration Test Suite${NC}"

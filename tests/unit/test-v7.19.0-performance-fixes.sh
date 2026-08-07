@@ -4,9 +4,9 @@
 # Tests all 10 performance improvements from OCTOPUS-PERFORMANCE-ANALYSIS-20260131.md
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "/test-v7.19.0-performance-fixes.sh"
 
 set +o pipefail  # restore: original did not use pipefail

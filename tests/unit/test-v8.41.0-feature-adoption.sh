@@ -5,9 +5,9 @@
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "v8.41.0 Feature Adoption"
 
 ALL_SRC=$(mktemp)

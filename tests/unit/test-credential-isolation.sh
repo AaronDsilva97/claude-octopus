@@ -7,10 +7,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "for credential isolation (v8.32.0)"
 
-PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROJECT_ROOT="$PLUGIN_DIR"
 ORCH="$PLUGIN_DIR/scripts/orchestrate.sh"
 # v9.12: Search orchestrate.sh + lib/*.sh for decomposed functions.
