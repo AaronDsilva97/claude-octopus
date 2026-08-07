@@ -174,8 +174,8 @@ get_provider_score() {
         successes=$(grep "\"provider\":\"$provider\"" "$telemetry_file" 2>/dev/null | grep '"outcome":"success"' | wc -l | tr -d ' ')
         failures=$(grep "\"provider\":\"$provider\"" "$telemetry_file" 2>/dev/null | grep -E '"outcome":"(fail|timeout)"' | wc -l | tr -d ' ')
     else
-        successes=$(grep -c "\"provider\":\"$provider\".*\"outcome\":\"success\"" "$telemetry_file" 2>/dev/null || echo 0)
-        failures=$(grep -c "\"provider\":\"$provider\".*\"outcome\":\"fail\|timeout\"" "$telemetry_file" 2>/dev/null || echo 0)
+        successes=$(grep -c "\"provider\":\"$provider\".*\"outcome\":\"success\"" "$telemetry_file" 2>/dev/null) || successes=0
+        failures=$(grep -c "\"provider\":\"$provider\".*\"outcome\":\"fail\|timeout\"" "$telemetry_file" 2>/dev/null) || failures=0
     fi
 
     local total=$((successes + failures))
@@ -217,7 +217,7 @@ get_provider_ranking() {
     local ranked=""
     for p in $providers; do
         local count
-        count=$(grep -c "\"provider\":\"$p\"" "$telemetry_file" 2>/dev/null || echo 0)
+        count=$(grep -c "\"provider\":\"$p\"" "$telemetry_file" 2>/dev/null) || count=0
         local score
         score=$(get_provider_score "$p")
 
@@ -242,7 +242,7 @@ get_agent_win_rate() {
     [[ -f "$telemetry_file" ]] || { echo ""; return 0; }
 
     local successes failures
-    successes=$(grep "\"agent\":\"$agent_type\"" "$telemetry_file" 2>/dev/null | grep "\"task_type\":\"$task_type\"" | grep -c '"outcome":"success"' || echo 0)
+    successes=$(grep "\"agent\":\"$agent_type\"" "$telemetry_file" 2>/dev/null | grep "\"task_type\":\"$task_type\"" | grep -c '"outcome":"success"') || successes=0
     failures=$(grep "\"agent\":\"$agent_type\"" "$telemetry_file" 2>/dev/null | grep "\"task_type\":\"$task_type\"" | grep -c -E '"outcome":"(fail|timeout)"' || echo 0)
 
     local total=$((successes + failures))

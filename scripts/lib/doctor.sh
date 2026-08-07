@@ -1506,12 +1506,12 @@ doctor_check_agents() {
     fi
 
     local agent_count
-    agent_count=$(grep -c '^\s\{2\}[a-z]' "$config_file" 2>/dev/null || echo "0")
+    agent_count=$(grep -c '^\s\{2\}[a-z]' "$config_file" 2>/dev/null) || agent_count=0
     doctor_add "agents-count" "agents" "pass" \
         "${agent_count} agent definitions found" ""
 
     local worktree_agents
-    worktree_agents=$(grep -c 'isolation: worktree' "$config_file" 2>/dev/null || echo "0")
+    worktree_agents=$(grep -c 'isolation: worktree' "$config_file" 2>/dev/null) || worktree_agents=0
     doctor_add "agents-worktree" "agents" "pass" \
         "${worktree_agents} agents with worktree isolation" ""
 
@@ -1520,7 +1520,7 @@ doctor_check_agents() {
         cli_output=$(claude agents 2>/dev/null | head -20 || echo "")
         if [[ -n "$cli_output" ]]; then
             local cli_count
-            cli_count=$(echo "$cli_output" | grep -c "^" || echo "0")
+            cli_count=$(echo "$cli_output" | grep -c "^") || cli_count=0
             doctor_add "agents-cli" "agents" "pass" \
                 "Claude agents CLI: ${cli_count} agents registered" ""
         else

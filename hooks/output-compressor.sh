@@ -119,7 +119,7 @@ fi
 # Log/verbose output detection (many lines with repeated patterns)
 if [[ "$content_type" == "text" && $line_count -gt 40 ]]; then
     # Check for timestamp patterns (common in logs)
-    ts_lines=$(echo "$OUTPUT" | head -20 | grep -cE '^\[?[0-9]{4}[-/][0-9]{2}|^[0-9]{2}:[0-9]{2}|^\w{3}\s+\d{1,2}' || echo 0)
+    ts_lines=$(echo "$OUTPUT" | head -20 | grep -cE '^\[?[0-9]{4}[-/][0-9]{2}|^[0-9]{2}:[0-9]{2}|^\w{3}\s+\d{1,2}') || ts_lines=0
     if [[ $ts_lines -gt 5 ]]; then
         content_type="logs"
     else

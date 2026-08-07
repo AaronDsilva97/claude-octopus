@@ -65,7 +65,7 @@ if printf '%s' "$prompt" | grep -qiE "${verb_pattern}.*(and|then|also|plus|addit
 fi
 
 # Pattern 3: Bullet lists (- or * at start of line, 2+ bullets)
-bullet_count=$(printf '%s' "$prompt" | grep -cE '(^|\\n)[[:space:]]*[-*][[:space:]]' 2>/dev/null || echo "0")
+bullet_count=$(printf '%s' "$prompt" | grep -cE '(^|\\n)[[:space:]]*[-*][[:space:]]' 2>/dev/null) || bullet_count=0
 if [[ "$bullet_count" -ge 2 ]]; then
     compound=true
 fi

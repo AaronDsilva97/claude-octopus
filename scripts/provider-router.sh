@@ -113,7 +113,7 @@ record_provider_failure() {
     # Check if circuit should open (only on transient — permanent errors don't trigger breaker)
     if [[ "$error_class" == "transient" ]]; then
         local recent_failures
-        recent_failures=$(grep -c ":transient:" "$failure_file" 2>/dev/null || echo 0)
+        recent_failures=$(grep -c ":transient:" "$failure_file" 2>/dev/null) || recent_failures=0
         if [[ $recent_failures -ge $OCTO_CB_FAILURE_THRESHOLD ]]; then
             # Open the circuit breaker
             echo "$timestamp" > "${_PROVIDER_STATE_DIR}/${provider}.cooldown"

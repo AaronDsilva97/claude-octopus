@@ -353,7 +353,7 @@ HISTEOF
 
     # Cap at 50 entries: count entries and trim oldest if exceeded
     local entry_count
-    entry_count=$(grep -c "^### " "$history_file" 2>/dev/null || echo "0")
+    entry_count=$(grep -c "^### " "$history_file" 2>/dev/null) || entry_count=0
     if [[ "$entry_count" -gt 50 ]]; then
         local excess=$((entry_count - 50))
         # Remove oldest entries (from top of file)
