@@ -12,8 +12,8 @@ This directory contains automated tests for the Claude Octopus plugin.
 **Run individual tests:**
 ```bash
 ./tests/test-enforcement-pattern.sh
-./tests/test-version-consistency.sh
-./tests/test-command-registration.sh
+./tests/unit/test-version-consistency.sh
+./tests/unit/test-command-registration.sh
 # etc.
 ```
 
@@ -133,7 +133,7 @@ These tests are designed to run in CI/CD pipelines:
    - Tracking: GitHub issue (pending submission)
 
 2. **Version test fragility** - May fail if versions updated without running tests
-   - Always run `./tests/test-version-consistency.sh` after version bumps
+   - Always run `./tests/unit/test-version-consistency.sh` after version bumps
 
 ## Future Tests (Pending Claude Code Features)
 

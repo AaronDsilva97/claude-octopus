@@ -8,10 +8,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "-fleet-diversity.sh — Tests for dynamic fleet building and provider diversity"
 
-PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROJECT_ROOT="$PLUGIN_DIR"
 FLEET_SCRIPT="$PLUGIN_DIR/scripts/helpers/build-fleet.sh"
 CHECK_SCRIPT="$PLUGIN_DIR/scripts/helpers/check-providers.sh"

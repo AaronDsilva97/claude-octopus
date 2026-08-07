@@ -783,7 +783,7 @@ test_agy_slash_command_visibility() {
        grep -q 'Antigravity CLI' "$PROJECT_ROOT/SECURITY.md" && \
        grep -q 'up to 10 external AI integrations' "$PROJECT_ROOT/PRODUCT.md" && \
        grep -q 'Five providers can cost nothing extra' "$PROJECT_ROOT/PRODUCT.md" && \
-       grep -q 'codex gemini agy' "$PROJECT_ROOT/tests/test-fleet-diversity.sh" && \
+       grep -q 'codex gemini agy' "$PROJECT_ROOT/tests/unit/test-fleet-diversity.sh" && \
        grep -q 'codex, gemini, agy' "$PROJECT_ROOT/tests/unit/test-research-fanout-static.sh"; then
         test_pass
     else
@@ -796,7 +796,7 @@ test_agy_slash_command_no_stale_three_provider_copy() {
 
     local stale
     stale=$(grep -R -nE 'Claude \+ Codex \+ Gemini|Codex \+ Gemini \+ Claude|Codex \+ Gemini|Codex/Gemini|Codex and Gemini|all three AI|all three providers|three-model|four-way debate|four-way debates|configure Codex and Gemini|2/3 providers|Providers: 🔴 Codex \| 🟡 Gemini \| 🔵 Claude|Providers: Codex \| Gemini \| Claude|\(🔴 🟡 🔵\)' \
-        "$PROJECT_ROOT/commands" "$PROJECT_ROOT/.claude/skills" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/.claude-plugin/README.md" "$PROJECT_ROOT/SECURITY.md" "$PROJECT_ROOT/PRODUCT.md" "$PROJECT_ROOT/tests/test-fleet-diversity.sh" "$PROJECT_ROOT/tests/unit/test-research-fanout-static.sh" \
+        "$PROJECT_ROOT/commands" "$PROJECT_ROOT/.claude/skills" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/.claude-plugin/README.md" "$PROJECT_ROOT/SECURITY.md" "$PROJECT_ROOT/PRODUCT.md" "$PROJECT_ROOT/tests/unit/test-fleet-diversity.sh" "$PROJECT_ROOT/tests/unit/test-research-fanout-static.sh" \
         | grep -v 'commands/resume.md' \
         | grep -v 'commands/extract.md:.*Extract all 8 features' \
         | grep -v 'docs/superpowers/specs/' \

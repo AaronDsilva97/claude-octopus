@@ -5,12 +5,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "script for PDF page selection utility (v7.25.0)"
 
 set +o pipefail  # restore: original did not use pipefail
 
-PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+PLUGIN_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
 # Define the functions directly for testing
 # (In production, these are sourced from orchestrate.sh)

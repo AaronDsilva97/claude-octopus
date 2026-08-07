@@ -14,10 +14,10 @@ set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/helpers/test-framework.sh"
+source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "v8.2.0 Agent Persona Enhanced Fields & Skills Preloading"
 
-PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+PLUGIN_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 ORCHESTRATE_SH="${PLUGIN_DIR}/scripts/orchestrate.sh"
 # v9.12: Search orchestrate.sh + lib/*.sh for functions that may have been decomposed
 ALL_SRC=$(mktemp)
@@ -27,7 +27,7 @@ CONFIG_YAML="${PLUGIN_DIR}/agents/config.yaml"
 PACKAGE_JSON="${PLUGIN_DIR}/package.json"
 PLUGIN_JSON="${PLUGIN_DIR}/.claude-plugin/plugin.json"
 MARKETPLACE_JSON="${PLUGIN_DIR}/.claude-plugin/marketplace.json"
-CHANGELOG_MD="$(dirname "$SCRIPT_DIR")/CHANGELOG.md"
+CHANGELOG_MD="$(dirname "$(dirname "$SCRIPT_DIR")")/CHANGELOG.md"
 README_MD="${PLUGIN_DIR}/README.md"
 
 
