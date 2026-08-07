@@ -715,6 +715,93 @@ test_persona_packs_off() {
     fi
 }
 
+
+test_record_outcome_canonicalizes_provider_variants() {
+    test_case "record_outcome canonicalizes provider variants and preserves agent identity"
+    local orig_ws="$WORKSPACE_DIR"
+    WORKSPACE_DIR="$TEST_TMP_DIR/workspace-canonical-record"
+    mkdir -p "$WORKSPACE_DIR/.octo"
+    local tel="$WORKSPACE_DIR/.octo/provider-telemetry.jsonl"
+    rm -f "$tel"
+    OCTOPUS_PROVIDER_INTELLIGENCE=shadow record_outcome "commandcode-research" "commandcode-research" "research" "design" "success" "42"
+    local provider agent provider_input
+    provider=$(jq -r '.provider' "$tel")
+    agent=$(jq -r '.agent' "$tel")
+    provider_input=$(jq -r '.provider_input' "$tel")
+    WORKSPACE_DIR="$orig_ws"
+    if [[ "$provider" == "commandcode" && "$agent" == "commandcode-research" && "$provider_input" == "commandcode-research" ]]; then
+        test_pass
+    else
+        test_fail "provider=$provider agent=$agent provider_input=$provider_input"
+    fi
+}
+
+test_record_outcome_canonicalizes_alias() {
+    test_case "record_outcome canonicalizes the command-code alias"
+    local orig_ws="$WORKSPACE_DIR"
+    WORKSPACE_DIR="$TEST_TMP_DIR/workspace-alias-record"
+    mkdir -p "$WORKSPACE_DIR/.octo"
+    local tel="$WORKSPACE_DIR/.octo/provider-telemetry.jsonl"
+    rm -f "$tel"
+    OCTOPUS_PROVIDER_INTELLIGENCE=shadow record_outcome "command-code" "commandcode" "coding" "tangle" "success" "17"
+    local provider
+    provider=$(jq -r '.provider' "$tel")
+    WORKSPACE_DIR="$orig_ws"
+    if assert_equals "commandcode" "$provider" "Alias should be stored canonically"; then test_pass; fi
+}
+
+test_provider_score_reads_legacy_variant_rows() {
+    test_case "get_provider_score canonicalizes legacy variant telemetry on read"
+    local orig_ws="$WORKSPACE_DIR"
+    WORKSPACE_DIR="$TEST_TMP_DIR/workspace-legacy-variants"
+    mkdir -p "$WORKSPACE_DIR/.octo"
+    local tel="$WORKSPACE_DIR/.octo/provider-telemetry.jsonl"
+    rm -f "$tel"
+    for _ in 1 2 3 4 5; do echo '{"provider":"claude-sdk-reviewer","outcome":"success"}' >> "$tel"; done
+    local score
+    score=$(get_provider_score "claude-sdk")
+    WORKSPACE_DIR="$orig_ws"
+    if [[ "$score" == "0.85" || "$score" == ".85" ]]; then test_pass; else test_fail "Expected 0.85, got $score"; fi
+}
+
+test_provider_ranking_uses_registry_inventory() {
+    test_case "get_provider_ranking includes providers added to the registry"
+    local orig_ws="$WORKSPACE_DIR" result
+    WORKSPACE_DIR="$TEST_TMP_DIR/workspace-registry-ranking"
+    mkdir -p "$WORKSPACE_DIR/.octo"
+    rm -f "$WORKSPACE_DIR/.octo/provider-telemetry.jsonl"
+    result=$(
+        original_rows="$(octo_provider_registry_rows)"
+        octo_provider_registry_rows() {
+            printf '%s\n' "$original_rows"
+            printf '%s\n' 'new-provider||new-provider|example|model-config,dispatch,env'
+        }
+        get_provider_ranking
+    )
+    WORKSPACE_DIR="$orig_ws"
+    if [[ " $result " == *" new-provider "* ]]; then test_pass; else test_fail "ranking=$result"; fi
+}
+
+test_provider_ranking_fairness_has_no_fixed_whitelist() {
+    test_case "fairness ranking uses all registry dispatch providers"
+    local orig_ws="$WORKSPACE_DIR" result commandcode_pos codex_pos
+    WORKSPACE_DIR="$TEST_TMP_DIR/workspace-fairness-registry"
+    mkdir -p "$WORKSPACE_DIR/.octo"
+    local tel="$WORKSPACE_DIR/.octo/provider-telemetry.jsonl"
+    rm -f "$tel"
+    for _ in $(seq 1 25); do echo '{"provider":"codex","outcome":"success"}' >> "$tel"; done
+    echo '{"provider":"commandcode-research","outcome":"success"}' >> "$tel"
+    result=$(get_provider_ranking)
+    commandcode_pos=$(printf '%s\n' "$result" | tr ' ' '\n' | nl -ba | awk '$2=="commandcode" {print $1}')
+    codex_pos=$(printf '%s\n' "$result" | tr ' ' '\n' | nl -ba | awk '$2=="codex" {print $1}')
+    WORKSPACE_DIR="$orig_ws"
+    if [[ -n "$commandcode_pos" && -n "$codex_pos" && "$commandcode_pos" -lt "$codex_pos" && " $result " == *" claude-sdk "* ]]; then
+        test_pass
+    else
+        test_fail "ranking=$result commandcode_pos=$commandcode_pos codex_pos=$codex_pos"
+    fi
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Run all tests
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -730,6 +817,11 @@ test_record_outcome
 test_record_outcome_off
 test_provider_score_default
 test_provider_score_bayesian
+test_record_outcome_canonicalizes_provider_variants
+test_record_outcome_canonicalizes_alias
+test_provider_score_reads_legacy_variant_rows
+test_provider_ranking_uses_registry_inventory
+test_provider_ranking_fairness_has_no_fixed_whitelist
 
 # Cost Routing
 test_detect_trivial_typo

@@ -6,12 +6,16 @@
 # Sourced by orchestrate.sh. All functions are prefixed or namespaced
 # to avoid collisions with the main script.
 
-# count_words() lives in lib/utils.sh; pull it in when this file is sourced
-# standalone (tests do) rather than through orchestrate.sh's load order.
+# Shared dependencies must also load when this file is sourced standalone.
+_INTELLIGENCE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -f count_words >/dev/null 2>&1; then
-    if ! source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/utils.sh"; then
+    source "${_INTELLIGENCE_LIB_DIR}/utils.sh" || { return 1 2>/dev/null || exit 1; }
+fi
+if ! declare -f octo_provider_canonical >/dev/null 2>&1; then
+    source "${_INTELLIGENCE_LIB_DIR}/provider-registry.sh" || {
+        echo "intelligence: failed to load provider registry" >&2
         return 1 2>/dev/null || exit 1
-    fi
+    }
 fi
 
 # Source guard — prevent double-loading
@@ -122,113 +126,112 @@ octo_db_append() {
 # Ships in shadow mode by default
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Record an agent outcome to telemetry
-# Usage: record_outcome <provider> <agent_type> <task_type> <phase> <outcome> <duration_ms>
-record_outcome() {
-    local provider="$1"
-    local agent_type="$2"
-    local task_type="$3"
-    local phase="$4"
-    local outcome="$5"
-    local duration_ms="$6"
+# Resolve provider IDs, aliases, and agent variants to canonical identity.
+_intelligence_canonical_provider() {
+    local requested="$1" canonical
+    canonical="$(octo_provider_canonical "$requested" 2>/dev/null || true)"
+    printf '%s\n' "${canonical:-$requested}"
+}
 
-    [[ "${OCTOPUS_PROVIDER_INTELLIGENCE:-shadow}" == "off" ]] && return 0
-
-    local telemetry_file="${WORKSPACE_DIR:-.}/.octo/provider-telemetry.jsonl"
-    local timestamp
-    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +%s)
-
-    local entry
+# Emit canonical provider/outcome pairs from current or legacy telemetry rows.
+# Canonicalization on read keeps old rows useful without rewriting user data.
+_intelligence_provider_outcomes() {
+    local telemetry_file="$1" line provider outcome canonical
+    [[ -f "$telemetry_file" ]] || return 0
     if _intelligence_has_jq; then
-        entry=$(jq -n -c \
-            --arg p "$provider" \
-            --arg a "$agent_type" \
-            --arg t "$task_type" \
-            --arg ph "$phase" \
-            --arg o "$outcome" \
-            --arg d "$duration_ms" \
-            --arg ts "$timestamp" \
-            '{provider:$p, agent:$a, task_type:$t, phase:$ph, outcome:$o, duration_ms:($d|tonumber), timestamp:$ts}' 2>/dev/null)
-    else
-        entry="{\"provider\":\"$provider\",\"agent\":\"$agent_type\",\"task_type\":\"$task_type\",\"phase\":\"$phase\",\"outcome\":\"$outcome\",\"duration_ms\":$duration_ms,\"timestamp\":\"$timestamp\"}"
+        while IFS='|' read -r provider outcome; do
+            [[ -n "$provider" && -n "$outcome" ]] || continue
+            canonical="$(_intelligence_canonical_provider "$provider")"
+            printf '%s|%s\n' "$canonical" "$outcome"
+        done < <(jq -r 'select(.provider and .outcome) | [.provider,.outcome] | join("|")' "$telemetry_file" 2>/dev/null)
+        return 0
     fi
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        provider=$(printf '%s\n' "$line" | sed -n 's/.*"provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        outcome=$(printf '%s\n' "$line" | sed -n 's/.*"outcome"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        [[ -n "$provider" && -n "$outcome" ]] || continue
+        canonical="$(_intelligence_canonical_provider "$provider")"
+        printf '%s|%s\n' "$canonical" "$outcome"
+    done < "$telemetry_file"
+}
 
+# Record canonical provider identity while preserving the concrete agent/variant.
+record_outcome() {
+    local provider_input="$1" agent_type="$2" task_type="$3" phase="$4" outcome="$5" duration_ms="$6"
+    local provider
+    provider="$(_intelligence_canonical_provider "$provider_input")"
+    [[ "${OCTOPUS_PROVIDER_INTELLIGENCE:-shadow}" == "off" ]] && return 0
+    local telemetry_file="${WORKSPACE_DIR:-.}/.octo/provider-telemetry.jsonl" timestamp entry
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +%s)
+    if _intelligence_has_jq; then
+        entry=$(jq -n -c --arg p "$provider" --arg pi "$provider_input" --arg a "$agent_type" \
+            --arg t "$task_type" --arg ph "$phase" --arg o "$outcome" --arg d "$duration_ms" --arg ts "$timestamp" \
+            '{provider:$p,agent:$a,task_type:$t,phase:$ph,outcome:$o,duration_ms:($d|tonumber),timestamp:$ts}
+             + (if $pi != $p then {provider_input:$pi} else {} end)' 2>/dev/null)
+    else
+        local provider_input_json=""
+        [[ "$provider_input" != "$provider" ]] && provider_input_json=",\"provider_input\":\"$provider_input\""
+        entry="{\"provider\":\"$provider\",\"agent\":\"$agent_type\",\"task_type\":\"$task_type\",\"phase\":\"$phase\",\"outcome\":\"$outcome\",\"duration_ms\":$duration_ms,\"timestamp\":\"$timestamp\"${provider_input_json}}"
+    fi
     octo_db_append "$telemetry_file" "$entry" 500
-
     log "DEBUG" "Intelligence: recorded $outcome for $provider/$agent_type ($task_type, ${duration_ms}ms)" 2>/dev/null || true
 }
 
-# Get Bayesian provider score
-# Formula: (successes + 3.5) / (successes + failures + 5) — prior: 0.7, weight: 5
-# Usage: get_provider_score <provider>
-get_provider_score() {
-    local provider="$1"
-    local telemetry_file="${WORKSPACE_DIR:-.}/.octo/provider-telemetry.jsonl"
-    local default_score="0.70"
-
-    [[ -f "$telemetry_file" ]] || { echo "$default_score"; return 0; }
-
-    local successes=0 failures=0
-
-    if _intelligence_has_jq; then
-        successes=$(grep "\"provider\":\"$provider\"" "$telemetry_file" 2>/dev/null | grep '"outcome":"success"' | wc -l | tr -d ' ')
-        failures=$(grep "\"provider\":\"$provider\"" "$telemetry_file" 2>/dev/null | grep -E '"outcome":"(fail|timeout)"' | wc -l | tr -d ' ')
-    else
-        successes=$(grep -c "\"provider\":\"$provider\".*\"outcome\":\"success\"" "$telemetry_file" 2>/dev/null) || successes=0
-        failures=$(grep -c "\"provider\":\"$provider\".*\"outcome\":\"fail\|timeout\"" "$telemetry_file" 2>/dev/null) || failures=0
-    fi
-
-    local total=$((successes + failures))
-    if [[ $total -lt 5 ]]; then
-        echo "$default_score"
-        return 0
-    fi
-
-    # Bayesian score with prior (0.7, weight 5)
-    # score = (successes + 3.5) / (successes + failures + 5)
-    # Use bc for floating point, fall back to awk
-    local score
+_intelligence_score_from_outcomes() {
+    local provider="$1" canonical_outcomes="$2" default_score="0.70"
+    local successes=0 failures=0 recorded_provider recorded_outcome
+    while IFS='|' read -r recorded_provider recorded_outcome; do
+        [[ "$recorded_provider" == "$provider" ]] || continue
+        case "$recorded_outcome" in
+            success) successes=$((successes + 1)) ;;
+            fail|timeout) failures=$((failures + 1)) ;;
+        esac
+    done <<EOF
+$canonical_outcomes
+EOF
+    local total=$((successes + failures)) score
+    [[ $total -lt 5 ]] && { echo "$default_score"; return 0; }
     if command -v bc &>/dev/null; then
         score=$(echo "scale=2; ($successes + 3.5) / ($successes + $failures + 5)" | bc 2>/dev/null)
     else
         score=$(awk "BEGIN { printf \"%.2f\", ($successes + 3.5) / ($successes + $failures + 5) }" 2>/dev/null)
     fi
-
     echo "${score:-$default_score}"
 }
 
-# Get provider ranking sorted by score descending
-# Includes fairness floor: providers with < 5% of tasks get priority sampling
-# Usage: get_provider_ranking
+get_provider_score() {
+    local requested="$1" provider telemetry_file="${WORKSPACE_DIR:-.}/.octo/provider-telemetry.jsonl"
+    provider="$(_intelligence_canonical_provider "$requested")"
+    [[ -f "$telemetry_file" ]] || { echo "0.70"; return 0; }
+    _intelligence_score_from_outcomes "$provider" "$(_intelligence_provider_outcomes "$telemetry_file")"
+}
+
 get_provider_ranking() {
-    local telemetry_file="${WORKSPACE_DIR:-.}/.octo/provider-telemetry.jsonl"
-    local providers="codex gemini claude"
-
-    if [[ ! -f "$telemetry_file" ]]; then
-        echo "$providers"
-        return 0
-    fi
-
-    local total_tasks
-    total_tasks=$(wc -l < "$telemetry_file" 2>/dev/null | tr -d ' ')
-    local fairness_threshold=$((total_tasks * 5 / 100))  # 5% floor
+    local telemetry_file="${WORKSPACE_DIR:-.}/.octo/provider-telemetry.jsonl" providers
+    providers="$(octo_provider_ids dispatch)"
+    [[ -f "$telemetry_file" ]] || { echo "$providers"; return 0; }
+    local canonical_outcomes total_tasks=0 recorded_provider recorded_outcome
+    canonical_outcomes="$(_intelligence_provider_outcomes "$telemetry_file")"
+    while IFS='|' read -r recorded_provider recorded_outcome; do
+        [[ -n "$recorded_provider" ]] && total_tasks=$((total_tasks + 1))
+    done <<EOF
+$canonical_outcomes
+EOF
+    local fairness_threshold=$((total_tasks * 5 / 100))
     [[ $fairness_threshold -lt 3 ]] && fairness_threshold=3
-
-    local ranked=""
+    local ranked="" p count score
     for p in $providers; do
-        local count
-        count=$(grep -c "\"provider\":\"$p\"" "$telemetry_file" 2>/dev/null) || count=0
-        local score
-        score=$(get_provider_score "$p")
-
-        # Boost score for undersampled providers (fairness floor)
-        if [[ $count -lt $fairness_threshold && $total_tasks -gt 20 ]]; then
-            score="0.99"  # Force to top for sampling
-        fi
-
+        count=0
+        while IFS='|' read -r recorded_provider recorded_outcome; do
+            [[ "$recorded_provider" == "$p" ]] && count=$((count + 1))
+        done <<EOF
+$canonical_outcomes
+EOF
+        score=$(_intelligence_score_from_outcomes "$p" "$canonical_outcomes")
+        [[ $count -lt $fairness_threshold && $total_tasks -gt 20 ]] && score="0.99"
         ranked+="$score $p\n"
     done
-
     echo -e "$ranked" | sort -rn | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//'
 }
 
