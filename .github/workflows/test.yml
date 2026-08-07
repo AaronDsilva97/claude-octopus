@@ -19,6 +19,20 @@ on:
 permissions:
   contents: read
 
+# Two pull_request runs for the same SHA have repeatedly raced here, and the
+# loser is reported as a failed required check even though the winner passed —
+# which blocked merges four times while the underlying tests were green.
+# Collapse duplicates per PR so only the newest run reports.
+#
+# cancel-in-progress is deliberately restricted to pull_request. A main-branch
+# run must never be cancelled: RELEASING.md step 9 gates the release tag on the
+# Test Suite for the exact post-squash commit, and cancelling it would either
+# block a valid release or, worse, leave main unverified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+
 jobs:
   classify-changes:
     name: Classify Changes
