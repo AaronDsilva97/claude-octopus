@@ -1202,6 +1202,125 @@ tangle_validate_parallel_write_scopes() {
 }
 
 
+tangle_consolidate_overlapping_subtasks() {
+    local subtasks="$1"
+    local lines=()
+    local coding_lines=()
+    local coding_scopes=()
+    local parent=()
+    local line
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        tangle_line_is_numbered_subtask "$line" || continue
+        lines+=("$line")
+        if [[ "$line" =~ \[CODING\] ]]; then
+            local subtask scopes effective_scopes=""
+            subtask=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//; s/^[[:space:]]+//')
+            scopes=$(tangle_extract_write_scopes "$subtask")
+            while IFS= read -r scope; do
+                [[ -z "$scope" ]] && continue
+                if tangle_scope_is_known_or_explicit_new_file "$scope"; then
+                    effective_scopes="${effective_scopes}${scope}"$'\n'
+                else
+                    local resolved_scopes
+                    resolved_scopes=$(tangle_resolve_repo_context_files "$subtask")
+                    if [[ -n "$resolved_scopes" ]]; then
+                        effective_scopes="${effective_scopes}${resolved_scopes}"$'\n'
+                    else
+                        effective_scopes="${effective_scopes}${scope}"$'\n'
+                    fi
+                fi
+            done <<< "$scopes"
+            effective_scopes=$(printf '%s\n' "$effective_scopes" | sed '/^$/d' | sort -u)
+            coding_lines+=("$line")
+            coding_scopes+=("$effective_scopes")
+            parent+=("$((${#parent[@]}))")
+        fi
+    done <<< "$subtasks"
+
+    local coding_count=${#coding_lines[@]}
+    [[ $coding_count -gt 1 ]] || { printf '%s\n' "$subtasks"; return 0; }
+
+    local i j left right root_i root_j
+    for ((i=0; i<coding_count; i++)); do
+        for ((j=i+1; j<coding_count; j++)); do
+            local overlaps=false
+            while IFS= read -r left; do
+                [[ -z "$left" ]] && continue
+                while IFS= read -r right; do
+                    [[ -z "$right" ]] && continue
+                    if tangle_scopes_overlap "$left" "$right"; then
+                        overlaps=true
+                        break
+                    fi
+                done <<< "${coding_scopes[$j]}"
+                [[ "$overlaps" == true ]] && break
+            done <<< "${coding_scopes[$i]}"
+            if [[ "$overlaps" == true ]]; then
+                root_i=$i
+                while [[ ${parent[$root_i]} -ne $root_i ]]; do root_i=${parent[$root_i]}; done
+                root_j=$j
+                while [[ ${parent[$root_j]} -ne $root_j ]]; do root_j=${parent[$root_j]}; done
+                [[ $root_i -eq $root_j ]] || parent[$root_j]=$root_i
+            fi
+        done
+    done
+
+    for ((i=0; i<coding_count; i++)); do
+        root_i=$i
+        while [[ ${parent[$root_i]} -ne $root_i ]]; do root_i=${parent[$root_i]}; done
+        parent[$i]=$root_i
+    done
+
+    local output="" output_index=0 coding_index=0 current_position
+    for ((current_position=0; current_position<${#lines[@]}; current_position++)); do
+        line=${lines[$current_position]}
+        if [[ ! "$line" =~ \[CODING\] ]]; then
+            ((output_index++)) || true
+            local reasoning_body
+            reasoning_body=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//')
+            output="${output}${output_index}. ${reasoning_body}"$'\n'
+            continue
+        fi
+
+        root_i=${parent[$coding_index]}
+        if [[ $root_i -ne $coding_index ]]; then
+            ((coding_index++)) || true
+            continue
+        fi
+
+        local member_count=0 merged_scopes="" merged_tasks="" member
+        for ((member=0; member<coding_count; member++)); do
+            [[ ${parent[$member]} -eq $root_i ]] || continue
+            ((member_count++)) || true
+            merged_scopes="${merged_scopes}${coding_scopes[$member]}"$'\n'
+            local task_text
+            task_text=$(printf '%s\n' "${coding_lines[$member]}" | sed -nE 's/.*[[:space:]]Task:[[:space:]]*//p')
+            if [[ -z "$task_text" ]]; then
+                task_text=$(printf '%s\n' "${coding_lines[$member]}" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//; s/[[:space:]]+[—-][[:space:]]+Files:.*$//')
+            fi
+            [[ -z "$merged_tasks" ]] || merged_tasks="${merged_tasks}; "
+            merged_tasks="${merged_tasks}${task_text}"
+        done
+
+        ((output_index++)) || true
+        if [[ $member_count -eq 1 ]]; then
+            local coding_body
+            coding_body=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//')
+            output="${output}${output_index}. ${coding_body}"$'\n'
+        else
+            local scopes_csv
+            scopes_csv=$(printf '%s\n' "$merged_scopes" | sed '/^$/d' | sort -u | awk 'BEGIN { first=1 } { if (!first) printf ", "; printf "%s", $0; first=0 } END { print "" }')
+            output="${output}${output_index}. [CODING] Consolidated parallel-safe scope — Files: ${scopes_csv} — Task: ${merged_tasks}"$'\n'
+        fi
+        ((coding_index++)) || true
+    done
+
+    printf '%s' "$output"
+}
+
+
 octo_bool_disabled() {
     case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
         0|false|off|no|disabled) return 0 ;;
@@ -2358,8 +2477,18 @@ Every [CODING] line must include a same-line Files: clause."
     fi
 
     if ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
-        log ERROR "Unsafe parallel decomposition after retry: ${parallel_safety_reason}; refusing monolithic direct fallback"
-        return 1
+        log WARN "Reformatted decomposition still overlaps (${parallel_safety_reason}); consolidating connected coding scopes"
+        subtasks=$(tangle_consolidate_overlapping_subtasks "$subtasks")
+        echo -e "${CYAN}Consolidated subtasks:${NC}"
+        echo "$subtasks"
+        echo ""
+        parseable_subtask_count=$(tangle_parseable_subtask_count "$subtasks")
+        parseable_coding_subtask_count=$(tangle_parseable_coding_subtask_count "$subtasks")
+        parallel_safety_reason=""
+        if [[ $parseable_subtask_count -eq 0 || $parseable_coding_subtask_count -eq 0 ]] || ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
+            log ERROR "Unsafe parallel decomposition after deterministic consolidation: ${parallel_safety_reason:-no parseable coding subtasks}; refusing direct fallback"
+            return 1
+        fi
     fi
 
     # Step 2: Parallel execution with progress tracking

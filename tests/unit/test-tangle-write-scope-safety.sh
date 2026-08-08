@@ -53,8 +53,11 @@ run_agent_sync() {
 EOF
 }
 spawn_agent_capture_pid() {
-    PARALLEL_SPAWNED=true
-    printf '12345\n'
+    local task_id="$3"
+    touch "$RESULTS_DIR/parallel.spawned"
+    mkdir -p "$WORKSPACE_DIR/.octo/agents"
+    printf '0\n' > "$WORKSPACE_DIR/.octo/agents/${task_id}.done"
+    printf '%s\n' "$$"
 }
 spawn_agent() {
     DIRECT_PROMPT="$2"
@@ -154,25 +157,25 @@ original_prompt="Update src/lib/templates/NA02_REQUEST_REPORT.ts and src/lib/leg
 
 tangle_develop "$original_prompt" >/dev/null && TANGLE_STATUS=0 || TANGLE_STATUS=$?
 
-test_case "overlapping coding scopes fail closed"
-if [[ "$TANGLE_STATUS" -ne 0 ]] && [[ "$PARALLEL_SPAWNED" == "false" ]]; then
+test_case "repairable overlapping coding scopes are consolidated and dispatched"
+if [[ "$TANGLE_STATUS" -eq 0 ]] && [[ -f "$RESULTS_DIR/parallel.spawned" ]]; then
     test_pass
 else
-    test_fail "overlapping write scopes did not fail closed before parallel spawn"
+    test_fail "repairable overlap did not consolidate into a runnable decomposition"
 fi
 
-test_case "unsafe decomposition does not spawn direct fallback"
+test_case "repairable overlap does not spawn direct fallback"
 if [[ -z "$DIRECT_TASK_ID" && -z "$DIRECT_PROMPT" ]]; then
     test_pass
 else
-    test_fail "direct fallback was spawned despite unsafe decomposition"
+    test_fail "direct fallback was spawned despite deterministic overlap repair"
 fi
 
-test_case "unsafe fail-closed path returns before tangle validation"
-if [[ "$VALIDATION_CALLED" == "false" ]]; then
+test_case "repaired decomposition reaches tangle validation"
+if [[ "$VALIDATION_CALLED" == "true" ]]; then
     test_pass
 else
-    test_fail "validation ran even though unsafe decomposition was not spawned"
+    test_fail "validation did not run after deterministic overlap repair"
 fi
 
 test_summary
