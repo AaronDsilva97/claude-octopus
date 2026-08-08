@@ -350,6 +350,35 @@ MOCK_AGY
     fi
 }
 
+test_agy_print_timeout_gets_a_unit() {
+    test_case "a bare-number OCTOPUS_AGY_PRINT_TIMEOUT is unit-suffixed for agy's Go duration"
+
+    local tmp_bin="$TEST_TMP_DIR/agy-timeout-bin"
+    local capture="$TEST_TMP_DIR/agy-timeout-argv.txt"
+    mkdir -p "$tmp_bin"
+    cat > "$tmp_bin/agy" <<'MOCK_AGY'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${AGY_ARG_CAPTURE:?}"
+echo "mock-response"
+exit 0
+MOCK_AGY
+    chmod +x "$tmp_bin/agy"
+
+    # agy rejects a bare integer: `--print-timeout 600` -> "missing unit in duration".
+    # The adapter must pass 600s so the seat isn't taken down (exit 2).
+    printf 'hi' | OCTOPUS_AGY_PRINT_TIMEOUT=600 OCTOPUS_AGY_FORCE_INLINE=0 \
+        AGY_ARG_CAPTURE="$capture" PATH="$tmp_bin:$PATH" \
+        bash "$PROJECT_ROOT/scripts/helpers/agy-exec.sh" >/dev/null
+
+    local next
+    next="$(grep -Fx -A1 -- '--print-timeout' "$capture" | tail -1)"
+    if [[ "$next" == "600s" ]]; then
+        test_pass
+    else
+        test_fail "expected argv '--print-timeout' followed by '600s', got: $(tr '\n' '|' < "$capture")"
+    fi
+}
+
 test_gemini_via_agy_option() {
     test_case "OCTOPUS_GEMINI_VIA_AGY serves gemini seats through agy"
 
@@ -993,6 +1022,7 @@ test_agy_config_exists
 test_agy_available_agent
 test_agy_model_config_provider
 test_agy_dispatch_native_flags
+test_agy_print_timeout_gets_a_unit
 test_agy_print_receives_prompt_argument
 test_agy_force_inline_directive_prepended_by_default
 test_agy_file_prompt_directive_permits_reading_prompt_file

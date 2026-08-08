@@ -9,6 +9,19 @@ set -euo pipefail
 MCP_MEMORY_CMD="${OCTOPUS_MCP_MEMORY_CMD:-uvx mcp-memory-service}"
 MCP_MEMORY_TIMEOUT=5
 
+# macOS ships neither `timeout` nor `gtimeout`; calling `timeout` directly there is a
+# latent `command not found` (127). Guard it (mirrors scripts/lib/spawn.sh): use GNU
+# `timeout`/`gtimeout` when present, otherwise run the tool directly.
+_mcp_run() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$MCP_MEMORY_TIMEOUT" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$MCP_MEMORY_TIMEOUT" "$@"
+    else
+        "$@"
+    fi
+}
+
 # Detect presence without spawning the full tool (uvx would pull Torch/CUDA).
 _mcp_memory_cli_ready() {
     local bin="${MCP_MEMORY_CMD%% *}"
@@ -24,7 +37,7 @@ mcp_memory_search() {
     local query="${1:-}" limit="${2:-5}" scope="${3:-}"
     _mcp_memory_cli_ready || { echo ""; return 0; }
     # shellcheck disable=SC2086
-    timeout "$MCP_MEMORY_TIMEOUT" $MCP_MEMORY_CMD query \
+    _mcp_run $MCP_MEMORY_CMD query \
         --json \
         ${scope:+--project "$scope"} \
         --limit "$limit" \
@@ -35,7 +48,7 @@ mcp_memory_observe() {
     local obs_type="${1:-note}" title="${2:-}" text="${3:-}" scope="${4:-}"
     _mcp_memory_cli_ready || return 0
     # shellcheck disable=SC2086
-    timeout "$MCP_MEMORY_TIMEOUT" $MCP_MEMORY_CMD store \
+    _mcp_run $MCP_MEMORY_CMD store \
         --tag "$obs_type" \
         --tag "octopus" \
         ${scope:+--project "$scope"} \

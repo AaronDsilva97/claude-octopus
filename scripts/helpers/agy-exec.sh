@@ -24,6 +24,14 @@ set -euo pipefail
 # run with OCTOPUS_AGY_MODEL if you want a specific model.
 model="${OCTOPUS_AGY_MODEL:-default}"
 print_timeout="${OCTOPUS_AGY_PRINT_TIMEOUT:-5m0s}"
+# agy's --print-timeout is a Go duration and REQUIRES a unit: a bare integer fails hard
+# with `invalid value "600" for flag -print-timeout: missing unit in duration "600"`
+# (exit 2), taking the whole seat down. Treat a plain number as seconds so a caller can
+# pass either "600" or a unit-suffixed value ("600s", "5m0s").
+case "$print_timeout" in
+    ''|*[!0-9]*) ;;                          # empty or already unit-suffixed — leave as-is
+    *) print_timeout="${print_timeout}s" ;;  # bare integer → seconds
+esac
 
 # agy (jetski) resolves its home/log/AppData config dir by expanding %USERPROFILE%.
 # On Windows/Git Bash the orchestrator's spawn context can drop USERPROFILE from
