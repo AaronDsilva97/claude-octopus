@@ -1,7 +1,7 @@
 {
   "name": "octo",
-  "version": "9.60.0",
-  "description": "v9.60.0 \u2014 Provider identity from one registry, grok and claude-sdk dispatch repaired, and duplicate test targets removed. Run /octo:setup.",
+  "version": "9.60.1",
+  "description": "v9.60.1 \u2014 grep -c arithmetic fix across 18 sites, Bash 3.2 floor enforced, provider intelligence via registry. Run /octo:setup.",
   "author": {
     "name": "nyldn",
     "url": "https://github.com/nyldn"
