@@ -435,6 +435,7 @@ resolve_octopus_model() {
             openrouter-glm*)  resolved_model="z-ai/glm-5" ;;
             openrouter-kimi*) resolved_model="moonshotai/kimi-k2.5" ;;
             openrouter-deepseek*) resolved_model="deepseek/deepseek-r1-0528" ;;
+            openrouter)      resolved_model="anthropic/claude-sonnet-4" ;; # bare openrouter needs a namespaced id (provider/model); matches get_openrouter_model's own general-task default (#797)
             openai-compatible|openai-tools|openai-compatible-agent*) resolved_model="${OPENAI_COMPAT_MODEL:-gpt-5.4}" ;;
             ollama*)         resolved_model="llama3.3" ;;
             copilot*)        resolved_model="claude-sonnet-4.5" ;; # Copilot default; actual model selected by copilot CLI
@@ -443,6 +444,9 @@ resolve_octopus_model() {
             opencode-research*) resolved_model="opencode/glm-5.1" ;;
             opencode-fast*)  resolved_model="opencode/deepseek-v4-flash-free" ;;
             opencode*)       resolved_model="opencode/deepseek-v4-flash-free" ;;
+            grok*)           resolved_model="default" ;; # xAI's own CLI default; dispatch.sh only adds --model when this is not "default" (#797)
+            vibe*)           resolved_model="default" ;; # model lives in ~/.vibe/config.toml; dispatch never passes --model for vibe (#797)
+            atlascloud*)     resolved_model="" ;; # no cross-vendor default exists — force explicit ATLASCLOUD_MODEL/OCTOPUS_ATLASCLOUD_MODEL/config (fails validation below), same as providers.sh's own availability check (#797)
             *)              resolved_model="$(codex_default_model)" ;; # Safest universal fallback
         esac
         [[ -n "$_trace" ]] && echo "[model-trace] Tier 7 (hardcoded fallback): $resolved_model ← SELECTED" >&2
