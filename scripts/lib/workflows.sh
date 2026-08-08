@@ -3698,7 +3698,18 @@ ${obs_ctx}"
         echo ""
 
         local yaml_result
-        yaml_result=$(run_yaml_workflow "embrace" "$prompt" "$task_group")
+        if ! yaml_result=$(run_yaml_workflow "embrace" "$prompt" "$task_group"); then
+            # run_yaml_workflow runs in a command-substitution subshell, so its
+            # phase exports cannot reach this scope. It records the failed
+            # phase in session.json before returning — read it from there.
+            local _failed_phase=""
+            if command -v jq &>/dev/null && [[ -f "${HOME}/.claude-octopus/session.json" ]]; then
+                _failed_phase=$(jq -r '.current_phase // empty' "${HOME}/.claude-octopus/session.json" 2>/dev/null)
+            fi
+            _abort_embrace_phase "${_failed_phase:-unknown}" \
+                "YAML runtime failed" "$yaml_result"
+            return 1
+        fi
 
         # Mark workflow complete
         export OCTOPUS_WORKFLOW_PHASE="complete"
