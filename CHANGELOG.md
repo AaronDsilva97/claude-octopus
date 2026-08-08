@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
+## [9.60.1] - 2026-08-08
+
 ### Fixed
 
 - **`grep -c ... || echo 0` broke arithmetic on every no-match, in 18 places.** `grep -c` prints `0` *and* exits 1 when nothing matches, so the `||` fired and appended a second zero; the variable became the two-line value `$'0\n0'` and the next numeric comparison died with `syntax error in expression (error token is "0")`. Two hooks hit it on ordinary input: `done-criteria.sh` on any prompt over 30 characters with no bullet lines, and `output-compressor.sh` on any verbose output with no timestamps. `scripts/lib/heuristics.sh:24` had documented this exact trap and fixed it locally with `safe_count()`, but the pattern survived everywhere else — so the fix is repo-wide and `tests/unit/test-grep-c-arithmetic.sh` now guards it, because a comment cannot enforce a rule. (closes #786, closes #787)
 - **The declared Bash 3.2 floor was unenforced, and production code violated it.** `CLAUDE.md` sets the floor because macOS ships `/bin/bash` 3.2.57, but Portability Lint only checked GNU-only `sed` patterns and never scanned `tests/`. CI could not catch violations either: GitHub's macOS runner resolves `#!/usr/bin/env bash` to Homebrew bash 5, so a `declare -A` passes there and dies on a maintainer's stock shell. Adding the check immediately found `scripts/async-tmux-features.sh:211` using `local -A`, in a file `orchestrate.sh` sources unconditionally — `wait_async_agents()` aborted at once with `local: -A: invalid option`. Rewritten to track completion as a space-delimited PID set. (#785)
+
+- **Provider intelligence now resolves identity through the registry.** Telemetry scoring kept its own notion of provider identity, so agent variants and aliases were counted as separate providers. Canonicalization happens on read, which keeps existing telemetry rows useful without rewriting user data: `codex-fast` aggregates into `codex`, `antigravity` into `agy`, `claude-sonnet` into `claude`, and an unregistered ID passes through unchanged rather than being dropped. (#784)
+- **28 test suites that no CI gate ran are now in the unit gate.** The unreachable count drops from 34 to 9. Relocation was not a rename: five distinct path forms resolve differently one directory deeper, and only one of them fails loudly — the rest silently resolve to `tests/` and produce a green test asserting nothing. Five further suites stayed out deliberately, because they assert that provider CLIs are installed and would make CI depend on third-party binaries. (closes #741)
 
 ## [9.60.0] - 2026-08-06
 
