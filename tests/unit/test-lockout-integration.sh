@@ -19,54 +19,13 @@ LOCKED_PROVIDERS=""
 # Minimal log stub for lock_provider's log call
 log() { :; }
 
-lock_provider() {
-    local provider="$1"
-    if ! echo "$LOCKED_PROVIDERS" | grep -qw "$provider"; then
-        LOCKED_PROVIDERS="${LOCKED_PROVIDERS:+$LOCKED_PROVIDERS }$provider"
-        log WARN "Provider locked out: $provider (will not self-revise)"
-    fi
-}
+# Source the real implementation instead of copying it. These suites
+# previously defined their own get_alternate_provider returning "gemini"
+# and asserted against that copy, so they passed while production policy
+# said otherwise — a test that cannot fail for the right reason.
+# shellcheck source=/dev/null
+source "$PROJECT_ROOT/scripts/lib/provider-lockout.sh"
 
-is_provider_locked() {
-    local provider="$1"
-    echo "$LOCKED_PROVIDERS" | grep -qw "$provider"
-}
-
-get_alternate_provider() {
-    local locked_provider="$1"
-    case "$locked_provider" in
-        codex|codex-fast|codex-mini)
-            if ! is_provider_locked "gemini"; then
-                echo "gemini"
-            elif ! is_provider_locked "claude-sonnet"; then
-                echo "claude-sonnet"
-            else
-                echo "$locked_provider"
-            fi
-            ;;
-        gemini|gemini-fast)
-            if ! is_provider_locked "codex"; then
-                echo "codex"
-            elif ! is_provider_locked "claude-sonnet"; then
-                echo "claude-sonnet"
-            else
-                echo "$locked_provider"
-            fi
-            ;;
-        claude-sonnet|claude*)
-            if ! is_provider_locked "codex"; then
-                echo "codex"
-            elif ! is_provider_locked "gemini"; then
-                echo "gemini"
-            else
-                echo "$locked_provider"
-            fi
-            ;;
-        *)
-            echo "$locked_provider"
-            ;;
-    esac
-}
 
 test_suite "Lockout Protocol Integration (v8.18.0)"
 
@@ -99,7 +58,7 @@ test_locked_provider_gets_alternate() {
     local alt
     alt=$(get_alternate_provider "codex")
 
-    if [[ "$alt" == "gemini" ]]; then
+    if [[ "$alt" == "agy" ]]; then
         test_pass
     else
         test_fail "codex should alternate to gemini, got: $alt"
