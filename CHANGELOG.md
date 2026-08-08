@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [9.61.0] - 2026-08-08
+
+### Added
+
+- **AI surface audit in the design skill.** Style guides answer what an interface looks like; nothing answered what an AI feature must *show* and let a user *control*. `skill-ui-ux-design` now runs seven recorded-answer questions when the thing being designed calls a model — uncertainty, provenance, interruption, review-gate placement, failure and degradation states, consent, and rollback — reusing `skill-intent-contract`'s agency triad rather than re-deriving it. Folded into the existing skill rather than added as a 58th, so it does not compete for discovery. It ships no thresholds: the AI Interaction Atlas publishes none, and inventing confidence cutoffs would attribute numbers to a source that does not have them. Note the host skill is human-only, so this surfaces when a user asks for it rather than automatically. (closes #701)
+- **Phase context slots.** Phases handed off by interpolating a prior phase's prose into the next prompt, so anything the sending phase knew but did not write into that string was lost at the boundary with nothing recording it. `save_phase_slot`/`get_phase_slot`/`list_phase_slots` sit alongside the existing `.phases` registry — that records status and output, these record content a later phase reads by key. `research.sh` is wired as a real consumer so the contract is exercised, not merely available. Slots are additive per phase and overwritten per key; an unfilled slot reads empty so a missing handoff degrades to the current behaviour instead of aborting a run. (closes #724)
+
+### Fixed
+
+- **The background-permission prompt disclosed 2 of 15 billed providers.** `request_background_permission` asks the user to approve spending their own money and named only Codex and Gemini. A run dispatching grok, qwen, perplexity, copilot, openrouter, agy, atlascloud, opencode, commandcode or cursor-agent asked for approval while showing only "Claude — included with Claude Code", which reads as costing nothing. Verified: a `grok qwen perplexity` run disclosed zero billed seats and now names all three with their billing organization. Disclosure is derived from the provider registry, and an unregistered provider is still disclosed rather than skipped — staying silent because the registry lagged was the original failure. Found proactively by diffing hardcoded provider lists against the registry, the same drift behind #696, #697, #705 and #769; unlike those, this one raised no error for a user to report.
+- **`/octo:embrace`'s YAML runtime completed while its phases raced.** Sequential (`parallel: false`) agents were never awaited, so a phase synthesized and moved on while its final agent was still running — diagnosed by correlating result-file mtimes against the run log, with one synthesis written 42 seconds before the agent it summarized finished. Also repairs per-phase quality-gate thresholds and the stdout contract. (#782)
+- **Overlapping tangle subtasks are consolidated instead of aborting the run.** Transitively overlapping write scopes now collapse into one component, rather than letting parallel agents write the same paths. (#788)
+- **The governed council failed under Claude Code's sandbox on macOS**, falling back to single-provider dispatch and losing the multi-vendor council. Three independent causes, including `agy`'s `--print-timeout` requiring a Go duration unit — a bare `600` took the whole seat down with exit 2. (#790)
+
 ## [9.60.1] - 2026-08-08
 
 ### Fixed
