@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "nyldn plugins for Claude Code workflows.",
-    "version": "9.60.1"
+    "version": "9.61.0"
   },
   "plugins": [
     {
@@ -15,8 +15,8 @@
         "source": "url",
         "url": "https://github.com/nyldn/claude-octopus.git"
       },
-      "description": "v9.60.1 - grep -c arithmetic fix across 18 sites, Bash 3.2 floor enforced, provider intelligence via registry. 32 personas, 51 commands, 63 skills. Run /octo:setup.",
-      "version": "9.60.1",
+      "description": "v9.61.0 - AI surface audit, phase context slots, and full billed-provider disclosure in the permission prompt. 32 personas, 51 commands, 63 skills. Run /octo:setup.",
+      "version": "9.61.0",
       "author": {
         "name": "nyldn",
         "url": "https://github.com/nyldn"
