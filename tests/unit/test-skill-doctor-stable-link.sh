@@ -51,7 +51,7 @@ assert_resolver_preserves_stable_link() {
     fi
 
     if [[ "$host" == "claude" ]]; then
-        env \
+        env -u OCTO_PLUGIN_ROOT \
             "HOME=$fake_home" \
             "CLAUDE_PLUGIN_ROOT=$stable_link" \
             "DOCTOR_CALL_LOG=$call_log" \
@@ -61,6 +61,7 @@ assert_resolver_preserves_stable_link() {
         # resolver's stable-link discovery instead of its Claude host shortcut.
         env -u CLAUDE_PLUGIN_ROOT \
             "HOME=$fake_home" \
+            "OCTO_PLUGIN_ROOT=$stable_link" \
             "DOCTOR_CALL_LOG=$call_log" \
             bash "$resolver"
     fi
