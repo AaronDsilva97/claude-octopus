@@ -108,6 +108,7 @@ editing cache files or symlinks directly:
 codex plugin marketplace upgrade nyldn-plugins
 codex plugin add claude-octopus@nyldn-plugins
 ```
+
 </details>
 
 <details>

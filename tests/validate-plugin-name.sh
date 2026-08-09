@@ -51,6 +51,7 @@ fi
 
 CODEX_PLUGIN_NAME=$(grep '"name"' "$CODEX_PLUGIN_JSON" | head -1 | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
+test_case "Codex plugin name preserves marketplace selector"
 if [[ "$CODEX_PLUGIN_NAME" != "$EXPECTED_CODEX_NAME" ]]; then
     echo -e "${RED}❌ CRITICAL ERROR: Codex plugin name is incorrect!${NC}"
     echo ""
@@ -60,7 +61,9 @@ if [[ "$CODEX_PLUGIN_NAME" != "$EXPECTED_CODEX_NAME" ]]; then
     echo "The Codex manifest name MUST preserve the installed marketplace selector."
     echo "Otherwise, 'codex plugin add claude-octopus@nyldn-plugins' rejects the plugin."
     echo ""
-    exit 1
+    test_fail "Codex plugin name must be '$EXPECTED_CODEX_NAME', found '$CODEX_PLUGIN_NAME'"
+else
+    test_pass
 fi
 
 # Also validate that package.json has correct name
@@ -75,6 +78,6 @@ if [[ -f "$PACKAGE_JSON" ]]; then
 fi
 
 echo -e "${GREEN}✅ Plugin name is correct: \"$PLUGIN_NAME\"${NC}"
-echo -e "${GREEN}✅ Codex plugin name is correct: \"$CODEX_PLUGIN_NAME\"${NC}"
+[[ "$CODEX_PLUGIN_NAME" == "$EXPECTED_CODEX_NAME" ]] && echo -e "${GREEN}✅ Codex plugin name is correct: \"$CODEX_PLUGIN_NAME\"${NC}"
 echo "   Commands will work as: /octo:discover, /octo:debate, etc."
 test_summary
