@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [9.61.2] - 2026-08-09
+
+### Changed
+
+- Honor OCTOPUS_OLLAMA_MODEL, OCTOPUS_COPILOT_MODEL, and OCTOPUS_VIBE_MODEL pins
+
 ## [9.61.1] - 2026-08-09
 
 ### Changed
