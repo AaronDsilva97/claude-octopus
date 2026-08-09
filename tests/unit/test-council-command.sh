@@ -745,6 +745,7 @@ _council_gate_pty_run() {
     cat > "$tmp_script" <<SCRIPT
 #!/usr/bin/env bash
 $env_prefix
+unset OCTOPUS_COUNCIL_APPROVED_GATES
 source "$PROJECT_ROOT/scripts/lib/council.sh"
 council_prompt_gate_approval gate-a "Gate A: accept council synthesis?"
 echo \$? > "$status_file"
@@ -826,7 +827,7 @@ test_council_gate_approval_denies_when_no_tty_present() {
 
     local out status
     set +e
-    out="$(unset CI OCTOPUS_NON_INTERACTIVE CLAUDE_CODE_REMOTE CLAUDE_CODE_WEB OCTOPUS_REMOTE_SESSION OCTOPUS_AUTONOMY
+    out="$(unset CI OCTOPUS_NON_INTERACTIVE CLAUDE_CODE_REMOTE CLAUDE_CODE_WEB OCTOPUS_REMOTE_SESSION OCTOPUS_AUTONOMY OCTOPUS_COUNCIL_APPROVED_GATES
         council_prompt_gate_approval gate-a "Gate A: accept council synthesis?" </dev/null 2>&1)"
     status=$?
     set -e
