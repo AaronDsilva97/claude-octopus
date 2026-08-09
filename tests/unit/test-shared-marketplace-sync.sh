@@ -299,6 +299,8 @@ test_shared_marketplace_sync_updates_only_octo() {
     local sync_output="$TMP_DIR/octo-shared-marketplace-sync.out"
     local check_output="$TMP_DIR/octo-shared-marketplace-check2.out"
     local drift_output="$TMP_DIR/octo-shared-marketplace-codex-drift.out"
+    local duplicate_output="$TMP_DIR/octo-shared-marketplace-codex-duplicate.out"
+    local source_output="$TMP_DIR/octo-shared-marketplace-codex-source.out"
     create_shared_marketplace_remote "$remote" "$seed"
 
     test_case "--check fails when shared octo entry is stale"
@@ -344,6 +346,32 @@ test_shared_marketplace_sync_updates_only_octo() {
         test_pass
     else
         test_fail "expected Codex selector mismatch diagnostic; output: $(cat "$drift_output" 2>/dev/null)"
+    fi
+
+    test_case "--check rejects duplicate Codex marketplace selectors"
+    git -C "$work" show HEAD:.agents/plugins/marketplace.json > "$work/.agents/plugins/marketplace.json"
+    jq '.plugins += [.plugins[] | select(.name == "claude-octopus")]' \
+        "$work/.agents/plugins/marketplace.json" > "$work/.agents/plugins/marketplace.json.tmp"
+    mv "$work/.agents/plugins/marketplace.json.tmp" "$work/.agents/plugins/marketplace.json"
+    if "$SYNC_SCRIPT" --repo "$remote" --workdir "$work" --check >"$duplicate_output" 2>&1; then
+        test_fail "expected duplicate Codex selectors to fail compatibility validation"
+    elif grep -q "shared Codex marketplace must have exactly one 'claude-octopus' plugin entry" "$duplicate_output"; then
+        test_pass
+    else
+        test_fail "expected duplicate Codex selector diagnostic; output: $(cat "$duplicate_output" 2>/dev/null)"
+    fi
+
+    test_case "--check rejects an invalid Codex marketplace source URL"
+    git -C "$work" show HEAD:.agents/plugins/marketplace.json > "$work/.agents/plugins/marketplace.json"
+    jq '(.plugins[] | select(.name == "claude-octopus").source.url) = "https://example.com/not-octopus.git"' \
+        "$work/.agents/plugins/marketplace.json" > "$work/.agents/plugins/marketplace.json.tmp"
+    mv "$work/.agents/plugins/marketplace.json.tmp" "$work/.agents/plugins/marketplace.json"
+    if "$SYNC_SCRIPT" --repo "$remote" --workdir "$work" --check >"$source_output" 2>&1; then
+        test_fail "expected invalid Codex source URL to fail compatibility validation"
+    elif grep -q "shared Codex marketplace 'claude-octopus' source is invalid: https://example.com/not-octopus.git" "$source_output"; then
+        test_pass
+    else
+        test_fail "expected invalid Codex source diagnostic; output: $(cat "$source_output" 2>/dev/null)"
     fi
 }
 
