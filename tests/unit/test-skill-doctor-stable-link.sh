@@ -26,6 +26,7 @@ extract_first_bash_block() {
 assert_resolver_preserves_stable_link() {
     local label="$1"
     local skill_file="$2"
+    local host="$3"
     local work="$TEST_TMP_DIR/${label// /-}"
     local fake_home="$work/home"
     local plugin_root="$work/cache/9.61.2"
@@ -49,11 +50,20 @@ assert_resolver_preserves_stable_link() {
         return
     fi
 
-    env \
-        HOME="$fake_home" \
-        CLAUDE_PLUGIN_ROOT="$stable_link" \
-        DOCTOR_CALL_LOG="$call_log" \
-        bash "$resolver"
+    if [[ "$host" == "claude" ]]; then
+        env \
+            "HOME=$fake_home" \
+            "CLAUDE_PLUGIN_ROOT=$stable_link" \
+            "DOCTOR_CALL_LOG=$call_log" \
+            bash "$resolver"
+    else
+        # Codex does not provide CLAUDE_PLUGIN_ROOT. Exercise the packaged
+        # resolver's stable-link discovery instead of its Claude host shortcut.
+        env -u CLAUDE_PLUGIN_ROOT \
+            "HOME=$fake_home" \
+            "DOCTOR_CALL_LOG=$call_log" \
+            bash "$resolver"
+    fi
 
     if [[ ! -L "$stable_link" ]]; then
         test_fail "$label resolver replaced the stable symlink"
@@ -80,10 +90,12 @@ test_codex_package_is_generated_from_guarded_source() {
 
 assert_resolver_preserves_stable_link \
     "Claude skill" \
-    "$PROJECT_ROOT/.claude/skills/skill-doctor/SKILL.md"
+    "$PROJECT_ROOT/.claude/skills/skill-doctor/SKILL.md" \
+    "claude"
 assert_resolver_preserves_stable_link \
     "Codex skill" \
-    "$PROJECT_ROOT/skills/skill-doctor/SKILL.md"
+    "$PROJECT_ROOT/skills/skill-doctor/SKILL.md" \
+    "codex"
 test_codex_package_is_generated_from_guarded_source
 
 test_summary
