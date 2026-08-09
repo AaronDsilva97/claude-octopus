@@ -313,20 +313,43 @@ write_skill() {
     } > "$skill_dir/agents/openai.yaml"
 }
 
+# Directories under skills/ that are hand-maintained rather than generated.
+# Everything else is wiped and rebuilt from .claude/skills/, so anything listed
+# here MUST be excluded or a plain regeneration silently deletes it.
+#
+#   blocks               shared prose fragments, no per-skill source
+#   octopus-starter-pack a bundle of four sub-skills with no .claude/skills
+#                        counterpart, registered in plugin.json
+#   skill-council        has never had a source (no delete recorded in git
+#                        history); generating without this exclusion removes it
+PRESERVED_SKILL_DIRS=(blocks octopus-starter-pack skill-council)
+
+_preserve_find_args() {
+    local d
+    for d in "${PRESERVED_SKILL_DIRS[@]}"; do
+        printf '%s\n' "!" "-name" "$d"
+    done
+}
+
 prepare_target_dir() {
     local target_dir="$1"
 
     if [[ "$target_dir" == "$OUTPUT_DIR" ]]; then
         mkdir -p "$target_dir"
-        find "$target_dir" -mindepth 1 -maxdepth 1 -type d ! -name blocks -exec rm -rf {} +
+        local -a keep=()
+        while IFS= read -r a; do keep+=("$a"); done < <(_preserve_find_args)
+        find "$target_dir" -mindepth 1 -maxdepth 1 -type d "${keep[@]}" -exec rm -rf {} +
         find "$target_dir" -mindepth 1 -maxdepth 1 -type f -delete
     else
         rm -rf "$target_dir"
         mkdir -p "$target_dir"
-        if [[ -d "$OUTPUT_DIR/blocks" ]]; then
-            mkdir -p "$target_dir/blocks"
-            cp -R "$OUTPUT_DIR/blocks/." "$target_dir/blocks/"
-        fi
+        local d
+        for d in "${PRESERVED_SKILL_DIRS[@]}"; do
+            if [[ -d "$OUTPUT_DIR/$d" ]]; then
+                mkdir -p "$target_dir/$d"
+                cp -R "$OUTPUT_DIR/$d/." "$target_dir/$d/"
+            fi
+        done
     fi
 
     write_codex_adapter_block "$target_dir"
