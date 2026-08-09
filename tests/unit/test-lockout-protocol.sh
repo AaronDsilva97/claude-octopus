@@ -20,53 +20,13 @@ setup_lockout_env() {
 }
 
 # Define the functions inline for unit testing (avoids sourcing entire orchestrate.sh)
-lock_provider() {
-    local provider="$1"
-    if ! echo "$LOCKED_PROVIDERS" | grep -qw "$provider"; then
-        LOCKED_PROVIDERS="${LOCKED_PROVIDERS:+$LOCKED_PROVIDERS }$provider"
-    fi
-}
+# Source the real implementation instead of copying it. These suites
+# previously defined their own get_alternate_provider returning "gemini"
+# and asserted against that copy, so they passed while production policy
+# said otherwise — a test that cannot fail for the right reason.
+# shellcheck source=/dev/null
+source "$PROJECT_ROOT/scripts/lib/provider-lockout.sh"
 
-is_provider_locked() {
-    local provider="$1"
-    echo "$LOCKED_PROVIDERS" | grep -qw "$provider"
-}
-
-get_alternate_provider() {
-    local locked_provider="$1"
-    case "$locked_provider" in
-        codex|codex-fast|codex-mini)
-            if ! is_provider_locked "gemini"; then
-                echo "gemini"
-            elif ! is_provider_locked "claude-sonnet"; then
-                echo "claude-sonnet"
-            else
-                echo "$locked_provider"
-            fi
-            ;;
-        gemini|gemini-fast)
-            if ! is_provider_locked "codex"; then
-                echo "codex"
-            elif ! is_provider_locked "claude-sonnet"; then
-                echo "claude-sonnet"
-            else
-                echo "$locked_provider"
-            fi
-            ;;
-        claude-sonnet|claude*)
-            if ! is_provider_locked "codex"; then
-                echo "codex"
-            elif ! is_provider_locked "gemini"; then
-                echo "gemini"
-            else
-                echo "$locked_provider"
-            fi
-            ;;
-        *)
-            echo "$locked_provider"
-            ;;
-    esac
-}
 
 reset_provider_lockouts() {
     LOCKED_PROVIDERS=""
@@ -92,12 +52,12 @@ test_lock_multiple_providers() {
     setup_lockout_env
 
     lock_provider "codex"
-    lock_provider "gemini"
+    lock_provider "agy"
 
-    if echo "$LOCKED_PROVIDERS" | grep -qw "codex" && echo "$LOCKED_PROVIDERS" | grep -qw "gemini"; then
+    if echo "$LOCKED_PROVIDERS" | grep -qw "codex" && echo "$LOCKED_PROVIDERS" | grep -qw "agy"; then
         test_pass
     else
-        test_fail "Expected both codex and gemini locked, got '$LOCKED_PROVIDERS'"
+        test_fail "Expected both codex and agy locked, got '$LOCKED_PROVIDERS'"
     fi
 }
 
@@ -132,16 +92,16 @@ test_is_provider_locked() {
 }
 
 test_alternate_codex_to_gemini() {
-    test_case "get_alternate_provider routes codex to gemini"
+    test_case "get_alternate_provider routes codex to agy"
     setup_lockout_env
 
     local alt
     alt=$(get_alternate_provider "codex")
 
-    if [[ "$alt" == "gemini" ]]; then
+    if [[ "$alt" == "agy" ]]; then
         test_pass
     else
-        test_fail "Expected 'gemini', got '$alt'"
+        test_fail "Expected 'agy', got '$alt'"
     fi
 }
 
@@ -163,7 +123,9 @@ test_alternate_cascade() {
     test_case "get_alternate_provider cascades when first alternate locked"
     setup_lockout_env
 
-    lock_provider "gemini"
+    # codex's first alternate is agy (gemini is a sunset seat), so the
+    # cascade fixture must lock agy to exercise the second hop.
+    lock_provider "agy"
     local alt
     alt=$(get_alternate_provider "codex")
 
@@ -178,7 +140,7 @@ test_alternate_all_locked() {
     test_case "get_alternate_provider returns original when all locked"
     setup_lockout_env
 
-    lock_provider "gemini"
+    lock_provider "agy"
     lock_provider "claude-sonnet"
     local alt
     alt=$(get_alternate_provider "codex")
@@ -195,7 +157,7 @@ test_reset_lockouts() {
     setup_lockout_env
 
     lock_provider "codex"
-    lock_provider "gemini"
+    lock_provider "agy"
     reset_provider_lockouts
 
     if [[ -z "$LOCKED_PROVIDERS" ]]; then
@@ -213,10 +175,10 @@ test_codex_variants() {
     alt_fast=$(get_alternate_provider "codex-fast")
     alt_mini=$(get_alternate_provider "codex-mini")
 
-    if [[ "$alt_fast" == "gemini" && "$alt_mini" == "gemini" ]]; then
+    if [[ "$alt_fast" == "agy" && "$alt_mini" == "agy" ]]; then
         test_pass
     else
-        test_fail "Expected gemini for both, got fast='$alt_fast' mini='$alt_mini'"
+        test_fail "Expected agy for both, got fast='$alt_fast' mini='$alt_mini'"
     fi
 }
 
