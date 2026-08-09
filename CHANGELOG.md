@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Existing Codex marketplace installs can update again.** The Codex adapter
+  preserves its original `claude-octopus` marketplace identity instead of
+  borrowing Claude Code's separate `octo` selector. Shared-marketplace release
+  sync now validates both host manifests, preventing stale Codex bundles from
+  being stranded behind an identifier mismatch. (#818)
+
 ## [9.61.1] - 2026-08-09
 
 ### Changed

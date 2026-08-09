@@ -27,6 +27,7 @@ PLUGIN_NAME=$(grep '"name"' "$PLUGIN_JSON" | head -1 | sed 's/.*"name"[[:space:]
 
 # Expected plugin name
 EXPECTED_NAME="octo"
+EXPECTED_CODEX_NAME="claude-octopus"
 
 # Validate
 if [[ "$PLUGIN_NAME" != "$EXPECTED_NAME" ]]; then
@@ -50,14 +51,14 @@ fi
 
 CODEX_PLUGIN_NAME=$(grep '"name"' "$CODEX_PLUGIN_JSON" | head -1 | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
-if [[ "$CODEX_PLUGIN_NAME" != "$EXPECTED_NAME" ]]; then
+if [[ "$CODEX_PLUGIN_NAME" != "$EXPECTED_CODEX_NAME" ]]; then
     echo -e "${RED}❌ CRITICAL ERROR: Codex plugin name is incorrect!${NC}"
     echo ""
     echo -e "  Current:  ${YELLOW}\"$CODEX_PLUGIN_NAME\"${NC}"
-    echo -e "  Expected: ${GREEN}\"$EXPECTED_NAME\"${NC}"
+    echo -e "  Expected: ${GREEN}\"$EXPECTED_CODEX_NAME\"${NC}"
     echo ""
-    echo "The Codex manifest name MUST match the marketplace selector."
-    echo "Otherwise, 'codex plugin add octo@nyldn-plugins' rejects the plugin."
+    echo "The Codex manifest name MUST preserve the installed marketplace selector."
+    echo "Otherwise, 'codex plugin add claude-octopus@nyldn-plugins' rejects the plugin."
     echo ""
     exit 1
 fi
