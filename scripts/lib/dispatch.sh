@@ -795,6 +795,9 @@ validate_model_allowed() {
         cursor-agent) allowlist_var="OCTOPUS_CURSOR_AGENT_ALLOWED_MODELS" ;;
         commandcode) allowlist_var="OCTOPUS_COMMANDCODE_ALLOWED_MODELS" ;;
         opencode)   allowlist_var="OCTOPUS_OPENCODE_ALLOWED_MODELS" ;;
+        ollama)     allowlist_var="OCTOPUS_OLLAMA_ALLOWED_MODELS" ;;
+        copilot)    allowlist_var="OCTOPUS_COPILOT_ALLOWED_MODELS" ;;
+        vibe)       allowlist_var="OCTOPUS_VIBE_ALLOWED_MODELS" ;;
         *)          return 0 ;;  # Unknown provider — allow
     esac
 
