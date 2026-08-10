@@ -20,11 +20,9 @@ test_suite "smoke test failures exclude providers from dispatch"
 
 log() { :; }
 
-TEST_TMP_DIR="/tmp/octopus-smoke-dispatch-tests-$$"
 WORKSPACE_DIR="$TEST_TMP_DIR/workspace"
 HOME="$TEST_TMP_DIR/home"
 FAKE_BIN_DIR="$TEST_TMP_DIR/bin"
-trap 'rm -rf "$TEST_TMP_DIR"' EXIT INT TERM
 mkdir -p "$WORKSPACE_DIR" "$HOME" "$FAKE_BIN_DIR"
 
 # ─── Part 1: provider_smoke_test's per-result tally marks failures dead ───
@@ -122,6 +120,16 @@ if [[ "$full_result" != *"gemini"* && "$full_result" == *"codex"* ]]; then
     test_pass
 else
     test_fail "full strategy did not exclude quota-dead gemini while keeping codex: $full_result"
+fi
+
+octo_quota_mark_dead "agy"
+minimal_result="$(OCTOPUS_DISPATCH_STRATEGY=minimal get_dispatch_strategy "unused" "unused")"
+
+test_case "get_dispatch_strategy (minimal) falls through dead Google seats to codex"
+if [[ "$minimal_result" == *"codex"* && "$minimal_result" != *"gemini"* && "$minimal_result" != *"agy"* ]]; then
+    test_pass
+else
+    test_fail "minimal strategy did not fall through dead gemini/agy seats to codex: $minimal_result"
 fi
 
 test_summary
