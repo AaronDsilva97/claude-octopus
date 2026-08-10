@@ -366,8 +366,15 @@ echo ""
 # ============================================================================
 echo "🎯 Checking skill registration..."
 
+# Skills normally live at skills/<name>/SKILL.md (depth 2 below skills/), but
+# supported packs nest one level deeper at skills/<pack>/<name>/SKILL.md (see
+# skills/octopus-starter-pack/, issue #829) — search both depths.
+find_skill_md_files() {
+    find "$1" -mindepth 2 -maxdepth 3 -name "SKILL.md" -type f 2>/dev/null
+}
+
 if command -v jq >/dev/null 2>&1 && jq -e '.skills[]? | select(startswith("./skills/"))' "$ROOT_DIR/.claude-plugin/plugin.json" >/dev/null 2>&1; then
-    SKILL_FILES=$(find "$ROOT_DIR/skills" -mindepth 2 -maxdepth 2 -name "SKILL.md" -type f 2>/dev/null | sed "s|^$ROOT_DIR/skills/||;s|/SKILL.md$||" | sort)
+    SKILL_FILES=$(find_skill_md_files "$ROOT_DIR/skills" | sed "s|^$ROOT_DIR/skills/||;s|/SKILL.md$||" | sort)
     REGISTERED_SKILLS=$(jq -r '.skills[]? | select(startswith("./skills/")) | sub("^\\./skills/"; "") | sub("/$"; "")' "$ROOT_DIR/.claude-plugin/plugin.json" | sort)
 else
     SKILL_FILES=$({
@@ -407,7 +414,7 @@ echo "🏷️  Checking skill frontmatter format..."
 
 invalid_skill_names=0
 if command -v jq >/dev/null 2>&1 && jq -e '.skills[]? | select(startswith("./skills/"))' "$ROOT_DIR/.claude-plugin/plugin.json" >/dev/null 2>&1; then
-    SKILL_FRONTMATTER_FILES=("$ROOT_DIR"/skills/*/SKILL.md)
+    mapfile -t SKILL_FRONTMATTER_FILES < <(find_skill_md_files "$ROOT_DIR/skills" | LC_ALL=C sort)
 else
     mapfile -t SKILL_FRONTMATTER_FILES < <({
         find "$ROOT_DIR/.claude/skills" -maxdepth 1 -type f -name '*.md' -print 2>/dev/null
