@@ -518,6 +518,21 @@ validate_model_name() {
 
 
 # ── v2 agent helpers (moved from orchestrate.sh v9.22.1) ──
+_octo_assignment_has_nonempty_value() {
+    local file="$1" key="$2" value
+    [[ -f "$file" ]] || return 1
+
+    value="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" 2>/dev/null | tail -n 1)"
+    value="$(printf '%s\n' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+        *) value="$(printf '%s\n' "$value" | sed 's/[[:space:]][[:space:]]*#.*$//')" ;;
+    esac
+    value="$(printf '%s\n' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [[ -n "$value" ]]
+}
+
 is_agent_available_v2() {
     local agent="$1"
 
@@ -602,8 +617,8 @@ is_agent_available_v2() {
             fi
             command -v vibe &>/dev/null && {
                 [[ -n "${MISTRAL_API_KEY:-}" ]] || \
-                { [[ -f "${HOME}/.vibe/.env" ]] && grep -Eq '^[[:space:]]*MISTRAL_API_KEY=' "${HOME}/.vibe/.env" 2>/dev/null; } || \
-                { [[ -f "${HOME}/.vibe/config.toml" ]] && grep -Eq '^[[:space:]]*api_key[[:space:]]*=' "${HOME}/.vibe/config.toml" 2>/dev/null; }
+                _octo_assignment_has_nonempty_value "${HOME}/.vibe/.env" "MISTRAL_API_KEY" || \
+                _octo_assignment_has_nonempty_value "${HOME}/.vibe/config.toml" "api_key"
             }
             ;;
         *)

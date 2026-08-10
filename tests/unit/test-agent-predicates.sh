@@ -88,36 +88,48 @@ fi
 unset -f grok_is_available
 
 test_case "is_agent_available_v2 recognizes authenticated Vibe and rejects missing auth (#799)"
-vibe() { :; }
-if MISTRAL_API_KEY="test-key" is_agent_available_v2 "vibe-research"; then
-    octo_saved_home="$HOME"
-    HOME="$(mktemp -d /tmp/octopus-vibe-predicate.XXXXXX)"
-    if ! is_agent_available_v2 "vibe"; then
-        rm -rf "$HOME"
-        HOME="$octo_saved_home"
-        unset -f vibe
-        test_pass
-    else
-        rm -rf "$HOME"
-        HOME="$octo_saved_home"
-        unset -f vibe
-        test_fail "Vibe reported available without any supported authentication"
-    fi
+if (
+    vibe() { :; }
+    resolve_provider_env() { return 1; }
+    HOME="$TEST_TMP_DIR/vibe-predicate-home"
+    mkdir -p "$HOME/.vibe"
+    unset MISTRAL_API_KEY
+    octo_fixture_value="fixture-value"
+
+    MISTRAL_API_KEY="$octo_fixture_value" is_agent_available_v2 "vibe-research" || exit 1
+    is_agent_available_v2 "vibe" && exit 1
+
+    printf 'MISTRAL_API_KEY=\n' > "$HOME/.vibe/.env"
+    is_agent_available_v2 "vibe" && exit 1
+    printf 'MISTRAL_API_KEY=""\n' > "$HOME/.vibe/.env"
+    is_agent_available_v2 "vibe" && exit 1
+    rm -f "$HOME/.vibe/.env"
+
+    printf 'api_key =\n' > "$HOME/.vibe/config.toml"
+    is_agent_available_v2 "vibe" && exit 1
+    printf 'api_key = ""\n' > "$HOME/.vibe/config.toml"
+    is_agent_available_v2 "vibe" && exit 1
+    printf 'api_key = "%s"\n' "$octo_fixture_value" > "$HOME/.vibe/config.toml"
+    is_agent_available_v2 "vibe"
+); then
+    test_pass
 else
-    unset -f vibe
-    test_fail "Authenticated Vibe provider was rejected"
+    test_fail "Vibe availability accepted blank auth or rejected a valid credential"
 fi
 
 test_case "is_agent_available_v2 Atlas Cloud requires both API key and model (#799)"
-unset ATLASCLOUD_MODEL OCTOPUS_ATLASCLOUD_MODEL OPENAI_COMPAT_MODEL
-if ! ATLASCLOUD_API_KEY="test-key" is_agent_available_v2 "atlascloud"; then
-    if ATLASCLOUD_API_KEY="test-key" OCTOPUS_ATLASCLOUD_MODEL="vendor/model" is_agent_available_v2 "atlascloud"; then
-        test_pass
-    else
-        test_fail "Atlas Cloud was rejected despite API key and model"
-    fi
+if (
+    resolve_provider_env() { return 1; }
+    unset ATLASCLOUD_API_KEY ATLASCLOUD_MODEL OCTOPUS_ATLASCLOUD_MODEL OPENAI_COMPAT_MODEL
+    octo_fixture_value="fixture-value"
+    export ATLASCLOUD_API_KEY="$octo_fixture_value"
+    is_agent_available_v2 "atlascloud" && exit 1
+    export OCTOPUS_ATLASCLOUD_MODEL="vendor/model"
+    is_agent_available_v2 "atlascloud"
+); then
+    test_pass
 else
-    test_fail "Atlas Cloud was accepted without a dispatchable model"
+    test_fail "Atlas Cloud did not require both API key and model"
 fi
 
 test_summary
