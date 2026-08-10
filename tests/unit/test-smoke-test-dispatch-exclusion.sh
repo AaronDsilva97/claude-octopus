@@ -87,7 +87,11 @@ cat > "$FAKE_BIN_DIR/gemini" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "$FAKE_BIN_DIR/codex" "$FAKE_BIN_DIR/gemini"
+cat > "$FAKE_BIN_DIR/agy" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FAKE_BIN_DIR/codex" "$FAKE_BIN_DIR/gemini" "$FAKE_BIN_DIR/agy"
 export PATH="$FAKE_BIN_DIR:$PATH"
 
 # shellcheck source=/dev/null
