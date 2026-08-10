@@ -6,6 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=scripts/lib/release-validation.sh
+source "$SCRIPT_DIR/lib/release-validation.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -367,7 +369,7 @@ echo ""
 echo "🎯 Checking skill registration..."
 
 if command -v jq >/dev/null 2>&1 && jq -e '.skills[]? | select(startswith("./skills/"))' "$ROOT_DIR/.claude-plugin/plugin.json" >/dev/null 2>&1; then
-    SKILL_FILES=$(find "$ROOT_DIR/skills" -mindepth 2 -maxdepth 2 -name "SKILL.md" -type f 2>/dev/null | sed "s|^$ROOT_DIR/skills/||;s|/SKILL.md$||" | sort)
+    SKILL_FILES=$(octo_release_skill_files "$ROOT_DIR")
     REGISTERED_SKILLS=$(jq -r '.skills[]? | select(startswith("./skills/")) | sub("^\\./skills/"; "") | sub("/$"; "")' "$ROOT_DIR/.claude-plugin/plugin.json" | sort)
 else
     SKILL_FILES=$({
