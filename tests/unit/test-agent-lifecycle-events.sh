@@ -167,6 +167,44 @@ else
 fi
 unset OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT
 
+mkdir -p "$TMP_DIR/orphan-check"
+cat > "$TMP_DIR/multi-child-hook.sh" <<HOOK
+#!/usr/bin/env bash
+sleep 30 &
+echo \$! > "$TMP_DIR/orphan-check/child1.pid"
+sleep 30 &
+echo \$! > "$TMP_DIR/orphan-check/child2.pid"
+wait
+HOOK
+chmod +x "$TMP_DIR/multi-child-hook.sh"
+
+test_case "built-in timeout fallback reaps hook's forked children without pkill"
+export OCTOPUS_AGENT_LIFECYCLE_HOOK="$TMP_DIR/multi-child-hook.sh"
+export OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT=1
+saved_path="$PATH"
+PATH="$no_timeout_bin"
+_octopus_agent_lifecycle_event "spawned" "codex" "task-orphan-check" "developer" "tangle" "558" "$RESULTS_DIR/codex-orphan-check.md" "" "running"
+PATH="$saved_path"
+orphan_survivor=0
+for pidfile in "$TMP_DIR/orphan-check"/child*.pid; do
+  [[ -f "$pidfile" ]] || continue
+  child_pid="$(cat "$pidfile")"
+  # kill -0 alone isn't enough: a killed process whose parent (the hook) is
+  # already gone reparents to init as a zombie and still answers kill -0
+  # until reaped. Check STAT instead — only a non-zombie entry means the
+  # sleep is still genuinely running.
+  child_stat="$(ps -o stat= -p "$child_pid" 2>/dev/null | tr -d '[:space:]')" || true
+  if [[ -n "$child_stat" && "$child_stat" != Z* ]]; then
+    orphan_survivor=1
+  fi
+done
+if [[ "$orphan_survivor" -eq 0 ]]; then
+  test_pass
+else
+  test_fail "hook's forked grandchild survived teardown without pkill available"
+fi
+unset OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT
+
 test_case "completed lifecycle event carries exit status"
 _octopus_agent_lifecycle_event "completed" "gemini-fast" "task-2" "reviewer" "review" "222" "$RESULTS_DIR/gemini-task-2.md" "124" "timeout"
 if grep -q '"event":"agent.completed"' "$OCTO_EVENT_LOG" && \
