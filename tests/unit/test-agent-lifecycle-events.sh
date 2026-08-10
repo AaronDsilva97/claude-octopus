@@ -157,6 +157,11 @@ export OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT="$hook_timeout_secs"
 saved_path="$PATH"
 start=$SECONDS
 PATH="$no_timeout_bin"
+# declare -f run_with_timeout is checked before the PATH-based `timeout`
+# lookup, so PATH alone doesn't guarantee this test hits the built-in
+# fallback — force it explicitly, since nothing in this file's sourcing
+# defines that function today but a future refactor could.
+unset -f run_with_timeout 2>/dev/null || true
 _octopus_agent_lifecycle_event "spawned" "codex" "task-fallback-timeout" "developer" "tangle" "556" "$RESULTS_DIR/codex-fallback-timeout.md" "" "running"
 PATH="$saved_path"
 elapsed=$((SECONDS - start))
@@ -173,10 +178,17 @@ unset OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT
 mkdir -p "$TMP_DIR/orphan-check"
 cat > "$TMP_DIR/multi-child-hook.sh" <<HOOK
 #!/usr/bin/env bash
+# Only record a PID once kill -0 confirms it's actually running — proves
+# each descendant was alive before teardown, so a fixture that failed to
+# start a child (e.g. sleep missing) can't produce a vacuous pass.
 sleep 60 &
-echo \$! > "$TMP_DIR/orphan-check/child1.pid"
+child1=\$!
+kill -0 "\$child1" 2>/dev/null || exit 1
+echo "\$child1" > "$TMP_DIR/orphan-check/child1.pid"
 sleep 60 &
-echo \$! > "$TMP_DIR/orphan-check/child2.pid"
+child2=\$!
+kill -0 "\$child2" 2>/dev/null || exit 1
+echo "\$child2" > "$TMP_DIR/orphan-check/child2.pid"
 wait
 HOOK
 chmod +x "$TMP_DIR/multi-child-hook.sh"
@@ -186,6 +198,7 @@ export OCTOPUS_AGENT_LIFECYCLE_HOOK="$TMP_DIR/multi-child-hook.sh"
 export OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT=1
 saved_path="$PATH"
 PATH="$no_timeout_bin"
+unset -f run_with_timeout 2>/dev/null || true
 # oco-827: the hook itself `wait`s on its own children, so a fallback that
 # silently stops enforcing the timeout would let this call block until both
 # sleep-60 children exit naturally — bound elapsed time so that regression
