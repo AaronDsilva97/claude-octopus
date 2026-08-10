@@ -87,55 +87,82 @@ else
 fi
 unset -f grok_is_available
 
-test_case "is_agent_available_v2 recognizes authenticated Vibe and rejects missing auth (#799)"
-if (
+VIBE_PREDICATE_HOME="$TEST_TMP_DIR/vibe-predicate-home"
+mkdir -p "$VIBE_PREDICATE_HOME/.vibe"
+
+vibe_fixture_available() (
     vibe() { :; }
     resolve_provider_env() { return 1; }
-    HOME="$TEST_TMP_DIR/vibe-predicate-home"
-    mkdir -p "$HOME/.vibe"
-    unset MISTRAL_API_KEY
-    octo_fixture_value="fixture-value"
+    HOME="$VIBE_PREDICATE_HOME"
+    if [[ "${1:-unset}" == "unset" ]]; then
+        unset MISTRAL_API_KEY
+    else
+        export "MISTRAL_API_KEY=${1}"
+    fi
+    is_agent_available_v2 "${2:-vibe}"
+)
 
-    export "MISTRAL_API_KEY=${octo_fixture_value}"
-    is_agent_available_v2 "vibe-research" || exit 1
-    unset MISTRAL_API_KEY
-    is_agent_available_v2 "vibe" && exit 1
-
-    printf 'MISTRAL_API_KEY=\n' > "$HOME/.vibe/.env"
-    is_agent_available_v2 "vibe" && exit 1
-    printf 'MISTRAL_API_KEY=""\n' > "$HOME/.vibe/.env"
-    is_agent_available_v2 "vibe" && exit 1
-    printf 'MISTRAL_API_KEY="" # intentionally blank\n' > "$HOME/.vibe/.env"
-    is_agent_available_v2 "vibe" && exit 1
-    rm -f "$HOME/.vibe/.env"
-
-    printf 'api_key =\n' > "$HOME/.vibe/config.toml"
-    is_agent_available_v2 "vibe" && exit 1
-    printf 'api_key = ""\n' > "$HOME/.vibe/config.toml"
-    is_agent_available_v2 "vibe" && exit 1
-    printf 'api_key = "" # intentionally blank\n' > "$HOME/.vibe/config.toml"
-    is_agent_available_v2 "vibe" && exit 1
-    printf 'api_key = "%s"\n' "$octo_fixture_value" > "$HOME/.vibe/config.toml"
-    is_agent_available_v2 "vibe"
-); then
+test_case "is_agent_available_v2 accepts authenticated Vibe (#799)"
+if vibe_fixture_available "fixture-value" "vibe-research"; then
     test_pass
 else
-    test_fail "Vibe availability accepted blank auth or rejected a valid credential"
+    test_fail "authenticated Vibe was rejected"
 fi
 
-test_case "is_agent_available_v2 Atlas Cloud requires both API key and model (#799)"
-if (
+test_case "is_agent_available_v2 rejects missing and whitespace-only Vibe environment auth (#799)"
+rm -f "$VIBE_PREDICATE_HOME/.vibe/.env" "$VIBE_PREDICATE_HOME/.vibe/config.toml"
+if ! vibe_fixture_available && ! vibe_fixture_available "   "; then
+    test_pass
+else
+    test_fail "Vibe accepted missing or whitespace-only environment auth"
+fi
+
+test_case "is_agent_available_v2 rejects blank Vibe .env assignments (#799)"
+printf 'MISTRAL_API_KEY=\nMISTRAL_API_KEY=""\nMISTRAL_API_KEY="" # intentionally blank\n' > "$VIBE_PREDICATE_HOME/.vibe/.env"
+if ! vibe_fixture_available; then
+    test_pass
+else
+    test_fail "Vibe accepted a blank .env credential"
+fi
+rm -f "$VIBE_PREDICATE_HOME/.vibe/.env"
+
+test_case "is_agent_available_v2 rejects blank Vibe TOML assignments and comments (#799)"
+printf 'api_key = ""# intentionally blank\n' > "$VIBE_PREDICATE_HOME/.vibe/config.toml"
+if ! vibe_fixture_available; then
+    test_pass
+else
+    test_fail "Vibe accepted a quoted-empty TOML credential with an inline comment"
+fi
+
+test_case "is_agent_available_v2 preserves hash characters inside valid quoted Vibe auth (#799)"
+printf 'api_key = "fixture#value" # valid comment\n' > "$VIBE_PREDICATE_HOME/.vibe/config.toml"
+if vibe_fixture_available; then
+    test_pass
+else
+    test_fail "Vibe rejected a nonempty quoted credential containing a hash"
+fi
+
+atlascloud_fixture_available() (
     resolve_provider_env() { return 1; }
     unset ATLASCLOUD_API_KEY ATLASCLOUD_MODEL OCTOPUS_ATLASCLOUD_MODEL OPENAI_COMPAT_MODEL
     octo_fixture_value="fixture-value"
-    export ATLASCLOUD_API_KEY="$octo_fixture_value"
-    is_agent_available_v2 "atlascloud" && exit 1
-    export OCTOPUS_ATLASCLOUD_MODEL="vendor/model"
+    export "ATLASCLOUD_API_KEY=${octo_fixture_value}"
+    [[ "${1:-missing}" == "configured" ]] && export OCTOPUS_ATLASCLOUD_MODEL="vendor/model"
     is_agent_available_v2 "atlascloud"
-); then
+)
+
+test_case "is_agent_available_v2 rejects Atlas Cloud without a model (#799)"
+if ! atlascloud_fixture_available; then
     test_pass
 else
-    test_fail "Atlas Cloud did not require both API key and model"
+    test_fail "Atlas Cloud was accepted without a dispatchable model"
+fi
+
+test_case "is_agent_available_v2 accepts Atlas Cloud with API key and model (#799)"
+if atlascloud_fixture_available "configured"; then
+    test_pass
+else
+    test_fail "Atlas Cloud was rejected despite API key and model"
 fi
 
 test_summary
