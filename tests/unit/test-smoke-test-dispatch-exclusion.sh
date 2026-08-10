@@ -38,6 +38,8 @@ pass_count=0
 fail_count=0
 skip_count=0
 
+# Simulate a provider that failed an earlier smoke test but has now recovered.
+octo_quota_mark_dead "codex" 0
 _smoke_tally_result "codex" "PASS"
 _smoke_tally_result "gemini" "UNKNOWN:gemini-3.1-pro-preview"
 _smoke_tally_result "agy" "SKIP"
@@ -49,11 +51,18 @@ else
     test_fail "gemini failed its smoke test but was not marked quota-dead"
 fi
 
-test_case "_smoke_tally_result does not mark a passing provider quota-dead"
+test_case "_smoke_tally_result clears a passing provider's stale dead marker"
 if ! octo_quota_is_dead "codex"; then
     test_pass
 else
-    test_fail "codex passed its smoke test but was marked quota-dead anyway"
+    test_fail "codex passed its smoke test but its stale dead marker remained"
+fi
+
+test_case "successful smoke also clears stale per-provider expiry metadata"
+if ! grep -q "^codex	" "$(octo_quota_dead_meta_file)" 2>/dev/null; then
+    test_pass
+else
+    test_fail "codex passed its smoke test but stale permanent metadata remained"
 fi
 
 test_case "_smoke_tally_result does not mark a skipped provider quota-dead"

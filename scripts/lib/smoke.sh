@@ -1163,7 +1163,12 @@ _smoke_test_provider() {
 _smoke_tally_result() {
     local provider="$1" result="$2"
     case "${result%%:*}" in
-        PASS) ((++pass_count)) ;;
+        PASS)
+            ((++pass_count))
+            if declare -f octo_quota_clear_dead >/dev/null 2>&1; then
+                octo_quota_clear_dead "$provider"
+            fi
+            ;;
         SKIP) ((++skip_count)) ;;
         *)
             ((++fail_count))
