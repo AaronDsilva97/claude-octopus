@@ -111,8 +111,12 @@ HOOK
 chmod +x "$TMP_DIR/slow-hook.sh"
 
 test_case "built-in lifecycle timeout uses a sleep watchdog, not a wall clock"
-fallback_impl=$(sed -n '/# Built-in timeout fallback:/,/wait "\$_hook_pid"/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")
-if grep -q '_hook_watchdog_pid' <<<"$fallback_impl" && ! grep -q '\$SECONDS' <<<"$fallback_impl"; then
+# shellcheck disable=SC2016 # Intentionally match literal shell source.
+fallback_impl=$(sed -n '/# Built-in timeout fallback:/,/wait "\$_hook_watchdog_pid"/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")
+if grep -Fq "sleep \"\$hook_timeout\" &" <<<"$fallback_impl" &&
+   grep -Fq "kill \"\$_hook_watchdog_pid\"" <<<"$fallback_impl" &&
+   grep -Fq "wait \"\$_hook_watchdog_pid\"" <<<"$fallback_impl" &&
+   ! grep -Fq "\$SECONDS" <<<"$fallback_impl"; then
   test_pass
 else
   test_fail "fallback must use a reaped sleep watchdog without a SECONDS deadline"
