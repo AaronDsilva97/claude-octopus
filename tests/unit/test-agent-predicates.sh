@@ -96,18 +96,24 @@ if (
     unset MISTRAL_API_KEY
     octo_fixture_value="fixture-value"
 
-    MISTRAL_API_KEY="$octo_fixture_value" is_agent_available_v2 "vibe-research" || exit 1
+    export "MISTRAL_API_KEY=${octo_fixture_value}"
+    is_agent_available_v2 "vibe-research" || exit 1
+    unset MISTRAL_API_KEY
     is_agent_available_v2 "vibe" && exit 1
 
     printf 'MISTRAL_API_KEY=\n' > "$HOME/.vibe/.env"
     is_agent_available_v2 "vibe" && exit 1
     printf 'MISTRAL_API_KEY=""\n' > "$HOME/.vibe/.env"
     is_agent_available_v2 "vibe" && exit 1
+    printf 'MISTRAL_API_KEY="" # intentionally blank\n' > "$HOME/.vibe/.env"
+    is_agent_available_v2 "vibe" && exit 1
     rm -f "$HOME/.vibe/.env"
 
     printf 'api_key =\n' > "$HOME/.vibe/config.toml"
     is_agent_available_v2 "vibe" && exit 1
     printf 'api_key = ""\n' > "$HOME/.vibe/config.toml"
+    is_agent_available_v2 "vibe" && exit 1
+    printf 'api_key = "" # intentionally blank\n' > "$HOME/.vibe/config.toml"
     is_agent_available_v2 "vibe" && exit 1
     printf 'api_key = "%s"\n' "$octo_fixture_value" > "$HOME/.vibe/config.toml"
     is_agent_available_v2 "vibe"

@@ -524,10 +524,10 @@ _octo_assignment_has_nonempty_value() {
 
     value="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" 2>/dev/null | tail -n 1)"
     value="$(printf '%s\n' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    value="$(printf '%s\n' "$value" | sed 's/[[:space:]][[:space:]]*#.*$//; s/[[:space:]]*$//')"
     case "$value" in
         \"*\") value="${value#\"}"; value="${value%\"}" ;;
         \'*\') value="${value#\'}"; value="${value%\'}" ;;
-        *) value="$(printf '%s\n' "$value" | sed 's/[[:space:]][[:space:]]*#.*$//')" ;;
     esac
     value="$(printf '%s\n' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     [[ -n "$value" ]]
