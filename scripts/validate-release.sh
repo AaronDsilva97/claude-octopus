@@ -414,7 +414,11 @@ echo "🏷️  Checking skill frontmatter format..."
 
 invalid_skill_names=0
 if command -v jq >/dev/null 2>&1 && jq -e '.skills[]? | select(startswith("./skills/"))' "$ROOT_DIR/.claude-plugin/plugin.json" >/dev/null 2>&1; then
-    mapfile -t SKILL_FRONTMATTER_FILES < <(find_skill_md_files "$ROOT_DIR/skills" | LC_ALL=C sort)
+    # Intentionally NOT find_skill_md_files: nested skills/octopus-starter-pack/*
+    # skills use bare frontmatter names (no skill-/flow-/octopus-/sys- prefix,
+    # namespaced by directory instead) and are out of scope for issue #829,
+    # which is only about the registration check below.
+    SKILL_FRONTMATTER_FILES=("$ROOT_DIR"/skills/*/SKILL.md)
 else
     mapfile -t SKILL_FRONTMATTER_FILES < <({
         find "$ROOT_DIR/.claude/skills" -maxdepth 1 -type f -name '*.md' -print 2>/dev/null
