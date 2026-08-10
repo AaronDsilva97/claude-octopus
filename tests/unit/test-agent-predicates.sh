@@ -66,4 +66,58 @@ else
     test_fail "claude-opus-fast bypassed Claude provider availability"
 fi
 
+test_case "is_agent_available_v2 fails closed for a truly unknown agent name (#799)"
+if ! is_agent_available_v2 "some-future-provider-nobody-registered"; then
+    test_pass
+else
+    test_fail "Unknown agent type was reported available (fail-open regression)"
+fi
+
+test_case "is_agent_available_v2 grok arm defers to grok_is_available (#799)"
+grok_is_available() { return 0; }
+if is_agent_available_v2 "grok"; then
+    grok_is_available() { return 1; }
+    if ! is_agent_available_v2 "grok"; then
+        test_pass
+    else
+        test_fail "grok reported available despite grok_is_available returning false"
+    fi
+else
+    test_fail "grok reported unavailable despite grok_is_available returning true"
+fi
+unset -f grok_is_available
+
+test_case "is_agent_available_v2 recognizes authenticated Vibe and rejects missing auth (#799)"
+vibe() { :; }
+if MISTRAL_API_KEY="test-key" is_agent_available_v2 "vibe-research"; then
+    octo_saved_home="$HOME"
+    HOME="$(mktemp -d /tmp/octopus-vibe-predicate.XXXXXX)"
+    if ! is_agent_available_v2 "vibe"; then
+        rm -rf "$HOME"
+        HOME="$octo_saved_home"
+        unset -f vibe
+        test_pass
+    else
+        rm -rf "$HOME"
+        HOME="$octo_saved_home"
+        unset -f vibe
+        test_fail "Vibe reported available without any supported authentication"
+    fi
+else
+    unset -f vibe
+    test_fail "Authenticated Vibe provider was rejected"
+fi
+
+test_case "is_agent_available_v2 Atlas Cloud requires both API key and model (#799)"
+unset ATLASCLOUD_MODEL OCTOPUS_ATLASCLOUD_MODEL OPENAI_COMPAT_MODEL
+if ! ATLASCLOUD_API_KEY="test-key" is_agent_available_v2 "atlascloud"; then
+    if ATLASCLOUD_API_KEY="test-key" OCTOPUS_ATLASCLOUD_MODEL="vendor/model" is_agent_available_v2 "atlascloud"; then
+        test_pass
+    else
+        test_fail "Atlas Cloud was rejected despite API key and model"
+    fi
+else
+    test_fail "Atlas Cloud was accepted without a dispatchable model"
+fi
+
 test_summary
