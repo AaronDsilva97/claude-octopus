@@ -53,9 +53,9 @@ test_case "real octopus-starter-pack nested skills are reported registered, not 
 CURRENT_VERSION=$(jq -r '.version' "$PROJECT_ROOT/.claude-plugin/plugin.json")
 OUTPUT=$(cd "$PROJECT_ROOT" && bash "$VALIDATE_RELEASE" "$CURRENT_VERSION" 2>&1 || true)
 
-if echo "$OUTPUT" | grep -q "Registered skill 'octopus-starter-pack"; then
-    test_fail "validate-release.sh still reports registered nested skills as missing:\n$(echo "$OUTPUT" | grep "octopus-starter-pack")"
-elif echo "$OUTPUT" | grep -qE "All [0-9]+ skills properly registered"; then
+if grep -cF -- "Registered skill 'octopus-starter-pack" <<< "$OUTPUT" >/dev/null; then
+    test_fail "validate-release.sh still reports registered nested skills as missing:\n$(grep -F -- "octopus-starter-pack" <<< "$OUTPUT")"
+elif grep -cE -- "All [0-9]+ skills properly registered" <<< "$OUTPUT" >/dev/null; then
     test_pass
 else
     test_fail "could not confirm skill registration passed; output:\n$OUTPUT"
