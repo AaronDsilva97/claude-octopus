@@ -183,11 +183,20 @@ export OCTOPUS_AGENT_LIFECYCLE_HOOK="$TMP_DIR/multi-child-hook.sh"
 export OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT=1
 saved_path="$PATH"
 PATH="$no_timeout_bin"
+# oco-827: the hook itself `wait`s on its own children, so a fallback that
+# silently stops enforcing the timeout would let this call block until both
+# sleep-30 children exit naturally — bound elapsed time so that regression
+# can't hide behind an eventual, too-slow pass. Same generous grace margin
+# as the sibling built-in-fallback test above.
+hook_started=$SECONDS
 _octopus_agent_lifecycle_event "spawned" "codex" "task-orphan-check" "developer" "tangle" "558" "$RESULTS_DIR/codex-orphan-check.md" "" "running"
+hook_elapsed=$((SECONDS - hook_started))
 PATH="$saved_path"
 orphan_survivor=0
+child_count=0
 for pidfile in "$TMP_DIR/orphan-check"/child*.pid; do
   [[ -f "$pidfile" ]] || continue
+  child_count=$((child_count + 1))
   child_pid="$(cat "$pidfile")"
   # kill -0 alone isn't enough: a killed process whose parent (the hook) is
   # already gone reparents to init as a zombie and still answers kill -0
@@ -198,10 +207,10 @@ for pidfile in "$TMP_DIR/orphan-check"/child*.pid; do
     orphan_survivor=1
   fi
 done
-if [[ "$orphan_survivor" -eq 0 ]]; then
+if [[ "$hook_elapsed" -lt $((hook_timeout_secs + 9)) && "$child_count" -eq 2 && "$orphan_survivor" -eq 0 ]]; then
   test_pass
 else
-  test_fail "hook's forked grandchild survived teardown without pkill available"
+  test_fail "fallback did not finish within the bound (${hook_elapsed}s), didn't record both children ($child_count/2), or a grandchild survived teardown"
 fi
 unset OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT
 
