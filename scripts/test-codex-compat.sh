@@ -120,6 +120,10 @@ test_output "Codex manifest points at portable root skills tree" \
 test_cmd "Codex manifest does not reference Claude-only paths" \
     "cd '$PLUGIN_ROOT' && ! grep -q '\\.claude' .codex-plugin/plugin.json"
 
+test_output "Codex manifest defaultPrompt has 3 or fewer entries" \
+    "jq '.interface.defaultPrompt | length' '$PLUGIN_ROOT/.codex-plugin/plugin.json'" \
+    "^[0-3]$"
+
 test_cmd "skills/ directory exists" \
     "test -d '$PLUGIN_ROOT/skills'"
 
