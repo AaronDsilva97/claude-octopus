@@ -10,6 +10,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/../helpers/test-framework.sh"
 
 log() { :; }
+octo_provider_identity_from_agent_type() { printf '%s\n' "${1%%-*}"; }
+get_agent_model() { printf '%s\n' "fixture-model"; }
 # shellcheck source=/dev/null
 source "$PROJECT_ROOT/scripts/lib/events.sh"
 # shellcheck source=/dev/null
@@ -96,10 +98,10 @@ fi
 
 cat > "$TMP_DIR/slow-hook.sh" <<'HOOK'
 #!/usr/bin/env bash
-# Must sleep LONGER than the widened pass bound (timeout + 9s) below, or a
+# Must sleep LONGER than the widened pass bound (timeout + 29s) below, or a
 # broken timeout would let the hook finish naturally inside the bound and
 # the test would false-pass.
-sleep 15
+sleep 60
 HOOK
 chmod +x "$TMP_DIR/slow-hook.sh"
 
@@ -107,13 +109,14 @@ test_case "lifecycle hook timeout prevents observer hangs"
 export OCTOPUS_AGENT_LIFECYCLE_HOOK="$TMP_DIR/slow-hook.sh"
 hook_timeout_secs=1
 export OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT="$hook_timeout_secs"
-start=$(date +%s)
+start=$SECONDS
 _octopus_agent_lifecycle_event "spawned" "codex" "task-slow-hook" "developer" "tangle" "555" "$RESULTS_DIR/codex-slow-hook.md" "" "running"
-elapsed=$(( $(date +%s) - start ))
+elapsed=$((SECONDS - start))
 # oco-588: measure against the configured timeout plus a generous grace
-# margin instead of a fixed small bound — macOS runners have enough
-# scheduling jitter that a tight fixed bound flakes under load.
-if [[ "$elapsed" -lt $((hook_timeout_secs + 9)) ]]; then
+# margin instead of a fixed small bound — loaded runners have exhibited
+# scheduler pauses above 10s. The hook sleeps 60s so a broken timeout still
+# cannot finish naturally inside this 30s bound.
+if [[ "$elapsed" -lt $((hook_timeout_secs + 29)) ]]; then
   test_pass
 else
   test_fail "hook timeout did not return promptly"
@@ -135,9 +138,9 @@ unset OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT
 
 cat > "$TMP_DIR/slow-fallback-hook.sh" <<'HOOK'
 #!/usr/bin/env bash
-# Must sleep LONGER than the widened pass bound (timeout + 9s) below — see
+# Must sleep LONGER than the widened pass bound (timeout + 29s) below — see
 # slow-hook.sh above.
-sleep 15
+sleep 60
 HOOK
 chmod +x "$TMP_DIR/slow-fallback-hook.sh"
 
@@ -152,15 +155,15 @@ export OCTOPUS_AGENT_LIFECYCLE_HOOK="$TMP_DIR/slow-fallback-hook.sh"
 hook_timeout_secs=1
 export OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT="$hook_timeout_secs"
 saved_path="$PATH"
-start=$(date +%s)
+start=$SECONDS
 PATH="$no_timeout_bin"
 _octopus_agent_lifecycle_event "spawned" "codex" "task-fallback-timeout" "developer" "tangle" "556" "$RESULTS_DIR/codex-fallback-timeout.md" "" "running"
 PATH="$saved_path"
-elapsed=$(( $(date +%s) - start ))
+elapsed=$((SECONDS - start))
 # oco-588: same generous grace margin as the primary timeout test above —
 # the built-in fallback polls in whole-second SECONDS increments, which
 # adds its own rounding jitter on top of scheduler jitter.
-if [[ "$elapsed" -lt $((hook_timeout_secs + 9)) ]]; then
+if [[ "$elapsed" -lt $((hook_timeout_secs + 29)) ]]; then
   test_pass
 else
   test_fail "built-in timeout fallback did not return promptly"
@@ -170,9 +173,9 @@ unset OCTOPUS_AGENT_LIFECYCLE_HOOK_TIMEOUT
 mkdir -p "$TMP_DIR/orphan-check"
 cat > "$TMP_DIR/multi-child-hook.sh" <<HOOK
 #!/usr/bin/env bash
-sleep 30 &
+sleep 60 &
 echo \$! > "$TMP_DIR/orphan-check/child1.pid"
-sleep 30 &
+sleep 60 &
 echo \$! > "$TMP_DIR/orphan-check/child2.pid"
 wait
 HOOK
@@ -185,7 +188,7 @@ saved_path="$PATH"
 PATH="$no_timeout_bin"
 # oco-827: the hook itself `wait`s on its own children, so a fallback that
 # silently stops enforcing the timeout would let this call block until both
-# sleep-30 children exit naturally — bound elapsed time so that regression
+# sleep-60 children exit naturally — bound elapsed time so that regression
 # can't hide behind an eventual, too-slow pass. Same generous grace margin
 # as the sibling built-in-fallback test above.
 hook_started=$SECONDS
@@ -207,7 +210,7 @@ for pidfile in "$TMP_DIR/orphan-check"/child*.pid; do
     orphan_survivor=1
   fi
 done
-if [[ "$hook_elapsed" -lt $((hook_timeout_secs + 9)) && "$child_count" -eq 2 && "$orphan_survivor" -eq 0 ]]; then
+if [[ "$hook_elapsed" -lt $((hook_timeout_secs + 29)) && "$child_count" -eq 2 && "$orphan_survivor" -eq 0 ]]; then
   test_pass
 else
   test_fail "fallback did not finish within the bound (${hook_elapsed}s), didn't record both children ($child_count/2), or a grandchild survived teardown"
