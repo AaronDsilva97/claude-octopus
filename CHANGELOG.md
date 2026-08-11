@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [9.61.4] - 2026-08-11
+
+### Changed
+
+- Fix grasp_define timeout budgets that killed the define phase mid-answer (#868)
+
 ## [9.61.3] - 2026-08-10
 
 ### Changed
