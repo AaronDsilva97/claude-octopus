@@ -13,7 +13,16 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ORCH="$PLUGIN_DIR/scripts/orchestrate.sh"
 ALL_SRC=$(mktemp)
 cat "$ORCH" "$PLUGIN_DIR/scripts/lib/"*.sh > "$ALL_SRC" 2>/dev/null
-trap 'rm -f "$ALL_SRC"' EXIT
+# atomic_json_update temporarily replaces and restores the caller's EXIT trap.
+# On Bash 4+, a restored trap also runs when a background subshell exits. Keep
+# this test's cleanup owned by the top-level shell so concurrent writers cannot
+# delete fixtures that the parent still needs.
+cleanup_feature_sync_test() {
+  [[ "${BASH_SUBSHELL:-0}" -eq 0 ]] || return 0
+  rm -f "$ALL_SRC"
+  cleanup_test_environment
+}
+trap cleanup_feature_sync_test EXIT
 HOOK="$PLUGIN_DIR/hooks/subagent-result-capture.sh"
 
 PASS=0
@@ -109,6 +118,170 @@ if grep -q 'Agent-Type' "$HOOK"; then
   pass "agent_type written to result file"
 else
   fail "agent_type not written to result file"
+fi
+
+test_case "SubagentStop completion upserts the matching progress task exactly once"
+HOOK_WORKSPACE="$TEST_TMP_DIR/hook-workspace"
+HOOK_RESULTS="$HOOK_WORKSPACE/results"
+HOOK_TEAMS="$HOOK_WORKSPACE/agent-teams"
+mkdir -p "$HOOK_RESULTS" "$HOOK_TEAMS"
+HOOK_RESULT_FILE="$HOOK_RESULTS/claude-task-1.md"
+cat > "$HOOK_TEAMS/task-1.json" <<EOF
+{"dispatch_method":"agent_teams","result_file":"$HOOK_RESULT_FILE"}
+EOF
+cat > "$HOOK_WORKSPACE/progress.json" <<EOF
+{"phase":"develop","total_agents":2,"completed_agents":1,"total_time_ms":0,"agents":[{"name":"claude","task_id":"task-1","phase":"develop","status":"running","started_at":"2026-08-11T00:00:00Z","elapsed_ms":0,"cost":0,"output_file":"$HOOK_RESULTS/../results/claude-task-1.md"},{"name":"legacy","task_id":"legacy-terminal","phase":"develop","status":"completed","started_at":"","elapsed_ms":null,"cost":null,"output_file":""}]}
+EOF
+HOOK_INPUT='{"last_assistant_message":"Implemented the requested change.","agent_id":"agent-1","agent_type":"claude"}'
+printf '%s' "$HOOK_INPUT" | OCTOPUS_WORKSPACE="$HOOK_WORKSPACE" "$HOOK"
+printf '%s' "$HOOK_INPUT" | OCTOPUS_WORKSPACE="$HOOK_WORKSPACE" "$HOOK"
+if jq -e '
+  .total_agents == 2 and
+  .completed_agents == 2 and
+  .successful_agents == 2 and
+  (.total_time_ms | numbers) and
+  (.total_cost | numbers) and
+  (.agents | length) == 2 and
+  .agents[0].task_id == "task-1" and
+  .agents[0].status == "completed" and
+  ([.agents[] | select(.status == "running")] | length) == 0
+' "$HOOK_WORKSPACE/progress.json" >/dev/null; then
+  test_pass
+else
+  test_fail "hook failed canonical-path matching, numeric coercion, or idempotent counting"
+fi
+
+test_case "SubagentStop releases the shared lock for later shell progress updates"
+if [[ ! -e "$HOOK_WORKSPACE/progress.json.lock" ]] && (
+  source "$PLUGIN_DIR/scripts/lib/validation.sh"
+  source "$PLUGIN_DIR/scripts/lib/agents.sh"
+  log() { :; }
+  PROGRESS_TRACKING_ENABLED=true
+  PROGRESS_FILE="$HOOK_WORKSPACE/progress.json"
+  update_agent_status "claude" "completed" 123 0 600 \
+    "task-1" "develop" "$HOOK_RESULT_FILE"
+); then
+  test_pass
+else
+  test_fail "hook left a lock path that blocks later shell progress updates"
+fi
+
+test_case "concurrent SubagentStop and shell writers do not lose progress completions"
+CONCURRENT_WORKSPACE="$TEST_TMP_DIR/concurrent-hook-workspace"
+CONCURRENT_RESULTS="$CONCURRENT_WORKSPACE/results"
+CONCURRENT_TEAMS="$CONCURRENT_WORKSPACE/agent-teams"
+mkdir -p "$CONCURRENT_RESULTS" "$CONCURRENT_TEAMS"
+CONCURRENT_AGENTS="$TEST_TMP_DIR/concurrent-agents.jsonl"
+: > "$CONCURRENT_AGENTS"
+for i in $(seq 1 24); do
+  concurrent_result="$CONCURRENT_RESULTS/claude-task-${i}.md"
+  jq -cn --arg id "agent-${i}" --arg result "$concurrent_result" \
+    '{agent_id:$id,dispatch_method:"agent_teams",result_file:$result}' \
+    > "$CONCURRENT_TEAMS/task-${i}.json"
+  jq -cn --arg task "task-${i}" --arg result "$concurrent_result" \
+    '{name:"claude",task_id:$task,phase:"develop",status:"running",started_at:"2026-08-11T00:00:00Z",elapsed_ms:0,cost:0,output_file:$result}' \
+    >> "$CONCURRENT_AGENTS"
+done
+jq -s '{phase:"develop",total_agents:length,completed_agents:0,total_time_ms:0,agents:.}' \
+  "$CONCURRENT_AGENTS" > "$CONCURRENT_WORKSPACE/progress.json"
+
+concurrent_pids=""
+for i in $(seq 1 24); do
+  (printf '{"last_assistant_message":"Done %s","agent_id":"agent-%s","agent_type":"claude"}' "$i" "$i" |
+    OCTO_LOCK_WAIT_SECS=15 OCTO_LOCK_RETRY_MILLIS=100 \
+    OCTOPUS_WORKSPACE="$CONCURRENT_WORKSPACE" "$HOOK") &
+  concurrent_pids="$concurrent_pids $!"
+done
+(
+  source "$PLUGIN_DIR/scripts/lib/validation.sh"
+  source "$PLUGIN_DIR/scripts/lib/agents.sh"
+  log() { :; }
+  PROGRESS_TRACKING_ENABLED=true
+  PROGRESS_FILE="$CONCURRENT_WORKSPACE/progress.json"
+  OCTO_LOCK_WAIT_SECS=15 OCTO_LOCK_RETRY_MILLIS=100 \
+    update_agent_status "claude" "completed" 456 0 600 \
+    "task-1" "develop" "$CONCURRENT_RESULTS/claude-task-1.md"
+) &
+concurrent_pids="$concurrent_pids $!"
+for concurrent_pid in $concurrent_pids; do
+  wait "$concurrent_pid" || true
+done
+if jq -e '
+  .total_agents == 24 and
+  .completed_agents == 24 and
+  .successful_agents == 24 and
+  (.agents | length) == 24 and
+  ([.agents[] | select(.status == "running")] | length) == 0
+' "$CONCURRENT_WORKSPACE/progress.json" >/dev/null; then
+  test_pass
+else
+  test_fail "concurrent hook/shell rewrites lost one or more terminal updates"
+fi
+
+test_case "concurrent progress writers preserve parent test fixtures"
+if [[ -s "$ALL_SRC" ]]; then
+  test_pass
+else
+  test_fail "a background progress writer ran the parent EXIT cleanup"
+fi
+
+test_case "live progress lock is not reclaimed and a duplicate hook reconciles later"
+LOCK_WORKSPACE="$TEST_TMP_DIR/live-lock-workspace"
+LOCK_RESULTS="$LOCK_WORKSPACE/results"
+LOCK_TEAMS="$LOCK_WORKSPACE/agent-teams"
+LOCK_RESULT_FILE="$LOCK_RESULTS/claude-lock-task.md"
+mkdir -p "$LOCK_RESULTS" "$LOCK_TEAMS" "$LOCK_WORKSPACE/progress.json.lock"
+cat > "$LOCK_TEAMS/lock-task.json" <<EOF
+{"agent_id":"lock-agent","dispatch_method":"agent_teams","result_file":"$LOCK_RESULT_FILE"}
+EOF
+cat > "$LOCK_WORKSPACE/progress.json" <<EOF
+{"phase":"develop","total_agents":1,"completed_agents":0,"agents":[{"name":"claude","task_id":"lock-task","phase":"develop","status":"running","started_at":"2026-08-11T00:00:00Z","elapsed_ms":0,"cost":0,"output_file":"$LOCK_RESULT_FILE"}]}
+EOF
+printf '%s\n' "$$" > "$LOCK_WORKSPACE/progress.json.lock/pid"
+printf '%s\n' "$(( $(date +%s) - 120 ))" > "$LOCK_WORKSPACE/progress.json.lock/ts"
+LOCK_INPUT='{"last_assistant_message":"Finished after lock release.","agent_id":"lock-agent","agent_type":"claude"}'
+printf '%s' "$LOCK_INPUT" | OCTO_LOCK_WAIT_SECS=1 OCTO_LOCK_RETRY_MILLIS=100 \
+  OCTOPUS_WORKSPACE="$LOCK_WORKSPACE" "$HOOK"
+lock_preserved=false
+if [[ -d "$LOCK_WORKSPACE/progress.json.lock" ]] &&
+   jq -e '.agents[0].status == "running"' "$LOCK_WORKSPACE/progress.json" >/dev/null; then
+  lock_preserved=true
+fi
+rm -rf "$LOCK_WORKSPACE/progress.json.lock"
+printf '%s' "$LOCK_INPUT" | OCTO_LOCK_WAIT_SECS=1 OCTO_LOCK_RETRY_MILLIS=100 \
+  OCTOPUS_WORKSPACE="$LOCK_WORKSPACE" "$HOOK"
+if [[ "$lock_preserved" == "true" ]] &&
+   jq -e '.completed_agents == 1 and .agents[0].status == "completed"' \
+     "$LOCK_WORKSPACE/progress.json" >/dev/null &&
+   grep -q 'timed out acquiring progress lock' "$LOCK_WORKSPACE/logs/hook-errors.log"; then
+  test_pass
+else
+  test_fail "hook reclaimed a live lock or could not reconcile after the lock cleared"
+fi
+
+test_case "hard-aged progress lock with a recycled live PID is reclaimed"
+AGED_LOCK_WORKSPACE="$TEST_TMP_DIR/aged-live-lock-workspace"
+AGED_LOCK_RESULTS="$AGED_LOCK_WORKSPACE/results"
+AGED_LOCK_TEAMS="$AGED_LOCK_WORKSPACE/agent-teams"
+AGED_LOCK_RESULT_FILE="$AGED_LOCK_RESULTS/claude-aged-lock-task.md"
+mkdir -p "$AGED_LOCK_RESULTS" "$AGED_LOCK_TEAMS" "$AGED_LOCK_WORKSPACE/progress.json.lock"
+cat > "$AGED_LOCK_TEAMS/aged-lock-task.json" <<EOF
+{"agent_id":"aged-lock-agent","dispatch_method":"agent_teams","result_file":"$AGED_LOCK_RESULT_FILE"}
+EOF
+cat > "$AGED_LOCK_WORKSPACE/progress.json" <<EOF
+{"phase":"develop","total_agents":1,"completed_agents":0,"agents":[{"name":"claude","task_id":"aged-lock-task","phase":"develop","status":"running","started_at":"2026-08-11T00:00:00Z","elapsed_ms":0,"cost":0,"output_file":"$AGED_LOCK_RESULT_FILE"}]}
+EOF
+printf '%s\n' "$$" > "$AGED_LOCK_WORKSPACE/progress.json.lock/pid"
+printf '%s\n' "$(( $(date +%s) - 301 ))" > "$AGED_LOCK_WORKSPACE/progress.json.lock/ts"
+AGED_LOCK_INPUT='{"last_assistant_message":"Finished after stale lock recovery.","agent_id":"aged-lock-agent","agent_type":"claude"}'
+printf '%s' "$AGED_LOCK_INPUT" | OCTO_LOCK_STALE_SECS=30 OCTO_LOCK_WAIT_SECS=1 \
+  OCTO_LOCK_RETRY_MILLIS=100 OCTOPUS_WORKSPACE="$AGED_LOCK_WORKSPACE" "$HOOK"
+if [[ ! -e "$AGED_LOCK_WORKSPACE/progress.json.lock" ]] &&
+   jq -e '.completed_agents == 1 and .agents[0].status == "completed"' \
+     "$AGED_LOCK_WORKSPACE/progress.json" >/dev/null; then
+  test_pass
+else
+  test_fail "hook preserved a hard-aged recycled-PID lock"
 fi
 
 # ─────────────────────────────────────────────────────────────────────

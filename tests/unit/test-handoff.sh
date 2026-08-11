@@ -107,4 +107,27 @@ if grep -q 'blockers' "$HANDOFF" 2>/dev/null; then
 else
     fail "write-handoff.sh extracts blockers" "missing blockers extraction"
 fi
+
+# ── Reads the canonical progress.json array shape ───────────────────
+
+test_case "write-handoff reads active agent from canonical progress.json"
+TEST_ROOT="$TEST_TMP_DIR/handoff-fixture"
+PLUGIN_DATA="$TEST_ROOT/plugin-data"
+mkdir -p "$TEST_ROOT/home/.claude-octopus" "$PLUGIN_DATA" "$TEST_ROOT/work/.octo"
+cat > "$TEST_ROOT/home/.claude-octopus/session.json" <<'EOF'
+{"current_phase":"develop","workflow":"embrace","status":"running"}
+EOF
+cat > "$PLUGIN_DATA/progress.json" <<'EOF'
+{"agents":[{"name":"codex","task_id":"task-1","status":"running"}]}
+EOF
+if (cd "$TEST_ROOT/work" && \
+    HOME="$TEST_ROOT/home" \
+    CLAUDE_PLUGIN_DATA="$PLUGIN_DATA" \
+    CLAUDE_SESSION_ID="test-session" \
+    "$HANDOFF") && \
+   grep -q '\*\*Active Agent:\*\* codex' "$TEST_ROOT/work/.octo-continue.md"; then
+    test_pass
+else
+    test_fail "handoff did not read the active agent from progress.json's agents array"
+fi
 test_summary

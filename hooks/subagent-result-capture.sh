@@ -78,51 +78,209 @@ fi
 [[ -z "$RESULT_FILE" ]] && exit 0
 
 # Security: validate result_file resolves within WORKSPACE_DIR (prevent path traversal)
-RESOLVED_RESULT=$(realpath -m "$RESULT_FILE" 2>/dev/null) || exit 0
-RESOLVED_WORKSPACE=$(realpath -m "$WORKSPACE_DIR" 2>/dev/null) || exit 0
+RESOLVED_RESULT=$(_OCTO_PATH="$RESULT_FILE" python3 -c 'import os; print(os.path.realpath(os.environ["_OCTO_PATH"]))' 2>/dev/null) || exit 0
+RESOLVED_WORKSPACE=$(_OCTO_PATH="$WORKSPACE_DIR" python3 -c 'import os; print(os.path.realpath(os.environ["_OCTO_PATH"]))' 2>/dev/null) || exit 0
 case "$RESOLVED_RESULT" in
     "$RESOLVED_WORKSPACE"/*) ;; # OK — within workspace
     *) exit 0 ;; # Path traversal attempt — bail silently
 esac
 
-# Dedup: if the result file already has substantive output beyond headers, skip
+# Dedup the result body, but continue into progress reconciliation. A prior hook
+# may have captured output while the progress lock was temporarily unavailable.
+RESULT_ALREADY_CAPTURED=false
 if [[ -f "$RESULT_FILE" ]]; then
     BODY_LINES=$(sed '1,/^$/d' "$RESULT_FILE" 2>/dev/null | grep -cv '^$' 2>/dev/null) || BODY_LINES=0
-    [[ "$BODY_LINES" -gt 2 ]] && exit 0
+    [[ "$BODY_LINES" -gt 2 ]] && RESULT_ALREADY_CAPTURED=true
 fi
 
 # Write the captured message into the result file
-{
-    echo "## Output"
-    echo '```'
-    printf '%s\n' "$LAST_MSG"
-    echo '```'
-    echo ""
-    echo "## Status: SUCCESS"
-    echo "## Capture: SubagentStop hook (last_assistant_message)"
-    # v8.40.0: Include agent_type for per-agent cost attribution (CC v2.1.69+)
-    if [[ -n "$AGENT_TYPE" ]]; then
-        echo "## Agent-Type: $AGENT_TYPE"
-    fi
-} >> "$RESULT_FILE"
+if [[ "$RESULT_ALREADY_CAPTURED" != "true" ]]; then
+    {
+        echo "## Output"
+        echo '```'
+        printf '%s\n' "$LAST_MSG"
+        echo '```'
+        echo ""
+        echo "## Status: SUCCESS"
+        echo "## Capture: SubagentStop hook (last_assistant_message)"
+        # v8.40.0: Include agent_type for per-agent cost attribution (CC v2.1.69+)
+        if [[ -n "$AGENT_TYPE" ]]; then
+            echo "## Agent-Type: $AGENT_TYPE"
+        fi
+    } >> "$RESULT_FILE"
+fi
 
-# Increment progress counter — Agent Teams path never calls update_agent_status,
-# so completed_agents drifts low. Fix by writing directly to progress.json here.
+# Complete the matching task in place. This hook can fire more than once for a
+# native teammate, so counters must be derived from the task ledger rather than
+# incremented blindly.
 PROGRESS_FILE="${WORKSPACE_DIR}/progress.json"
 if [[ -f "$PROGRESS_FILE" ]] && command -v python3 &>/dev/null; then
-    python3 - "$PROGRESS_FILE" <<'PYEOF' 2>/dev/null || true
-import json, sys, os, tempfile
-path = sys.argv[1]
+    HOOK_LOG_FILE="/dev/null"
+    if mkdir -p "${WORKSPACE_DIR}/logs" 2>/dev/null; then
+        HOOK_LOG_FILE="${WORKSPACE_DIR}/logs/hook-errors.log"
+    fi
+    python3 - "$PROGRESS_FILE" "$RESOLVED_RESULT" <<'PYEOF' 2>>"$HOOK_LOG_FILE" || true
+import datetime, json, math, os, shutil, sys, time, uuid
+path, result_file = sys.argv[1:3]
+lock_dir = path + '.lock'
+
+def positive_int_env(name, default):
+    try:
+        value = int(os.environ.get(name, str(default)))
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+wait_seconds = positive_int_env('OCTO_LOCK_WAIT_SECS', 5)
+retry_ms = positive_int_env('OCTO_LOCK_RETRY_MILLIS', 100)
+deadline = time.monotonic() + wait_seconds
+lock_token = '{}-{}'.format(os.getpid(), uuid.uuid4().hex)
 try:
+    stale_age = max(1, int(os.environ.get('OCTO_LOCK_STALE_SECS', '30')))
+except ValueError:
+    stale_age = 30
+
+def read_pid(directory):
+    try:
+        with open(os.path.join(directory, 'pid')) as f:
+            return int(f.read().strip())
+    except (OSError, TypeError, ValueError):
+        return None
+
+def pid_is_alive(owner):
+    if owner is None:
+        return False
+    try:
+        os.kill(owner, 0)
+        return True
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+
+def lock_age_seconds(directory):
+    try:
+        with open(os.path.join(directory, 'ts')) as f:
+            timestamp = int(f.read().strip())
+        return max(0, time.time() - timestamp)
+    except (OSError, TypeError, ValueError):
+        return None
+
+def lock_is_stale(directory):
+    owner = read_pid(directory)
+    age = lock_age_seconds(directory)
+    if owner is not None:
+        if not pid_is_alive(owner):
+            return True
+        # A live PID normally proves ownership. Bound that trust so a PID
+        # recycled after a crash cannot preserve an abandoned lock forever.
+        return age is not None and age >= stale_age * 10
+    return age is not None and age >= stale_age
+
+def restore_live_lock(stale_dir):
+    try:
+        os.rename(stale_dir, lock_dir)
+        return
+    except OSError:
+        # Never delete a lock after discovering that its owner is alive. The
+        # identity token below prevents that owner from releasing a successor.
+        return
+
+def release_owned_lock():
+    try:
+        with open(os.path.join(lock_dir, 'token')) as f:
+            current = f.read().strip()
+        if current == lock_token:
+            shutil.rmtree(lock_dir, ignore_errors=True)
+    except OSError:
+        pass
+
+def safe_number(value, default=0):
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number) or number < 0:
+        return default
+    return int(number) if number.is_integer() else number
+
+acquired = False
+try:
+    while True:
+        created = False
+        try:
+            os.mkdir(lock_dir)
+            created = True
+            with open(os.path.join(lock_dir, 'pid'), 'w') as f:
+                f.write(str(os.getpid()))
+            with open(os.path.join(lock_dir, 'ts'), 'w') as f:
+                f.write(str(int(time.time())))
+            with open(os.path.join(lock_dir, 'token'), 'w') as f:
+                f.write(lock_token)
+            acquired = True
+            break
+        except FileExistsError:
+            if os.path.isdir(lock_dir) and lock_is_stale(lock_dir):
+                stale_dir = lock_dir + '.stale.' + lock_token
+                try:
+                    os.rename(lock_dir, stale_dir)
+                    if lock_is_stale(stale_dir):
+                        shutil.rmtree(stale_dir, ignore_errors=True)
+                    else:
+                        restore_live_lock(stale_dir)
+                    continue
+                except OSError:
+                    pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError('timed out acquiring progress lock')
+            time.sleep(retry_ms / 1000.0)
+        except OSError:
+            if created:
+                shutil.rmtree(lock_dir, ignore_errors=True)
+            raise
+
     with open(path) as f:
         d = json.load(f)
-    d['completed_agents'] = d.get('completed_agents', 0) + 1
-    tmp = path + '.tmp'
+    now = datetime.datetime.now(datetime.timezone.utc)
+    terminal = {'completed', 'ok', 'degraded', 'failed', 'timeout', 'skipped'}
+    for agent in d.get('agents', []):
+        stored = agent.get('output_file') or ''
+        if stored and not os.path.isabs(stored):
+            stored = os.path.join(os.path.dirname(path), stored)
+        if not stored or os.path.realpath(stored) != result_file:
+            continue
+        if agent.get('status') not in terminal:
+            agent['status'] = 'completed'
+            agent['updated_at'] = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+            started = agent.get('started_at', '')
+            try:
+                start = datetime.datetime.fromisoformat(started.replace('Z', '+00:00'))
+                agent['elapsed_ms'] = max(0, int((now - start).total_seconds() * 1000))
+            except (TypeError, ValueError):
+                agent['elapsed_ms'] = safe_number(agent.get('elapsed_ms'))
+        break
+    agents = d.get('agents', [])
+    finished = [a for a in agents if a.get('status') in terminal]
+    d['total_agents'] = max(int(safe_number(d.get('total_agents'))), len(agents))
+    d['completed_agents'] = len(finished)
+    d['successful_agents'] = sum(a.get('status') in {'completed', 'ok', 'degraded'} for a in agents)
+    d['failed_agents'] = sum(a.get('status') == 'failed' for a in agents)
+    d['timeout_agents'] = sum(a.get('status') == 'timeout' for a in agents)
+    d['skipped_agents'] = sum(a.get('status') == 'skipped' for a in agents)
+    d['total_time_ms'] = sum(safe_number(a.get('elapsed_ms')) for a in finished)
+    d['total_cost'] = sum(safe_number(a.get('cost')) for a in finished)
+    tmp = path + '.tmp.' + str(os.getpid())
     with open(tmp, 'w') as f:
         json.dump(d, f, indent=2)
     os.replace(tmp, path)
-except Exception:
-    pass
+except Exception as exc:
+    print('[hook:subagent-result-capture.sh] progress update failed: {}: {}'.format(
+        type(exc).__name__, exc), file=sys.stderr)
+finally:
+    if acquired:
+        release_owned_lock()
 PYEOF
 fi
 
