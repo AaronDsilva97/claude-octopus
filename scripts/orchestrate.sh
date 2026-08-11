@@ -214,13 +214,12 @@ source "${SCRIPT_DIR}/lib/council.sh" 2>/dev/null || true
 # Prevents path traversal attacks and restricts to safe locations
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Apply workspace path — prefer CLAUDE_PLUGIN_DATA (CC v2.1.78+), then user override, then default
-if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
-    WORKSPACE_DIR="${CLAUDE_PLUGIN_DATA}"
-elif [[ -n "${CLAUDE_OCTOPUS_WORKSPACE:-}" ]]; then
-    WORKSPACE_DIR=$(validate_workspace_path "$CLAUDE_OCTOPUS_WORKSPACE") || exit 1
-else
-    WORKSPACE_DIR="${HOME}/.claude-octopus"
+# Use the same workspace resolver as standalone `octopus state-path`. Preserve
+# path validation for the user-controlled override; CLAUDE_PLUGIN_DATA is
+# supplied by the host and retains precedence.
+WORKSPACE_DIR="$(resolve_octopus_workspace)"
+if [[ -z "${CLAUDE_PLUGIN_DATA:-}" && -n "${CLAUDE_OCTOPUS_WORKSPACE:-}" ]]; then
+    WORKSPACE_DIR="$(validate_workspace_path "$WORKSPACE_DIR")" || exit 1
 fi
 
 # Re-derive SESSION_FILE now that WORKSPACE_DIR is known
@@ -2123,17 +2122,17 @@ show_status() {
     fi
 
     # v8.14.0: Show persistent project state
-    if [[ -f ".claude-octopus/state.json" ]]; then
+    if [[ -f "$STATE_FILE" ]]; then
         echo ""
         echo -e "${BLUE}Project State:${NC}"
         local wf ph pc dc ab
-        wf=$(jq -r '.current_workflow // "none"' .claude-octopus/state.json 2>/dev/null)
-        ph=$(jq -r '.current_phase // "none"' .claude-octopus/state.json 2>/dev/null)
-        pc=$(jq -r '.metrics.phases_completed // 0' .claude-octopus/state.json 2>/dev/null)
-        dc=$(jq -r '.decisions | length // 0' .claude-octopus/state.json 2>/dev/null)
+        wf=$(jq -r '.current_workflow // "none"' "$STATE_FILE" 2>/dev/null)
+        ph=$(jq -r '.current_phase // "none"' "$STATE_FILE" 2>/dev/null)
+        pc=$(jq -r '.metrics.phases_completed // 0' "$STATE_FILE" 2>/dev/null)
+        dc=$(jq -r '.decisions | length // 0' "$STATE_FILE" 2>/dev/null)
         echo -e "  Workflow: ${CYAN}${wf}${NC} | Phase: ${CYAN}${ph}${NC}"
         echo -e "  Phases completed: $pc | Decisions: $dc"
-        ab=$(jq -r '[.blockers[] | select(.status == "active")] | length // 0' .claude-octopus/state.json 2>/dev/null)
+        ab=$(jq -r '[.blockers[] | select(.status == "active")] | length // 0' "$STATE_FILE" 2>/dev/null)
         if [[ "$ab" -gt 0 ]] 2>/dev/null; then
             echo -e "  ${YELLOW}Active blockers: $ab${NC}"
         fi
@@ -2341,6 +2340,16 @@ fi
 # Initialize state management (v7.17.0)
 # Skip for help and non-workflow commands
 if [[ "$COMMAND" != "help" && "$COMMAND" != "setup" && "$COMMAND" != "preflight" && "$COMMAND" != "cost" && "$COMMAND" != "usage" && "$COMMAND" != "-h" && "$COMMAND" != "--help" ]]; then
+    # Keep workflow context outside the project by default, namespaced by a
+    # stable project identity. This is deliberately separate from
+    # OCTOPUS_STATE_DIR, which owns the user-level feature/advisory ledger.
+    # Project-local persistence remains an explicit opt-in.
+    OCTOPUS_STATE_PROJECT_ROOT="$PROJECT_ROOT"
+    if [[ -z "${OCTOPUS_WORKFLOW_STATE_DIR:-}" ]]; then
+        OCTOPUS_WORKFLOW_STATE_DIR="${WORKSPACE_DIR}/projects/$(state_project_id "$PROJECT_ROOT")"
+    fi
+    export OCTOPUS_STATE_PROJECT_ROOT OCTOPUS_WORKFLOW_STATE_DIR
+    configure_state_paths "$OCTOPUS_WORKFLOW_STATE_DIR"
     init_state 2>/dev/null || true
 
     # v8.29.0: Check if ConfigChange hook signaled settings were modified

@@ -394,6 +394,260 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
     return "$final_rc"
 }
 
+# Active probe cancellation state is global because Bash signal traps can fire
+# while the main shell is blocked inside a child command or progress loop. The
+# state is populated incrementally, so cancellation during the spawn loop can
+# still reconcile tasks already appended to the PID ledger.
+OCTOPUS_ACTIVE_PROBE_TASK_GROUP=""
+OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID=""
+OCTOPUS_ACTIVE_PROBE_SYNTHESIS_LAUNCHING="false"
+OCTOPUS_ACTIVE_PROBE_TMUX="false"
+OCTOPUS_ACTIVE_PROBE_PIDS=()
+OCTOPUS_ACTIVE_PROBE_AGENTS=()
+OCTOPUS_ACTIVE_PROBE_TASK_IDS=()
+
+octopus_probe_clear_active() {
+    OCTOPUS_ACTIVE_PROBE_TASK_GROUP=""
+    OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID=""
+    OCTOPUS_ACTIVE_PROBE_SYNTHESIS_LAUNCHING="false"
+    OCTOPUS_ACTIVE_PROBE_TMUX="false"
+    OCTOPUS_ACTIVE_PROBE_PIDS=()
+    OCTOPUS_ACTIVE_PROBE_AGENTS=()
+    OCTOPUS_ACTIVE_PROBE_TASK_IDS=()
+}
+
+_octopus_probe_restore_traps() {
+    local previous_int_trap="${1:-}"
+    local previous_term_trap="${2:-}"
+
+    octopus_probe_clear_active
+    if [[ -n "$previous_int_trap" ]]; then
+        eval "$previous_int_trap"
+    else
+        trap - INT
+    fi
+    if [[ -n "$previous_term_trap" ]]; then
+        eval "$previous_term_trap"
+    else
+        trap - TERM
+    fi
+}
+
+_octopus_probe_terminate_tree() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+
+    if declare -F review_terminate_process_tree >/dev/null 2>&1; then
+        review_terminate_process_tree "$pid" 1
+    else
+        pkill -TERM -P "$pid" 2>/dev/null || true
+        kill -TERM "$pid" 2>/dev/null || true
+        sleep 1
+        pkill -KILL -P "$pid" 2>/dev/null || true
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+}
+
+_octopus_probe_prune_pid_ledger() {
+    local task_group="$1"
+    [[ -n "${PID_FILE:-}" && -f "$PID_FILE" ]] || return 0
+
+    local tmp_file="${PID_FILE}.cancel.$$"
+    if awk -F: -v prefix="probe-${task_group}-" \
+        'index($3, prefix) != 1 { print }' "$PID_FILE" > "$tmp_file"; then
+        mv -f "$tmp_file" "$PID_FILE"
+    else
+        rm -f "$tmp_file" 2>/dev/null || true
+    fi
+}
+
+octopus_probe_cancel_active() {
+    local signal_name="${1:-TERM}"
+    local task_group="${OCTOPUS_ACTIVE_PROBE_TASK_GROUP:-}"
+    [[ -n "$task_group" ]] || return 0
+
+    local exit_code=143
+    [[ "$signal_name" == "INT" ]] && exit_code=130
+
+    # The + expansion is required for Bash 3.2 with nounset: expanding a
+    # declared-but-empty array directly is treated as an unbound variable.
+    local -a cancel_pids=("${OCTOPUS_ACTIVE_PROBE_PIDS[@]+"${OCTOPUS_ACTIVE_PROBE_PIDS[@]}"}")
+    local -a cancel_agents=("${OCTOPUS_ACTIVE_PROBE_AGENTS[@]+"${OCTOPUS_ACTIVE_PROBE_AGENTS[@]}"}")
+    local -a cancel_tasks=("${OCTOPUS_ACTIVE_PROBE_TASK_IDS[@]+"${OCTOPUS_ACTIVE_PROBE_TASK_IDS[@]}"}")
+    local ledger_pid ledger_agent ledger_task existing found found_idx idx
+
+    for idx in "${!cancel_tasks[@]}"; do
+        [[ -n "${cancel_agents[$idx]:-}" ]] || cancel_agents[$idx]="unknown"
+        [[ -n "${cancel_tasks[$idx]:-}" ]] \
+            || cancel_tasks[$idx]="probe-${task_group}-${idx}"
+    done
+
+    # The PID ledger is authoritative for a signal that lands between spawn's
+    # append and the caller's array assignment.
+    if [[ -n "${PID_FILE:-}" && -f "$PID_FILE" ]]; then
+        while IFS=: read -r ledger_pid ledger_agent ledger_task; do
+            [[ "$ledger_task" == "probe-${task_group}-"* ]] || continue
+            found=false
+            found_idx=""
+            for idx in "${!cancel_tasks[@]}"; do
+                existing="${cancel_tasks[$idx]:-}"
+                if [[ "$existing" == "$ledger_task" ]]; then
+                    found=true
+                    found_idx="$idx"
+                    break
+                fi
+            done
+            if [[ "$found" == "true" ]]; then
+                [[ -n "${cancel_pids[$found_idx]:-}" ]] \
+                    || cancel_pids[$found_idx]="$ledger_pid"
+                [[ -n "${cancel_agents[$found_idx]:-}" ]] \
+                    || cancel_agents[$found_idx]="$ledger_agent"
+            else
+                cancel_pids+=("$ledger_pid")
+                cancel_agents+=("$ledger_agent")
+                cancel_tasks+=("$ledger_task")
+            fi
+        done < "$PID_FILE"
+    fi
+
+    local synthesis_pid="${OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID:-}"
+    # A trap can run after the monitor has been backgrounded but before the
+    # caller assigns $! to the registered PID. During that tiny handoff window,
+    # the shell's last-background PID is the authoritative value.
+    if [[ ! "$synthesis_pid" =~ ^[0-9]+$ ]] \
+       && [[ "${OCTOPUS_ACTIVE_PROBE_SYNTHESIS_LAUNCHING:-false}" == "true" ]]; then
+        synthesis_pid="${!:-}"
+    fi
+    if [[ "$synthesis_pid" =~ ^[0-9]+$ ]]; then
+        _octopus_probe_terminate_tree "$synthesis_pid"
+        wait "$synthesis_pid" 2>/dev/null || true
+    fi
+
+    for idx in "${!cancel_tasks[@]}"; do
+        ledger_pid="${cancel_pids[$idx]:-}"
+        _octopus_probe_terminate_tree "$ledger_pid"
+    done
+
+    local result_file done_file completed task_id agent
+    for idx in "${!cancel_tasks[@]}"; do
+        ledger_pid="${cancel_pids[$idx]:-}"
+        agent="${cancel_agents[$idx]:-unknown}"
+        task_id="${cancel_tasks[$idx]:-probe-${task_group}-${idx}}"
+        result_file="${RESULTS_DIR:-}/$agent-$task_id.md"
+        done_file="${WORKSPACE_DIR:-${HOME}/.claude-octopus}/.octo/agents/${task_id}.done"
+        completed=false
+        [[ -f "$done_file" ]] && completed=true
+        if [[ -f "$result_file" ]] \
+           && grep -Eq '^# Completed:|^## Status: (SUCCESS|FAILED|TIMEOUT)' "$result_file" 2>/dev/null; then
+            completed=true
+        fi
+
+        if [[ "$ledger_pid" =~ ^[0-9]+$ ]]; then
+            wait "$ledger_pid" 2>/dev/null || true
+            rm -f "${WORKSPACE_DIR:-${HOME}/.claude-octopus}/.octo/agents/${ledger_pid}.heartbeat" \
+                2>/dev/null || true
+        fi
+
+        if [[ "$completed" == "false" ]]; then
+            if [[ -f "$result_file" ]] && ! grep -c '^## Status: CANCELLED' "$result_file" >/dev/null 2>&1; then
+                {
+                    echo '```'
+                    echo ""
+                    echo "## Status: CANCELLED - PARTIAL RESULTS"
+                    echo ""
+                    echo "Probe interrupted by SIG${signal_name}; partial output above was preserved."
+                } >> "$result_file"
+            fi
+            if declare -F _octopus_agent_lifecycle_event >/dev/null 2>&1; then
+                _octopus_agent_lifecycle_event "cancelled" "$agent" "$task_id" \
+                    "researcher" "probe" "$ledger_pid" "$result_file" \
+                    "$exit_code" "cancelled"
+            fi
+        fi
+    done
+
+    _octopus_probe_prune_pid_ledger "$task_group"
+    if [[ "${OCTOPUS_ACTIVE_PROBE_TMUX:-false}" == "true" ]] \
+       && declare -F tmux_cleanup >/dev/null 2>&1; then
+        tmux_cleanup 2>/dev/null || true
+    fi
+    octopus_probe_clear_active
+}
+
+_octopus_probe_start_synthesis_monitor() {
+    local task_group="$1"
+    local prompt="$2"
+    local interval="${3:-2}"
+
+    OCTOPUS_ACTIVE_PROBE_SYNTHESIS_LAUNCHING="true"
+    progressive_synthesis_monitor "$task_group" "$prompt" "$interval" &
+    local monitor_pid=$!
+
+    # Runtime-only seam for deterministically exercising the signal handoff.
+    if declare -F _octopus_test_after_synthesis_spawn >/dev/null 2>&1; then
+        _octopus_test_after_synthesis_spawn "$monitor_pid"
+    fi
+
+    # A cancellation during the handoff clears the active task group. Reap the
+    # just-launched monitor and do not re-register stale state afterward.
+    if [[ -z "${OCTOPUS_ACTIVE_PROBE_TASK_GROUP:-}" ]]; then
+        _octopus_probe_terminate_tree "$monitor_pid"
+        wait "$monitor_pid" 2>/dev/null || true
+        OCTOPUS_ACTIVE_PROBE_SYNTHESIS_LAUNCHING="false"
+        return 143
+    fi
+
+    OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID="$monitor_pid"
+    OCTOPUS_ACTIVE_PROBE_SYNTHESIS_LAUNCHING="false"
+    return 0
+}
+
+_octopus_probe_finalize_synthesis() {
+    local task_group="$1"
+    local prompt="$2"
+    local usable_results="$3"
+    local synthesis_marker="$4"
+    local synthesis_monitor_pid="$5"
+    local previous_int_trap="${6:-}"
+    local previous_term_trap="${7:-}"
+    local synthesis_status=0
+    local summary_status=0
+
+    synthesize_probe_results "$task_group" "$prompt" "$usable_results" \
+        || synthesis_status=$?
+
+    # Preserve the marker on failure so synthesize-probe can recover the run.
+    if [[ "$synthesis_status" -eq 0 ]]; then
+        rm -f "$synthesis_marker"
+        log DEBUG "Synthesis marker removed (synthesis completed successfully)"
+    fi
+
+    if [[ "$synthesis_monitor_pid" =~ ^[0-9]+$ ]]; then
+        kill "$synthesis_monitor_pid" 2>/dev/null || true
+        wait "$synthesis_monitor_pid" 2>/dev/null || true
+        OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID=""
+        log "DEBUG" "Progressive synthesis monitor stopped"
+    fi
+
+    # Guard summary rendering because orchestrate.sh enables errexit. Cleanup
+    # and trap restoration must happen even when the renderer fails.
+    display_progress_summary || summary_status=$?
+    _octopus_probe_restore_traps "$previous_int_trap" "$previous_term_trap"
+
+    [[ "$synthesis_status" -ne 0 ]] && return "$synthesis_status"
+    return "$summary_status"
+}
+
+octopus_probe_handle_signal() {
+    local signal_name="${1:-TERM}"
+    local exit_code=143
+    [[ "$signal_name" == "INT" ]] && exit_code=130
+    trap - INT TERM
+    octopus_probe_cancel_active "$signal_name"
+    exit "$exit_code"
+}
+
 # Phase 1: PROBE (Discover) - Parallel research with synthesis
 # Like an octopus probing with multiple tentacles simultaneously
 probe_discover() {
@@ -530,6 +784,17 @@ ${_blind_spot_checklist}"
     # Initialize progress tracking with actual agent count (dynamic, may be 5, 6, or 7)
     init_progress_tracking "discover" "${#perspectives[@]}"
 
+    local probe_previous_int_trap probe_previous_term_trap
+    probe_previous_int_trap="$(trap -p INT)"
+    probe_previous_term_trap="$(trap -p TERM)"
+    OCTOPUS_ACTIVE_PROBE_TASK_GROUP="$task_group"
+    OCTOPUS_ACTIVE_PROBE_TMUX="$TMUX_MODE"
+    OCTOPUS_ACTIVE_PROBE_PIDS=()
+    OCTOPUS_ACTIVE_PROBE_AGENTS=()
+    OCTOPUS_ACTIVE_PROBE_TASK_IDS=()
+    trap 'octopus_probe_handle_signal INT' INT
+    trap 'octopus_probe_handle_signal TERM' TERM
+
     fleet_dispatch_begin
 
     local pids=()
@@ -537,18 +802,38 @@ ${_blind_spot_checklist}"
         local perspective="${perspectives[$i]}"
         local agent="${probe_agents[$i]}"
         local task_id="probe-${task_group}-${i}"
+        OCTOPUS_ACTIVE_PROBE_AGENTS+=("$agent")
+        OCTOPUS_ACTIVE_PROBE_TASK_IDS+=("$task_id")
 
+        local pid=""
+        local spawn_status=0
         if [[ "$TMUX_MODE" == "true" ]]; then
             # Use async+tmux spawning
-            local pid
-            pid=$(spawn_agent_async "$agent" "$perspective" "$task_id" "researcher" "probe" "${pane_titles[$i]}")
-            pids+=("$pid")
+            if pid=$(spawn_agent_async "$agent" "$perspective" "$task_id" "researcher" "probe" "${pane_titles[$i]}"); then
+                :
+            else
+                spawn_status=$?
+            fi
         else
             # Standard spawning
-            local pid
-            pid=$(spawn_agent_capture_pid "$agent" "$perspective" "$task_id" "researcher" "probe")
-            pids+=("$pid")
+            if pid=$(spawn_agent_capture_pid "$agent" "$perspective" "$task_id" "researcher" "probe"); then
+                :
+            else
+                spawn_status=$?
+            fi
         fi
+        if [[ "$spawn_status" -eq 0 && ! "$pid" =~ ^[0-9]+$ ]]; then
+            spawn_status=1
+        fi
+        if [[ "$spawn_status" -ne 0 ]]; then
+            log ERROR "probe_discover: failed to spawn $agent for $task_id"
+            octopus_probe_cancel_active TERM
+            fleet_dispatch_end
+            _octopus_probe_restore_traps "$probe_previous_int_trap" "$probe_previous_term_trap"
+            return "$spawn_status"
+        fi
+        pids+=("$pid")
+        OCTOPUS_ACTIVE_PROBE_PIDS+=("$pid")
         sleep 0.1
     done
 
@@ -559,8 +844,15 @@ ${_blind_spot_checklist}"
     # v7.19.0 P2.4: Start progressive synthesis monitor in background
     local synthesis_monitor_pid=""
     if [[ "$ENABLE_PROGRESSIVE_SYNTHESIS" == "true" ]]; then
-        progressive_synthesis_monitor "$task_group" "$prompt" 2 &
-        synthesis_monitor_pid=$!
+        local monitor_start_status=0
+        _octopus_probe_start_synthesis_monitor "$task_group" "$prompt" 2 \
+            || monitor_start_status=$?
+        if [[ "$monitor_start_status" -ne 0 ]]; then
+            octopus_probe_cancel_active TERM
+            _octopus_probe_restore_traps "$probe_previous_int_trap" "$probe_previous_term_trap"
+            return "$monitor_start_status"
+        fi
+        synthesis_monitor_pid="$OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID"
         log "DEBUG" "Progressive synthesis monitor started (PID: $synthesis_monitor_pid)"
     fi
 
@@ -660,7 +952,17 @@ ${_blind_spot_checklist}"
     # can tell which LLMs actually contributed and fail-fast if all providers
     # are required.
     if type render_agent_summary >/dev/null 2>&1; then
-        render_agent_summary || return $?
+        local summary_status=0
+        render_agent_summary || summary_status=$?
+        if [[ "$summary_status" -ne 0 ]]; then
+            if [[ -n "$synthesis_monitor_pid" ]]; then
+                kill "$synthesis_monitor_pid" 2>/dev/null || true
+                wait "$synthesis_monitor_pid" 2>/dev/null || true
+                OCTOPUS_ACTIVE_PROBE_SYNTHESIS_PID=""
+            fi
+            _octopus_probe_restore_traps "$probe_previous_int_trap" "$probe_previous_term_trap"
+            return "$summary_status"
+        fi
     fi
 
     # v8.48.0: Write synthesis marker before attempting synthesis
@@ -676,22 +978,14 @@ ${_blind_spot_checklist}"
     } > "$synthesis_marker"
     log DEBUG "Synthesis marker written: $synthesis_marker"
 
-    # Intelligent synthesis (v7.19.0 P1.1: allow with partial results)
-    synthesize_probe_results "$task_group" "$prompt" "$usable_results"
-
-    # Synthesis succeeded — remove the marker
-    rm -f "$synthesis_marker"
-    log DEBUG "Synthesis marker removed (synthesis completed successfully)"
-
-    # v7.19.0 P2.4: Stop progressive synthesis monitor
-    if [[ -n "$synthesis_monitor_pid" ]]; then
-        kill "$synthesis_monitor_pid" 2>/dev/null || true
-        wait "$synthesis_monitor_pid" 2>/dev/null || true
-        log "DEBUG" "Progressive synthesis monitor stopped"
-    fi
-
-    # Display workflow summary (v7.16.0 Feature 2)
-    display_progress_summary
+    # Intelligent synthesis plus cleanup. Keep the call guarded so a nonzero
+    # synthesis or summary status survives orchestrate.sh's errexit setting.
+    local finalize_status=0
+    _octopus_probe_finalize_synthesis "$task_group" "$prompt" "$usable_results" \
+        "$synthesis_marker" "$synthesis_monitor_pid" \
+        "$probe_previous_int_trap" "$probe_previous_term_trap" \
+        || finalize_status=$?
+    return "$finalize_status"
 }
 
 # Phase 2: GRASP (Define) - Consensus building on approach
