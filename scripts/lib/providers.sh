@@ -23,6 +23,114 @@ if ! declare -f copilot_is_available >/dev/null 2>&1; then
     source "${_providers_lib_dir}/copilot.sh" 2>/dev/null || true
 fi
 
+# Normalize before arithmetic: Bash 3.2 wraps sufficiently long digit strings,
+# which can otherwise turn an oversized value into a small positive timeout.
+_octo_bare_probe_timeout() {
+    local value="${1:-5}"
+
+    case "$value" in
+        ''|*[!0-9]*) printf '%s\n' 5; return ;;
+    esac
+    while [[ "$value" == 0* ]]; do
+        value="${value#0}"
+    done
+    case "$value" in
+        '') printf '%s\n' 5 ;;
+        [1-9]|[1-2][0-9]|30) printf '%s\n' "$value" ;;
+        *) printf '%s\n' 30 ;;
+    esac
+}
+
+# This startup probe has a strict total wall-clock budget. Normal dispatch uses
+# run_with_timeout's ten-second TERM grace, but adding that grace here would let
+# a five-second auth check block startup for up to fifteen seconds. Reserve a
+# two-second grace inside budgets above two seconds; shorter budgets hard-kill
+# at their cap.
+_octo_run_bare_probe_with_timeout() {
+    local total_timeout="$1"
+    local term_timeout="$2"
+    local kill_grace="$3"
+    shift 3
+
+    if command -v gtimeout >/dev/null 2>&1; then
+        if [[ "$kill_grace" -gt 0 ]]; then
+            gtimeout -k "$kill_grace" "$term_timeout" "$@"
+        else
+            gtimeout -s KILL "$total_timeout" "$@"
+        fi
+        return $?
+    elif command -v timeout >/dev/null 2>&1; then
+        if [[ "$kill_grace" -gt 0 ]]; then
+            timeout -k "$kill_grace" "$term_timeout" "$@"
+        else
+            timeout -s KILL "$total_timeout" "$@"
+        fi
+        return $?
+    fi
+
+    # The portable path must own the whole probe tree, not only the immediate
+    # claude process. A hook may add wrapper processes below claude; killing
+    # direct children can orphan their descendants. Start a fresh session when
+    # the platform provides either setsid(1) or Perl's POSIX::setsid. If neither
+    # safe launcher exists, treat the optional auth probe as unavailable rather
+    # than launching a process tree that cannot be bounded.
+    local cmd_pid monitor_pid exit_code
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$@" <&0 &
+    elif command -v perl >/dev/null 2>&1; then
+        perl -MPOSIX -e \
+            'defined POSIX::setsid() or exit 125; exec @ARGV; exit 126' \
+            -- "$@" <&0 &
+    else
+        return 125
+    fi
+    cmd_pid=$!
+
+    (
+        sleep "$term_timeout"
+        if [[ "$kill_grace" -gt 0 ]]; then
+            kill -TERM -- "-$cmd_pid" 2>/dev/null || true
+            sleep "$kill_grace"
+        fi
+        kill -KILL -- "-$cmd_pid" 2>/dev/null || true
+    ) &
+    monitor_pid=$!
+
+    if wait "$cmd_pid" 2>/dev/null; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
+    pkill -KILL -P "$monitor_pid" 2>/dev/null || true
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+    kill -KILL -- "-$cmd_pid" 2>/dev/null || true
+    return "$exit_code"
+}
+
+# Keep the Claude Code --bare authentication check from wedging every Octopus
+# command when the CLI is waiting on auth, Keychain, or a broken hook. The
+# dedicated runner keeps its termination grace inside the configured total cap
+# whether providers.sh is loaded by the orchestrator or sourced on its own.
+_octo_bare_auth_probe() {
+    local probe_timeout term_timeout kill_grace
+    probe_timeout="$(_octo_bare_probe_timeout "${OCTOPUS_BARE_PROBE_TIMEOUT:-5}")"
+    term_timeout="$probe_timeout"
+    kill_grace=0
+    if [[ "$probe_timeout" -gt 2 ]]; then
+        kill_grace=2
+        term_timeout=$((probe_timeout - kill_grace))
+    fi
+
+    if [[ "${OCTOPUS_SKIP_PROVIDER_PROBES:-false}" == "true" ]]; then
+        return 125
+    fi
+
+    printf 'x\n' | _octo_run_bare_probe_with_timeout \
+        "$probe_timeout" "$term_timeout" "$kill_grace" \
+        claude --bare --print --model claude-haiku-4-5-20251001
+}
+
 # Version comparison utility
 version_compare() {
     local version1="$1"
@@ -582,11 +690,15 @@ detect_claude_code_version() {
     # and honour OCTOPUS_DISABLE_BARE=1 opt-out.
     _BARE_OPT=""
     if [[ "$SUPPORTS_BARE_FLAG" == "true" && "${OCTOPUS_DISABLE_BARE:-0}" != "1" ]]; then
-        # Quick auth probe: pipe a trivial prompt and check for login nag
-        local _bare_probe
-        _bare_probe=$(echo "x" | claude --bare --print --model claude-haiku-4-5-20251001 2>/dev/null | head -1 || true)
+        # Quick bounded auth probe: a CLI waiting on Keychain, auth, or hooks
+        # must not wedge unrelated commands such as `octopus dev` or `status`.
+        local _bare_probe="" _bare_probe_rc=0
+        _bare_probe=$(_octo_bare_auth_probe 2>/dev/null) || _bare_probe_rc=$?
+        _bare_probe="${_bare_probe%%$'\n'*}"
         if [[ "$_bare_probe" == *"Not logged in"* || "$_bare_probe" == *"Please run /login"* ]]; then
             log "WARN" "--bare flag breaks subprocess auth on this install (issue #288) — disabled. Set OCTOPUS_DISABLE_BARE=1 to suppress this probe."
+        elif [[ "$_bare_probe_rc" -ne 0 ]]; then
+            log "WARN" "--bare authentication probe did not complete (exit ${_bare_probe_rc}) — disabled for this run. Set OCTOPUS_DISABLE_BARE=1 to skip it explicitly."
         else
             _BARE_OPT=" --bare"
             log "INFO" "Subprocess synthesis uses --bare flag for faster claude -p calls"
