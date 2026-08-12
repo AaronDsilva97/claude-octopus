@@ -360,6 +360,13 @@ _atomic_lock_is_stale() {
     local pid ts now age
     pid=$(cat "$lockfile/pid" 2>/dev/null || true)
     ts=$(cat "$lockfile/ts" 2>/dev/null || true)
+    if [[ ! "$ts" =~ ^[0-9]+$ ]]; then
+        if stat -c %Y "$lockfile" >/dev/null 2>&1; then
+            ts=$(stat -c %Y "$lockfile" 2>/dev/null || true)
+        else
+            ts=$(stat -f %m "$lockfile" 2>/dev/null || true)
+        fi
+    fi
     now=$(date +%s 2>/dev/null || echo 0)
 
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
@@ -404,7 +411,18 @@ _atomic_release_owned_lock() {
     rm -rf "$lockfile" 2>/dev/null || true
 }
 
-atomic_json_update() {
+_atomic_reraise_signal() {
+    local signal="$1" owner_pid="$2" exit_code=1
+    case "$signal" in
+        INT) exit_code=130 ;;
+        TERM) exit_code=143 ;;
+    esac
+    trap - "$signal"
+    kill -s "$signal" "$owner_pid" 2>/dev/null || true
+    exit "$exit_code"
+}
+
+atomic_json_update() (
     local json_file="$1"
     local jq_expression="$2"
     shift 2
@@ -433,10 +451,21 @@ atomic_json_update() {
     printf -v retry_sleep '%d.%03d' "$((retry_ms / 1000))" "$((retry_ms % 1000))"
     local stale_age="${OCTO_LOCK_STALE_SECS:-30}"
     [[ "$stale_age" =~ ^[1-9][0-9]*$ ]] || stale_age=30
+    local pending_signal=""
+    trap 'pending_signal=INT' INT
+    trap 'pending_signal=TERM' TERM
 
     while ! mkdir "$lockfile" 2>/dev/null; do
+        case "$pending_signal" in
+            INT) exit 130 ;;
+            TERM) exit 143 ;;
+        esac
         # #559: a leaked lock from a crashed holder would otherwise block forever.
         _atomic_reclaim_stale_lock "$lockfile" "$stale_age"
+        case "$pending_signal" in
+            INT) exit 130 ;;
+            TERM) exit 143 ;;
+        esac
         mkdir "$lockfile" 2>/dev/null && break
         waited=$((waited + 1))
         if [[ $waited -ge $max_waits ]]; then
@@ -447,39 +476,52 @@ atomic_json_update() {
     done
 
     # #559: record ownership so a later contender can tell a live holder from a
-    # crashed one. The token also keeps an old writer from releasing a successor.
-    local lock_token="${BASHPID:-$$}-$(date +%s)-${RANDOM:-0}"
-    printf '%s\n' "${BASHPID:-$$}" > "$lockfile/pid" 2>/dev/null || true
+    # crashed one. BASHPID does not exist on the supported macOS Bash 3.2; in
+    # that case a direct child reports its real parent (this function subshell)
+    # into the lock. Unlike $$, that value is not pinned to the top-level shell.
+    local owner_pid
+    if [[ -n "${BASHPID:-}" ]]; then
+        owner_pid="$BASHPID"
+        printf '%s\n' "$owner_pid" > "$lockfile/pid" 2>/dev/null || true
+    else
+        sh -c 'printf "%s\n" "$PPID"' > "$lockfile/pid" 2>/dev/null || true
+        owner_pid=$(cat "$lockfile/pid" 2>/dev/null || true)
+        [[ "$owner_pid" =~ ^[0-9]+$ ]] || owner_pid="$$"
+    fi
+    # The token keeps an old writer from releasing a successor.
+    local lock_token="${owner_pid}-$(date +%s)-${RANDOM:-0}"
     date +%s > "$lockfile/ts" 2>/dev/null || true
     printf '%s\n' "$lock_token" > "$lockfile/token" 2>/dev/null || true
 
-    # This function can run in the same shell as a caller's own long-lived
-    # EXIT/INT/TERM traps (e.g. orchestrate.sh's temp-dir cleanup), so save
-    # and restore them instead of clobbering them with `trap - EXIT`.
-    local prev_exit_trap prev_int_trap prev_term_trap
-    prev_exit_trap=$(trap -p EXIT)
-    prev_int_trap=$(trap -p INT)
-    prev_term_trap=$(trap -p TERM)
-    local lock_cleanup_cmd
-    printf -v lock_cleanup_cmd '_atomic_release_owned_lock %q %q' "$lockfile" "$lock_token"
-    # shellcheck disable=SC2064 # Intentionally freeze these local values before the function returns.
-    trap "$lock_cleanup_cmd" EXIT INT TERM
+    local tmp_file="${json_file}.tmp.${owner_pid}"
+    # Run the whole critical section in this function's subshell, so these
+    # handlers never replace the caller's EXIT/INT/TERM traps. EXIT owns the
+    # idempotent cleanup; signal handlers clean, restore the default action,
+    # and re-raise so an interrupted update cannot continue successfully.
+    local lock_cleanup_cmd lock_int_cmd lock_term_cmd
+    printf -v lock_cleanup_cmd 'rm -f %q; _atomic_release_owned_lock %q %q' \
+        "$tmp_file" "$lockfile" "$lock_token"
+    printf -v lock_int_cmd '%s; _atomic_reraise_signal INT %q' \
+        "$lock_cleanup_cmd" "$owner_pid"
+    printf -v lock_term_cmd '%s; _atomic_reraise_signal TERM %q' \
+        "$lock_cleanup_cmd" "$owner_pid"
+    # shellcheck disable=SC2064 # Freeze subshell-local paths and token in each handler.
+    trap "$lock_cleanup_cmd" EXIT
+    # shellcheck disable=SC2064 # Freeze subshell-local paths, token, and PID.
+    trap "$lock_int_cmd" INT
+    # shellcheck disable=SC2064 # Freeze subshell-local paths, token, and PID.
+    trap "$lock_term_cmd" TERM
+    case "$pending_signal" in
+        INT) _atomic_reraise_signal INT "$owner_pid" ;;
+        TERM) _atomic_reraise_signal TERM "$owner_pid" ;;
+    esac
 
-    # BASHPID (not $$, which stays constant across every subshell spawned
-    # from the same parent) keeps concurrent callers from colliding on one
-    # temp file name.
-    local tmp_file="${json_file}.tmp.${BASHPID:-$$}"
     jq "$jq_expression" "$@" "$json_file" > "$tmp_file" && mv "$tmp_file" "$json_file"
     local result=$?
     [[ $result -ne 0 ]] && rm -f "$tmp_file"
 
-    _atomic_release_owned_lock "$lockfile" "$lock_token"
-    eval "${prev_exit_trap:-trap - EXIT}"
-    eval "${prev_int_trap:-trap - INT}"
-    eval "${prev_term_trap:-trap - TERM}"
-
     return $result
-}
+)
 
 # Validate Claude Code task integration features
 validate_claude_code_task_features() {
