@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Added
+
+- `/octo:budget-mode`, `/octo:standard-mode`, and `/octo:premium-mode` persist
+  the active model-cost tier without requiring shell-profile edits. Provider
+  targets for each tier are configurable through `/octo:model-config`, while
+  an explicit `OCTOPUS_COST_MODE` environment variable retains precedence.
+  (#885)
+
+### Fixed
+
+- Persisted cost-mode changes participate in model-cache identity and the
+  configurable standard tier is resolved just like budget and premium, so a
+  long-lived process cannot reuse a model selected under the previous mode.
+  Resetting one provider now removes its stale mappings from every cost tier,
+  and both reset writes and quick-toggle commands fail closed if persistence
+  fails. (#885)
+- The first-party PR review workflow now reviews the actual base-to-head diff,
+  preserves review failures through `tee`, and posts diagnostic output even
+  when review fails instead of reporting a zero-provider run as green. (#888)
+- Issue-comment automation likewise preserves orchestration failures through
+  `tee` while still posting the captured diagnostic response. (#890)
+- GitHub automation no longer installs or credentials the retired direct
+  Gemini CLI. First-party jobs install Claude Code on Node 22, bind the
+  repository's Claude OAuth token, and disable bare authentication so the
+  installed provider and configured credential match. Provider reports no
+  longer claim Claude succeeded without execution evidence, and failed PR
+  reviews retain provider results and proof packets as a short-lived diagnostic
+  artifact. (#889, #891)
+- Provider output is captured through private, atomically randomized,
+  file-backed stdin/stdout instead of a `tee` pipeline. A provider hook or
+  helper that inherits stdout can no longer hold the pipeline open after the
+  provider has completed and leave progress stuck at zero until the fleet
+  watchdog fires. (#892)
+- First-party PR review keeps Claude Code as its primary provider but retries
+  through GitHub Copilot CLI with the short-lived Actions token when the shared
+  Claude subscription quota is exhausted. This replaces the retired GitHub
+  Models inference API. The fallback denies model tools, remains fail-closed if
+  both paths fail, retains hidden raw diagnostics, and surfaces the provider's
+  actionable quota, auth, policy, or service error. (#893)
+
+### Internal
+
+- Factory/Cursor command generation now retains the canonical Doctor adapter,
+  includes the complete command set, and supports a non-mutating `--check`
+  path used by `make sync-check`. Doctor follow-ups reuse the resolved install
+  root, and portable commands fall back to the stable installed root. (#886)
+- First-party workflow dependencies are reproducible: Claude Code and Copilot
+  CLI use exact tested package versions, and artifact uploads use the immutable
+  commit behind the declared action release.
+
 ## [9.62.0] - 2026-08-12
 
 ### Added

@@ -24,12 +24,30 @@ if ! command -v jq &>/dev/null; then
     exit 0
 fi
 
+if ! jq -e 'type == "object"' "$SESSION_FILE" >/dev/null 2>&1; then
+    exit 0
+fi
+
+_update_session_state() {
+    local filter="$1"
+    shift
+    local session_tmp=""
+    session_tmp=$(mktemp "${SESSION_FILE}.tmp.XXXXXX") || return 1
+    if jq "$@" "$filter" "$SESSION_FILE" > "$session_tmp" 2>/dev/null &&
+       mv "$session_tmp" "$SESSION_FILE" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$session_tmp"
+    return 1
+}
+
 CURRENT_PHASE=$(jq -r '.phase // empty' "$SESSION_FILE" 2>/dev/null)
 if [[ -z "$CURRENT_PHASE" ]]; then
     exit 0
 fi
 
 QUEUE_LENGTH=$(jq -r '.agent_queue // [] | length' "$SESSION_FILE" 2>/dev/null)
+[[ "$QUEUE_LENGTH" =~ ^[0-9]+$ ]] || exit 0
 
 if [[ "$QUEUE_LENGTH" -gt 0 ]]; then
     # Dequeue next task
@@ -37,8 +55,7 @@ if [[ "$QUEUE_LENGTH" -gt 0 ]]; then
     NEXT_ROLE=$(jq -r '.agent_queue[0].role // "general"' "$SESSION_FILE" 2>/dev/null)
 
     # Remove from queue
-    jq '.agent_queue = .agent_queue[1:]' "$SESSION_FILE" > "${SESSION_FILE}.tmp" \
-        && mv "${SESSION_FILE}.tmp" "$SESSION_FILE"
+    _update_session_state '.agent_queue = .agent_queue[1:]' || exit 0
 
     # Track idle event in metrics
     METRICS_DIR="${HOME}/.claude-octopus/metrics"
@@ -57,6 +74,10 @@ else
     # No more work - check if phase should transition
     COMPLETED=$(jq -r '.phase_tasks.completed // 0' "$SESSION_FILE" 2>/dev/null)
     TOTAL=$(jq -r '.phase_tasks.total // 0' "$SESSION_FILE" 2>/dev/null)
+
+    if [[ ! "$COMPLETED" =~ ^[0-9]+$ || ! "$TOTAL" =~ ^[0-9]+$ ]]; then
+        exit 0
+    fi
 
     if [[ "$COMPLETED" -ge "$TOTAL" ]] && [[ "$TOTAL" -gt 0 ]]; then
         echo "🐙 TeammateIdle: All phase tasks complete. Ready for phase transition."

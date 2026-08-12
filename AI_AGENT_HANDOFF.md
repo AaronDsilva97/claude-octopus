@@ -1,12 +1,20 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-12
-Status: v9.62.0 consolidates the completed timeout, progress-hook, and AGY
-reliability pass from issues #868 through #872, #880, and #882. Direct Qwen
-prompting with unusable credentials and retired Gemini execution remain blocked;
-Google-family workflow seats execute through AGY. The release retains the local
-stale-install advisory and Claude Code's explicit host-managed update path.
-Branch: `main`
+Status: Issues #885 through #894 are being resolved on an isolated feature branch.
+The implementation adds persistent budget, standard, and premium model-cost
+toggles and repairs Factory/Cursor generation so the Doctor adapter and full
+command set cannot silently disappear. First-party automation now uses its
+configured Claude OAuth credential, and provider output capture cannot be held
+open by a descendant that inherited stdout. Direct Qwen prompting with unusable
+credentials and retired Gemini execution remain blocked; Google-family workflow
+seats execute through AGY. If the Claude subscription reaches its independent
+weekly quota, first-party PR review retries through GitHub Copilot CLI with the
+short-lived Actions token and an empty model-tool inventory, while remaining
+fail-closed. Lifecycle hooks now treat malformed shared session state as an
+optional-cache miss, and every shared session writer publishes through a unique
+temporary file and atomic rename.
+Branch: `fix/issue-885-cost-mode-toggle`
 Release: [v9.62.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.62.0)
 
 ## Start Here
@@ -61,10 +69,146 @@ to override defaults.
 
 ## Tracking Blocker
 
-Beads is readable but not writable. The remote-backed database is on schema
-v49 with four pending migrations to v53. Repository rules reserve migration for
-the designated migrator. No migration was run, so this work could not be
-claimed or recorded in `bd`; use this handoff for the blocked tracking record.
+Beads command help is readable, but issue queries are blocked. The remote-backed
+database is on schema v49 with 16 pending migrations to v65, and the current
+query fails because the `leases` table is missing. Repository rules reserve
+migration for the designated migrator. No migration was run, so this work could
+not be claimed or recorded in `bd`; use this handoff for the blocked tracking
+record.
+
+## Active Issues #885 through #894
+
+- **#885:** Cost-tier definitions already existed, but `/octo:model-config`
+  only printed a shell `export` instruction. A slash-command subprocess cannot
+  mutate its parent shell, the resolver ignored the configurable standard tier,
+  and its cache key omitted cost mode. The fix persists `cost_mode` beside the
+  existing tier maps, keeps `OCTOPUS_COST_MODE` as the highest-priority override,
+  applies all three tiers, and includes mode in cache identity.
+- **#886:** `scripts/build-factory-skills.sh` erased the hand-maintained Cursor
+  Doctor adapter and did not emit every canonical command. The generator now
+  builds Doctor from the canonical Doctor skill, generates the full command
+  surface, and has a non-mutating `--check` path wired into `make sync-check`.
+- **#888:** The first-party PR review checked a clean Actions index with
+  `target=staged`, then `tee` masked the review command's non-zero exit. It now
+  materializes `origin/<base>...HEAD`, reviews that diff artifact, fails closed,
+  and posts diagnostics even on failure.
+- **#889:** The same workflow still installed and credentialed the retired
+  direct Gemini CLI. The retired-provider boundary now scans workflow files,
+  and first-party automation no longer installs or credentials Gemini.
+- **#890:** Issue-comment orchestration used the same false-green `tee` pattern.
+  It now preserves the Octopus exit while still posting captured diagnostics.
+- **#891:** The repaired review exposed a second first-party automation defect:
+  the repository had a `CLAUDE_CODE_OAUTH_TOKEN`, but the workflow installed
+  unauthenticated Codex and ignored that credential. Official Anthropic CLI
+  research was run through Octopus before implementation. The jobs now use
+  Node 22, install Claude Code, bind the OAuth token, and set
+  `OCTOPUS_DISABLE_BARE=1`; the provider report no longer initializes Claude
+  to healthy without a successful Claude execution. A failed review now uploads
+  its provider results and proof packet for seven days instead of discarding the
+  only evidence that distinguishes auth, model, and invocation failures.
+- **#892:** An orchestrated research run produced complete provider raw output
+  while rich progress stayed at 0/7. Provider stdout flowed through `tee`; a
+  provider hook or descendant retained that pipe, so the worker waited for EOF
+  until the global watchdog. Provider prompts and output now use private,
+  atomically randomized file-backed descriptors, the quota watcher observes the
+  raw file, and the prompt file is removed after dispatch.
+- **#893:** The corrected remote PR review proved installation and OAuth were
+  healthy but all four Claude review phases failed with `You've hit your weekly
+  limit · resets Aug 15, 7am (UTC)` in Actions run `31613318006`. The workflow
+  first retried through GitHub Models, but Actions run `31615705396` returned
+  HTTP 410 because GitHub fully retired that inference service on 2026-07-30.
+  The supported replacement keeps Claude primary and retries through GitHub
+  Copilot CLI using `copilot-requests: write` and the job-scoped token. Copilot
+  CLI is pinned to `1.0.79`; its built-in MCP server is disabled, its available
+  tool set is empty, and shell, read, write, URL, and memory permissions are
+  explicitly denied. If both paths fail, the check stays red and the combined
+  output plus hidden proof artifacts remain available. Provider reports surface
+  the last actionable stdout or stderr error instead of replacing quota, auth,
+  policy, retirement, and service failures with a generic message.
+- **#894:** A real Claude lifecycle probe reproduced persistent SessionEnd
+  failures from malformed `~/.claude-octopus/session.json`: both hooks ran
+  unguarded `jq` substitutions under `set -e`, so one stale extra brace made
+  every session end with exit 5. The same audit found three more registered
+  state-reading hooks with the failure mode and multiple writers sharing the
+  predictable `session.json.tmp` path. Seven lifecycle hooks now fail open on
+  malformed optional state, session and compaction snapshots publish through
+  atomic renames, and all shared-session updates use unique temporary paths.
+  TaskCompleted also treats an uninitialized zero-task ledger as no work instead
+  of incrementing it and dividing by zero. Regression coverage proves malformed
+  state is silent, valid workflow verification still fires, and fixed temporary
+  paths cannot return.
+- Regression-first evidence: cost-mode coverage failed 7/9 before the initial
+  implementation, moved to 12/12 with the first fix, and now passes 13/13 with
+  the reset-failure path covered. Factory regeneration reproduced the
+  missing Doctor adapter. The provider-report suite failed 0/2 before #891;
+  workflow auth coverage failed 6/9 before #891; diagnostic retention failed
+  9/10 before the remote failure exposed the evidence gap; output-capture
+  coverage failed 1/2 before #892 and was extended after review to verify the
+  prompt file is mode 600. The quota fallback began with PR workflow coverage
+  at 9/13, compatible-agent coverage at 19/21, and a missing provider-report
+  helper; the debate phase also failed a deliberate single-provider escape
+  regression before it was routed through the override. All focused suites are
+  now green: Factory 5/5, PR workflow 16/16, provider report 8/8,
+  compatible-agent 21/21, agent command validation 42/42, output capture 4/4,
+  cost mode 13/13, current provider defaults 11/11,
+  descriptor performance 35/35,
+  stable-link Doctor 6/6, Windows Doctor 5/5, retired Gemini 11/11,
+  environment accountability 9/9, probe single 32/32, spawn PID 9/9,
+  cancellation 21/21, AGY parallel 8/8, review
+  aggregation 19/19, and handoff 13/13.
+- Verification state: source commit `ea34b64f` passes `make sync-check`, all
+  focused suites listed above, and a fresh
+  `make ci-local`: 16/16 smoke suites, 265/265 unit suites, and 7/7 integration
+  suites. The new session-state regression passes 13/13. The
+  first sweep exposed three stale white-box tests that required
+  `run_with_timeout` to appear directly in `spawn.sh`; each failed before its
+  contract was updated to verify the shared capture helper and passed in the
+  final complete run. The pre-fallback pushed head `09fed83b` passed its normal
+  GitHub Test Suite; its PR review failure supplied the exact quota evidence
+  that #893 now covers. Actions run `31618867031` then exercised the corrected
+  fallback on commit `cb8e0c3b`: Claude reached its weekly quota, Copilot CLI
+  completed every review phase, the finalizer passed, and the combined review
+  artifact and PR comment were published.
+- Delivery state: implementation commit `f7dd6c52` contains the review,
+  authentication, portable-command, provider-reset, and descriptor-safe capture
+  fixes. Commit `fc3829ef` records the retired GitHub Models attempt; source
+  commit `434f6c05` replaces it with the no-tools Copilot CLI fallback, resolves
+  the first review findings, pins workflow dependencies, and adds actionable
+  stdout/stderr failure diagnostics. Source commit `095eefb4` closes the live
+  review's remaining validation gaps: Cursor Doctor tools survive regeneration,
+  empty Doctor scans remain safe under `pipefail`, the known actionlint permission
+  lag is ignored only for the affected workflow, and reset, generation, and
+  JavaScript-fence regressions are covered. Source commits `29a4a3f2` and
+  `ea34b64f` add the fail-open lifecycle readers, collision-safe session
+  writers, semantically safe task-ledger handling, and #894 regression. The
+  current source head is delivered with this handoff on
+  `fix/issue-885-cost-mode-toggle`.
+  [PR #887](https://github.com/nyldn/claude-octopus/pull/887) will close all
+  nine issues after the corrected head passes review and CI.
+
+## Host Diagnostics and Transcript Audit
+
+- The recurring historical `UserPromptSubmit` exit 127 was not an Octopus
+  hook. Archived Claude transcripts identify the Caveman hook command
+  `Tracking caveman mode...` failing with `/bin/sh: node: command not found`
+  under the GUI hook PATH. Caveman was disabled but still installed; it has now
+  been uninstalled and a fresh Claude prompt completed without a
+  UserPromptSubmit error. Already-running Claude processes may retain hooks
+  loaded at startup until `/reload-plugins` or restart.
+- A real-world design-record transcript showed strong evidence habits: Claude
+  read the implementation before advising, preserved raw provider output after
+  orchestration timeouts, visually inspected generated pages, found an internal
+  path leak that text-only gates missed, and was transparent about provider
+  failures. Its durable design conclusion was progressive emphasis rather than
+  hiding primary content.
+- The same audit showed avoidable orchestration cost: one parent session mixed
+  repositories and workstreams for eleven days, delegated agents inherited a
+  large unrelated plugin/skill context, provider presence was mistaken for
+  usable quota, boilerplate unrelated to the task reached research prompts,
+  and useful partial results were labelled only as timeouts. Product follow-up
+  should keep delegated profiles lean, add quota-aware admission and circuit
+  breaking, distinguish salvageable partial output, and make synthesis record
+  agreements, conflicts, and evidence explicitly.
 
 ## Release v9.62.0
 

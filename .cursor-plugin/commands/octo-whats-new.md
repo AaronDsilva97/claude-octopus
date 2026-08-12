@@ -1,6 +1,5 @@
 ---
-command: whats-new
-description: "Review and enable Claude Octopus features added since you installed"
+description: "\"Review and enable Claude Octopus features added since you installed\""
 allowed-tools: Bash, Read
 ---
 

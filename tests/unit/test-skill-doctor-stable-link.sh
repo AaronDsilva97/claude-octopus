@@ -70,7 +70,7 @@ assert_resolver_preserves_stable_link() {
         test_fail "$label resolver replaced the stable symlink"
     elif [[ "$(readlink "$stable_link")" != "$plugin_root" ]]; then
         test_fail "$label resolver rewrote the stable link to $(readlink "$stable_link")"
-    elif [[ "$(cat "$call_log" 2>/dev/null || true)" != "doctor" ]]; then
+    elif [[ "$(cat "$call_log" 2>/dev/null || true)" != "doctor --verbose" ]]; then
         test_fail "$label resolver did not invoke doctor through the stable link"
     elif ! test -x "$stable_link/scripts/orchestrate.sh"; then
         test_fail "$label stable link no longer resolves to the plugin"
@@ -89,6 +89,62 @@ test_codex_package_is_generated_from_guarded_source() {
     fi
 }
 
+test_follow_up_commands_use_resolved_root() {
+    test_case "Doctor follow-up commands reuse the resolved plugin root"
+
+    local doctor_skill="$PROJECT_ROOT/.claude/skills/skill-doctor/SKILL.md"
+    local category missing=""
+    for category in providers companions auth config updates state smoke hooks scheduler skills conflicts agents recurrence cache; do
+        grep -Fq "bash \"\$OCTO_PLUGIN_ROOT/scripts/orchestrate.sh\" doctor ${category}" "$doctor_skill" ||
+            missing+="${category} "
+    done
+    grep -Fq 'bash "$OCTO_PLUGIN_ROOT/scripts/orchestrate.sh" doctor --verbose' "$doctor_skill" || missing+="verbose "
+    grep -Fq 'bash "$OCTO_PLUGIN_ROOT/scripts/orchestrate.sh" doctor --json' "$doctor_skill" || missing+="json "
+
+    if grep -q '${HOME}/.claude-octopus/plugin/scripts/' "$doctor_skill"; then
+        test_fail "Doctor bypasses OCTO_PLUGIN_ROOT after resolving the installed plugin"
+    elif [[ -n "$missing" ]]; then
+        test_fail "Doctor omits resolved-root commands for: $missing"
+    else
+        test_pass
+    fi
+}
+
+test_root_fallback_is_pipefail_safe() {
+    test_case "Doctor root discovery tolerates an empty plugin search under pipefail"
+
+    local doctor_skill="$PROJECT_ROOT/.claude/skills/skill-doctor/SKILL.md"
+    if grep -Fq "{ grep -E '(nyldn-plugins|claude-octopus|/octo(/[0-9]|\$))' || true; }" \
+        "$doctor_skill"; then
+        test_pass
+    else
+        test_fail "Doctor root resolver can abort when grep finds no installed plugin"
+    fi
+}
+
+test_remediation_fences_are_markdown_safe() {
+    test_case "Doctor remediation fences have surrounding blank lines"
+
+    if awk '
+        closing && $0 != "" { bad = 1 }
+        { closing = 0 }
+        /^```javascript$/ {
+            if (previous != "") bad = 1
+            in_javascript = 1
+        }
+        in_javascript && /^```$/ {
+            in_javascript = 0
+            closing = 1
+        }
+        { previous = $0 }
+        END { if (closing || in_javascript) bad = 1; exit bad }
+    ' "$PROJECT_ROOT/.claude/skills/skill-doctor/SKILL.md"; then
+        test_pass
+    else
+        test_fail "Doctor remediation fences violate MD031"
+    fi
+}
+
 assert_resolver_preserves_stable_link \
     "Claude skill" \
     "$PROJECT_ROOT/.claude/skills/skill-doctor/SKILL.md" \
@@ -97,6 +153,9 @@ assert_resolver_preserves_stable_link \
     "Codex skill" \
     "$PROJECT_ROOT/skills/skill-doctor/SKILL.md" \
     "codex"
+test_follow_up_commands_use_resolved_root
+test_root_fallback_is_pipefail_safe
+test_remediation_fences_are_markdown_safe
 test_codex_package_is_generated_from_guarded_source
 
 test_summary
