@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "Shared Marketplace Sync"
 
 SYNC_SCRIPT="$PROJECT_ROOT/scripts/sync-shared-marketplace.sh"
+LOCAL_SYNC_SCRIPT="$PROJECT_ROOT/scripts/sync-marketplace.sh"
 RELEASE_SCRIPT="$PROJECT_ROOT/scripts/release.sh"
 CHANGELOG_LIB="$PROJECT_ROOT/scripts/lib/release-changelog.sh"
 CI_LIB="$PROJECT_ROOT/scripts/lib/release-ci.sh"
@@ -215,6 +216,78 @@ test_marketplace_description_error_uses_logger() {
     fi
 }
 
+test_local_marketplace_sync_aligns_all_versions() {
+    test_case "sync-marketplace rejects and repairs stale marketplace version fields"
+
+    local fixture="$TMP_DIR/local-sync"
+    local check_before_rc=0
+    local check_after_rc=0
+    local check_entry_rc=0
+    local check_entry_repaired_rc=0
+    local plugin_version metadata_version stale_entry_version
+    local repaired_metadata_version repaired_entry_version
+
+    mkdir -p "$fixture/scripts" "$fixture/.claude-plugin" "$fixture/agents/personas"
+    cp "$LOCAL_SYNC_SCRIPT" "$fixture/scripts/sync-marketplace.sh"
+
+    cat > "$fixture/.claude-plugin/plugin.json" <<'JSON'
+{
+  "version": "9.99.0",
+  "description": "v9.99.0 — Fixture release. Run /octo:setup.",
+  "keywords": ["fixture"],
+  "skills": ["./skills/fixture"],
+  "commands": ["./commands/fixture"]
+}
+JSON
+
+    cat > "$fixture/.claude-plugin/marketplace.json" <<'JSON'
+{
+  "metadata": {"version": "1.0.0"},
+  "plugins": [
+    {
+      "name": "octo",
+      "description": "v9.99.0 - Fixture release. 0 personas, 1 commands, 1 skills. Run /octo:setup.",
+      "version": "9.99.0",
+      "keywords": ["fixture"]
+    }
+  ]
+}
+JSON
+
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-before.out" 2>&1 || check_before_rc=$?
+    bash "$fixture/scripts/sync-marketplace.sh" > "$TMP_DIR/local-sync-update.out" 2>&1
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-after.out" 2>&1 || check_after_rc=$?
+
+    jq '(.plugins[] | select(.name == "octo") | .version) = "1.0.0"' \
+        "$fixture/.claude-plugin/marketplace.json" > "$TMP_DIR/local-sync-entry-stale.json"
+    mv "$TMP_DIR/local-sync-entry-stale.json" "$fixture/.claude-plugin/marketplace.json"
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-entry.out" 2>&1 || check_entry_rc=$?
+
+    plugin_version="$(jq -r '.version' "$fixture/.claude-plugin/plugin.json")"
+    metadata_version="$(jq -r '.metadata.version' "$fixture/.claude-plugin/marketplace.json")"
+    stale_entry_version="$(jq -r '.plugins[] | select(.name == "octo") | .version' "$fixture/.claude-plugin/marketplace.json")"
+
+    bash "$fixture/scripts/sync-marketplace.sh" > "$TMP_DIR/local-sync-entry-repair.out" 2>&1
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-entry-repaired.out" 2>&1 || check_entry_repaired_rc=$?
+    repaired_metadata_version="$(jq -r '.metadata.version' "$fixture/.claude-plugin/marketplace.json")"
+    repaired_entry_version="$(jq -r '.plugins[] | select(.name == "octo") | .version' "$fixture/.claude-plugin/marketplace.json")"
+
+    if [[ "$check_before_rc" -ne 0 &&
+          "$check_after_rc" -eq 0 &&
+          "$check_entry_rc" -ne 0 &&
+          "$check_entry_repaired_rc" -eq 0 &&
+          "$metadata_version" == "$plugin_version" &&
+          "$stale_entry_version" != "$plugin_version" &&
+          "$repaired_metadata_version" == "$plugin_version" &&
+          "$repaired_entry_version" == "$plugin_version" ]] &&
+       grep -Fqx "[WARN] Plugin version: $stale_entry_version (expected $plugin_version)" \
+           "$TMP_DIR/local-sync-check-entry.out"; then
+        test_pass
+    else
+        test_fail "expected independent entry-version rejection and repair; before=$check_before_rc after=$check_after_rc entry_check=$check_entry_rc entry_repaired=$check_entry_repaired_rc plugin=$plugin_version metadata=$metadata_version stale_entry=$stale_entry_version repaired_metadata=$repaired_metadata_version repaired_entry=$repaired_entry_version"
+    fi
+}
+
 test_release_promotes_unreleased_changelog_notes() {
     test_case "release changelog helper promotes Unreleased notes into version entry"
 
@@ -383,6 +456,7 @@ test_release_file_updates_are_portable
 test_release_description_uses_current_summary
 test_readme_provider_and_cost_contract
 test_marketplace_description_error_uses_logger
+test_local_marketplace_sync_aligns_all_versions
 test_release_promotes_unreleased_changelog_notes
 test_release_ci_parser_matches_exact_aggregate_checks
 test_shared_marketplace_sync_updates_only_octo
