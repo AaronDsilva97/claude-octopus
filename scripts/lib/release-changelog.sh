@@ -51,13 +51,7 @@ octo_release_update_changelog() {
                 trimmed = body
                 gsub(/^[[:space:]\n]+|[[:space:]\n]+$/, "", trimmed)
                 if (saw_unreleased && trimmed != "") {
-                    printf "%s", body
-                    if (body !~ /\n$/) {
-                        printf "\n"
-                    }
-                    if (body !~ /\n\n$/) {
-                        printf "\n"
-                    }
+                    printf "%s\n\n", trimmed
                 } else {
                     printf "### Changed\n\n"
                     printf "- %s\n\n", summary

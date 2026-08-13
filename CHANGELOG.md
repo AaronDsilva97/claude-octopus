@@ -4,7 +4,6 @@
 
 ## [9.64.0] - 2026-08-13
 
-
 ### Changed
 
 - Octopus is dormant by default. All shipped commands and skills use Claude
