@@ -1,25 +1,17 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-13
-Status: Issues #900 and #902 are implemented on
-`fix/900-tangle-lifecycle`. Tangle workers now run in dedicated process groups,
-INT/TERM and unexpected orchestrator exits cancel active work, completion
-watchers recover from idle wrappers, and redirected progress changes only when
-the count changes. The implementation commits through `696aafd2` are pushed to
-both remotes and [PR #909](https://github.com/nyldn/claude-octopus/pull/909) is
-open. Review-response commits through `afbaa8cc` are pushed to both remotes.
-The remote Linux integration job exposed a pipefail-only SIGPIPE in two test
-assertions, and a follow-up review found a failed-lock path plus a test lifecycle
-override. All three corrections pass focused coverage and the latest full gate;
-commit `29fa740e` is pushed to both remotes. Review replies and rerun checks
-remain. Release remains explicitly deferred.
-Branch: `fix/900-tangle-lifecycle`
+Status: Issues #901, #903, and #905 are implemented on a combined branch.
+PR #914 review feedback is resolved and CodeRabbit approved the reviewed code;
+matching-head local and remote gates and merge are the remaining steps.
+Branch: `fix/901-tangle-integrity`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
-Tracking: [issue #900](https://github.com/nyldn/claude-octopus/issues/900),
-[issue #902](https://github.com/nyldn/claude-octopus/issues/902)
-PR: [#909](https://github.com/nyldn/claude-octopus/pull/909)
-Next action: answer the two new review threads, then verify the rerun checks.
-Merge and release remain deferred.
+Tracking: [issue #901](https://github.com/nyldn/claude-octopus/issues/901),
+[issue #903](https://github.com/nyldn/claude-octopus/issues/903), and
+[issue #905](https://github.com/nyldn/claude-octopus/issues/905); implementation
+PR [#914](https://github.com/nyldn/claude-octopus/pull/914)
+Next action: complete the matching local and remote gates, then merge PR #914.
+Release remains deferred.
 
 ## Issues #900 and #902: Tangle Lifecycle Ownership
 
@@ -36,16 +28,18 @@ Merge and release remain deferred.
   the PID ledger to close the post-spawn handoff race, marks cancelled outputs
   and completion records, prunes runtime metadata, restores caller traps, and
   handles both explicit signals and unexpected `set -e` exits.
-- Stalled progress: `OCTOPUS_TANGLE_IDLE_WORKER_GRACE` defaults to 180 seconds.
-  A living wrapper with no active provider descendants becomes
-  `stalled-worker`; non-TTY progress is emitted only when its count changes.
+- Provider liveness: `spawn_agent_capture_pid` returns the provider root, not a
+  wrapper, so a living PID with no descendants remains active until it writes
+  its completion marker. The explicit `OCTOPUS_TANGLE_DEADLINE` remains the
+  operator-controlled bound; dead providers enter missing-marker recovery.
+  Non-TTY progress is emitted only when its count changes.
 - Run isolation: default Tangle IDs now use an atomic reservation instead of
   `date +%s` plus `$$`, preventing same-second worktree and branch collisions
   exposed when the old final two-second sleep was removed. Explicit run-ID
   overrides now reject traversal, and zero-byte reservations older than seven
   days are pruned once daily without weakening same-day atomic uniqueness.
-- Review hardening: cancellation refuses to proceed without its process
-  helpers, never signals the orchestrator PID/group, snapshots reachable legacy
+- Review hardening: Tangle refuses provider dispatch when either cancellation
+  helper is unavailable, never signals the orchestrator PID/group, snapshots reachable legacy
   descendants before STOP, uses portable `ps -A`, serializes PID-ledger pruning
   with spawn appends, stops before pruning when `flock` acquisition fails, and
   ignores dead targeted PIDs. Status checks are SIGPIPE-safe and the integration
@@ -56,12 +50,13 @@ Merge and release remain deferred.
   `echo` received SIGPIPE, and `set -o pipefail` failed the integration job.
   Here-strings with non-early-closing `grep -c` preserve the semantic assertions
   without a producer-side broken pipe; the focused suite passes 19/19.
-- TDD evidence: lifecycle cancellation passes 15/15, missing-marker recovery
-  6/6, run-worktree isolation 14/14, Markdown plan/run-ID resolution 13/13,
-  contextual review wiring 56/56, spawn PID capture 10/10, and the
+- TDD evidence: lifecycle cancellation passes 16/16, missing-marker recovery
+  4/4, run-worktree isolation 16/16, Markdown plan/run-ID resolution 15/15,
+  contextual review wiring 54/54, spawn PID capture 10/10, and the
   value-proposition integration test passes 19/19.
-- Full-gate evidence: the latest non-interactive `make ci-local` after all review
-  fixes passed 16/16 smoke suites, 268/268 unit suites, 7/7 integration suites,
+- Historical #900/#902 branch-gate evidence: the final non-interactive
+  `make ci-local` before stacking #901 passed 16/16 smoke suites, 268/268 unit
+  suites, 7/7 integration suites,
   and the CI-only verifications. The earlier 267/268 run exposed only a brittle
   five-line static heartbeat assertion; production ordering was correct, and
   the replacement semantic-order assertion passes in the final sweep. A prior
@@ -280,6 +275,58 @@ Merge and release remain deferred.
 - Tracking blocker: Beads remains unreadable on schema v49 because its reserved
   v65 migration has not been applied. No migration was run; GitHub issue #915
   is the temporary tracker.
+
+## Issues #901, #903, and #905: Tangle Integrity Boundaries
+
+- **#901:** Tangle subtask prompts now forbid applying, pushing, repairing, or
+  marking migrations against persistent local, linked, remote, or shared
+  databases by default. An explicit apply override retains the invariant that
+  applied versions must match disk. Validation detects changed
+  `supabase/migrations/*.sql` from the actual worktree diff, runs the read-only
+  `supabase migration list --local` comparison, and fails closed on drift,
+  unavailable history, or an empty/non-comparable result. A separate explicit
+  risk override is required when local history cannot be queried.
+- **#903:** Output returned from a disposable consultative workspace is wrapped
+  as unverified, advisory, and non-deliverable before it reaches callers.
+  Design-review synthesis is explicitly forbidden from repeating claimed file
+  changes, test counts, live probes, or completed implementation as facts, and
+  the operator-facing summary is labeled planning-only.
+- **#905:** A clean source checkout may now contain an explicitly referenced,
+  repo-contained untracked `PLAN.md`, `SPEC.md`, or `BRIEF.md` context file.
+  Its contents are injected into the isolated run while unrelated untracked
+  paths, modified tracked inputs, and symlinked context remain blocking. Users
+  no longer need to disable either clean-baseline enforcement or run-worktree
+  isolation for this common workflow. Exactly one untracked context file is
+  supported per run; additional untracked inputs remain blocking.
+- TDD evidence: the migration-drift helper and validation regression initially
+  failed, the consultative provenance regression failed before output wrapping,
+  and the untracked-context regressions failed before the baseline allowlist and
+  pre-worktree resolution. A later spec review added a failing regression proving
+  migration validation incorrectly depended on prompt classification; the gate
+  now derives migration changes independently from the actual diff.
+- Current verification: the combined review-response regression set passes,
+  including 15/15 migration/worktree evidence, 16/16 run-worktree isolation,
+  15/15 Markdown context resolution, 11/11 clean baseline, 9/9 ceremonies,
+  8/8 subtask context, 8/8 consultative dispatch, 16/16 cancellation cleanup,
+  4/4 live-provider/missing-marker recovery, 27/27 review aggregation, and
+  19/19 value-proposition integration. The prior branch head also passed
+  Council compatibility at 72 passed with one known macOS PTY skip. A fresh
+  historical branch-only `make ci-local` at `b2ac6790` exited 0 with 16/16
+  smoke suites, 267/267 unit suites, and 7/7 integration suites. Subsequent
+  stacked commits brought the current combined branch to 269 unit suites;
+  matching-head verification is recorded by PR #914 checks and the final
+  session report. The first complete sweep exposed three newly
+  documented env vars missing from the accountability manifest; a later sweep
+  exposed a stale integration assertion that inspected only 80 lines after the
+  Tangle wrapper. Both contracts now map to behavioral tests, and the final
+  top-level gate passed without changes to the tested production tree.
+- Tracking blocker: Beads remains unreadable on schema v49 because the `leases`
+  table requires the reserved v65 migration. No migration was run. These GitHub
+  issues are the temporary tracker and this handoff records the blocked `bd`
+  state.
+- Push state: the current `fix/901-tangle-integrity` branch head is pushed to
+  both configured remotes, `origin` and `upstream`; PR #914 targets
+  `upstream/main`.
 
 ## Issue #898: Explicit Activation and Hook Latency
 
