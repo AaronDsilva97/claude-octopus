@@ -41,6 +41,7 @@ DOCTOR_RESULTS_CAT=()
 DOCTOR_RESULTS_STATUS=()   # pass|warn|fail
 DOCTOR_RESULTS_MSG=()
 DOCTOR_RESULTS_DETAIL=()
+DOCTOR_AGY_LIVE_AUTH_STATUS="not-run"
 
 doctor_add() {
     local name="$1" cat="$2" status="$3" msg="$4" detail="${5:-}"
@@ -49,6 +50,89 @@ doctor_add() {
     DOCTOR_RESULTS_STATUS+=("$status")
     DOCTOR_RESULTS_MSG+=("$msg")
     DOCTOR_RESULTS_DETAIL+=("$detail")
+}
+
+doctor_check_agy_live() {
+    local octo_root="$1"
+    local probe_timeout term_timeout kill_grace catalog="" model="" output=""
+    local catalog_rc=0 model_rc=0 dispatch_rc=0
+
+    DOCTOR_AGY_LIVE_AUTH_STATUS="fail"
+    if ! command -v agy >/dev/null 2>&1; then
+        doctor_add "agy-live-install" "providers" "warn" \
+            "AGY live probe skipped because the CLI is not installed" \
+            "Install Antigravity CLI, then rerun: octopus doctor providers --live"
+        return
+    fi
+
+    probe_timeout="$(_octo_bare_probe_timeout "${OCTOPUS_AGY_HEALTH_TIMEOUT:-30}")"
+    term_timeout="$probe_timeout"
+    kill_grace=0
+    if [[ "$probe_timeout" -gt 2 ]]; then
+        kill_grace=2
+        term_timeout=$((probe_timeout - kill_grace))
+    fi
+
+    catalog="$(_octo_run_bare_probe_with_timeout \
+        "$probe_timeout" "$term_timeout" "$kill_grace" \
+        agy models </dev/null 2>&1)" || catalog_rc=$?
+    if [[ "$catalog_rc" -ne 0 || ! "$catalog" =~ [^[:space:]] ]]; then
+        doctor_add "agy-live-catalog" "providers" "warn" \
+            "AGY catalog/keyring authentication failed (exit ${catalog_rc})" \
+            "Launch plain 'agy' in a terminal and finish its browser sign-in. On macOS, if access is denied, open Keychain Access, find the Antigravity CLI item, and allow agy under Access Control."
+        return
+    fi
+    doctor_add "agy-live-catalog" "providers" "pass" \
+        "AGY catalog and keyring authentication succeeded" \
+        "agy models returned a live catalog within ${probe_timeout}s"
+    DOCTOR_AGY_LIVE_AUTH_STATUS="pass"
+
+    if ! declare -f resolve_octopus_model >/dev/null 2>&1; then
+        # shellcheck source=/dev/null
+        source "${octo_root}/scripts/lib/model-resolver.sh" 2>/dev/null || true
+    fi
+    if ! declare -f log >/dev/null 2>&1; then
+        log() { :; }
+    fi
+    if declare -f resolve_octopus_model >/dev/null 2>&1; then
+        model="$(OCTOPUS_AGY_MODELS_TIMEOUT="$probe_timeout" \
+            resolve_octopus_model agy agy doctor health 2>/dev/null)" || model_rc=$?
+    else
+        model_rc=127
+    fi
+    if [[ "$model_rc" -ne 0 || ! "$model" =~ [^[:space:]] ]]; then
+        doctor_add "agy-live-model" "providers" "warn" \
+            "AGY configured model did not resolve against the live catalog" \
+            "Run 'agy models', then set OCTOPUS_AGY_MODEL to an exact returned ID or label; use 'default' for AGY's service-selected model."
+        return
+    fi
+    doctor_add "agy-live-model" "providers" "pass" \
+        "AGY configured model resolved: ${model}" \
+        "Validated against the live agy models catalog"
+
+    output="$(_octo_run_bare_probe_with_timeout \
+        "$probe_timeout" "$term_timeout" "$kill_grace" \
+        env "OCTOPUS_AGY_MODEL=${model}" \
+            "OCTOPUS_AGY_PRINT_TIMEOUT=${probe_timeout}s" \
+            "OCTOPUS_AGY_NO_RETRY=1" \
+            bash "${octo_root}/scripts/helpers/agy-exec.sh" \
+        <<'AGY_HEALTH_PROMPT' 2>&1
+Return these two tokens in your response:
+OCTOPUS_AGY_HEALTH_OK
+LOCAL_PROVIDER_DISPATCH_WORKS
+AGY_HEALTH_PROMPT
+    )" || dispatch_rc=$?
+
+    if [[ "$dispatch_rc" -eq 0 && "$output" == *"OCTOPUS_AGY_HEALTH_OK"* && \
+          "$output" == *"LOCAL_PROVIDER_DISPATCH_WORKS"* ]]; then
+        doctor_add "agy-live-dispatch" "providers" "pass" \
+            "AGY print-mode dispatch returned substantive output" \
+            "Model ${model}; bounded to ${probe_timeout}s"
+    else
+        doctor_add "agy-live-dispatch" "providers" "warn" \
+            "AGY print-mode dispatch failed or returned incomplete output (exit ${dispatch_rc})" \
+            "Run plain 'agy' to repair authentication, confirm the model with 'agy models', then rerun: octopus doctor providers --live"
+    fi
 }
 
 # --- Category 1: Providers ---
@@ -147,8 +231,20 @@ doctor_check_providers() {
 
     # Antigravity CLI (agy)
     if command -v agy &>/dev/null; then
-        local agy_ver agy_path
-        agy_ver=$(agy --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        local agy_ver agy_path agy_version_output=""
+        local agy_version_timeout agy_version_term_timeout agy_version_kill_grace
+        agy_version_timeout="$(_octo_bare_probe_timeout "${OCTOPUS_AGY_VERSION_TIMEOUT:-${OCTOPUS_AGY_HEALTH_TIMEOUT:-5}}")"
+        agy_version_term_timeout="$agy_version_timeout"
+        agy_version_kill_grace=0
+        if [[ "$agy_version_timeout" -gt 2 ]]; then
+            agy_version_kill_grace=2
+            agy_version_term_timeout=$((agy_version_timeout - agy_version_kill_grace))
+        fi
+        agy_version_output="$(_octo_run_bare_probe_with_timeout \
+            "$agy_version_timeout" "$agy_version_term_timeout" "$agy_version_kill_grace" \
+            agy --version </dev/null 2>/dev/null)" || true
+        agy_ver=$(printf '%s\n' "$agy_version_output" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p') || true
+        [[ -n "$agy_ver" ]] || agy_ver="unknown"
         agy_path=$(command -v agy)
         if ! octo_version_ok "${agy_ver}" "${OCTO_AGY_MIN_VERSION:-1.0.6}"; then
             doctor_add "agy-cli" "providers" "warn" \
@@ -160,6 +256,9 @@ doctor_check_providers() {
     else
         doctor_add "agy-cli" "providers" "info" \
             "Antigravity CLI not installed (optional)" "Install agy to enable Antigravity provider routing"
+    fi
+    if [[ "${DOCTOR_LIVE_PROBE:-false}" == "true" ]]; then
+        doctor_check_agy_live "$_octo_root"
     fi
 
     # Perplexity API (v8.24.0 - optional)
@@ -409,7 +508,7 @@ doctor_check_providers() {
             [[ $agy_failures -gt 0 ]] && detail="$detail AGY failed ${agy_failures}x"
             doctor_add "provider-fallbacks" "providers" "warn" \
                 "${recent_failures} provider fallback(s) in last 24h" \
-                "${detail}. Check auth: codex auth / agy login. Log: ${fallback_log}"
+                "${detail}. Check Codex auth; for AGY, launch plain agy and complete browser sign-in. Log: ${fallback_log}"
         else
             doctor_add "provider-fallbacks" "providers" "pass" \
                 "No recent provider fallbacks" ""
@@ -494,10 +593,18 @@ doctor_check_auth() {
         fi
     fi
 
-    # Antigravity auth is owned by the AGY CLI.
+    # Antigravity auth is owned by the AGY CLI. Normal doctor runs retain the
+    # cheap binary-presence signal; an explicit live run must honor the catalog
+    # and keyring result collected by doctor_check_providers.
     if command -v agy &>/dev/null; then
-        doctor_add "agy-auth" "auth" "pass" \
-            "Antigravity CLI available" "Run 'agy login' if the CLI reports an expired session"
+        if [[ "${DOCTOR_LIVE_PROBE:-false}" == "true" && "$DOCTOR_AGY_LIVE_AUTH_STATUS" != "pass" ]]; then
+            doctor_add "agy-auth" "auth" "fail" \
+                "Antigravity authentication not verified by live catalog" \
+                "Launch plain 'agy' and complete browser sign-in; on macOS, allow agy to access the Antigravity CLI item in Keychain Access"
+        else
+            doctor_add "agy-auth" "auth" "pass" \
+                "Antigravity CLI available" "Launch plain 'agy' and complete browser sign-in if the CLI reports an expired session"
+        fi
     fi
 
     # Cursor Agent auth
@@ -520,9 +627,14 @@ doctor_check_auth() {
     fi
 
     # At least one provider must be authenticated
-    local any_auth=false
+    local any_auth=false agy_auth_ready=false
+    if command -v agy >/dev/null 2>&1; then
+        if [[ "${DOCTOR_LIVE_PROBE:-false}" != "true" || "$DOCTOR_AGY_LIVE_AUTH_STATUS" == "pass" ]]; then
+            agy_auth_ready=true
+        fi
+    fi
     if [[ -f "$HOME/.codex/auth.json" ]] || [[ -n "${OPENAI_API_KEY:-}" ]] || \
-       command -v agy >/dev/null 2>&1 || \
+       [[ "$agy_auth_ready" == "true" ]] || \
        [[ -n "${CURSOR_API_KEY:-}" ]] || grep -Eq '"authInfo"[[:space:]]*:[[:space:]]*\{' "$HOME/.cursor/cli-config.json" 2>/dev/null; then
         any_auth=true
     fi
@@ -1831,12 +1943,14 @@ do_doctor() {
     local category_filter=""
     local verbose=false
     local json_output=false
+    local DOCTOR_LIVE_PROBE=false
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --verbose|-v) verbose=true ;;
             --json) json_output=true ;;
+            --live) DOCTOR_LIVE_PROBE=true; verbose=true ;;
             -*) ;; # ignore unknown flags
             *) [[ -z "$category_filter" ]] && category_filter="$1" ;;
         esac
@@ -1849,6 +1963,7 @@ do_doctor() {
     DOCTOR_RESULTS_STATUS=()
     DOCTOR_RESULTS_MSG=()
     DOCTOR_RESULTS_DETAIL=()
+    DOCTOR_AGY_LIVE_AUTH_STATUS="not-run"
 
     # Run checks (filtered if category specified)
     local categories=(providers companions auth config updates state smoke hooks scheduler skills conflicts agents recurrence cache)

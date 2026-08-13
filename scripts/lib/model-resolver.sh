@@ -23,6 +23,9 @@ fi
 if ! declare -f _octo_assignment_has_nonempty_value >/dev/null 2>&1; then
     source "${_model_resolver_lib_dir}/auth.sh" 2>/dev/null || true
 fi
+if ! declare -f _octo_run_bare_probe_with_timeout >/dev/null 2>&1; then
+    source "${_model_resolver_lib_dir}/providers.sh" 2>/dev/null || true
+fi
 if ! declare -f copilot_is_available >/dev/null 2>&1; then
     source "${_model_resolver_lib_dir}/copilot.sh" 2>/dev/null || true
 fi
@@ -127,15 +130,34 @@ validate_agy_model_name() {
     fi
 
     local available_models=""
-    if ! available_models="$(agy models </dev/null 2>/dev/null)" || [[ -z "$available_models" ]]; then
+    local catalog_timeout catalog_term_timeout catalog_kill_grace
+    catalog_timeout="$(_octo_bare_probe_timeout "${OCTOPUS_AGY_MODELS_TIMEOUT:-5}")"
+    catalog_term_timeout="$catalog_timeout"
+    catalog_kill_grace=0
+    if [[ "$catalog_timeout" -gt 2 ]]; then
+        catalog_kill_grace=2
+        catalog_term_timeout=$((catalog_timeout - catalog_kill_grace))
+    fi
+    if ! available_models="$(_octo_run_bare_probe_with_timeout \
+        "$catalog_timeout" "$catalog_term_timeout" "$catalog_kill_grace" \
+        agy models </dev/null 2>/dev/null)" || [[ -z "$available_models" ]]; then
         log ERROR "Cannot validate OCTOPUS_AGY_MODEL because 'agy models' returned no models"
         return 1
     fi
 
-    local line=""
+    local line="" catalog_id="" catalog_label=""
     while IFS= read -r line; do
         line="${line%$'\r'}"
-        if [[ "$line" == "$model" ]]; then
+        catalog_id="$line"
+        catalog_label="$line"
+        if [[ "$line" == *$'\t'* ]]; then
+            catalog_id="${line%%$'\t'*}"
+            catalog_label="${line#*$'\t'}"
+            while [[ "$catalog_label" == $'\t'* ]]; do
+                catalog_label="${catalog_label#$'\t'}"
+            done
+        fi
+        if [[ "$catalog_id" == "$model" || "$catalog_label" == "$model" ]]; then
             return 0
         fi
     done <<< "$available_models"

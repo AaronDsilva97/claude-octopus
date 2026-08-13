@@ -1,29 +1,37 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-13
-Status: Issue #910 and its full-gate optimization follow-up are implemented on
-`fix/910-ci-changed`. The new `make ci-changed` gate selects audited focused
-suites for mapped surfaces and fails closed to the complete local matrix for
-shared, generated, manifest, or unknown changes. Full-matrix runs now report
-their slowest suites, Council fixtures reuse identical artifacts and skip only
-the separately tested detached transport, and ordinary unit tests cannot leave
-production-style Tangle worktrees in the real repository.
-Implementation commits `63fa6ef8` and `9d9e6bed` are pushed to both remotes and
-[PR #913](https://github.com/nyldn/claude-octopus/pull/913) is open. The code
-commit has prior full-matrix and CodeRabbit evidence, but merge remains deferred
-until required checks and review complete for the eventual branch head. Release
-is deferred.
-Branch: `fix/910-ci-changed`
+Status: Issues #904 and #915 are implemented on `fix/904-agy-model`. AGY model
+validation accepts the exact machine ID or display label from the live catalog,
+preflight excludes invalid configured models, review-sized prompts no longer
+stall in Bash before the CLI launches, and an opt-in live doctor verifies the
+installed CLI, catalog/keyring auth, configured model, and real print dispatch.
+[PR #912](https://github.com/nyldn/claude-octopus/pull/912) carries both fixes.
+It is rebased onto merged PR #913, the first matching changed-scope gate selected
+and passed the full matrix, and the real authenticated AGY health probe passed
+all four stages. A matching-head three-round AGY review completed; its two
+findings were reproduced against the supported entrypoints and rejected as false.
+CodeRabbit then exposed valid live-doctor consistency and timeout gaps; their TDD
+fixes pass the expanded 50-case AGY suite. The final changed-scope gate selected
+and passed the full matrix, and the real authenticated AGY probe passed again on
+that exact implementation. Commit `7f3b1567` is pushed to both remotes;
+CodeRabbit passed that head, while the separate provider-review job is quota
+blocked and reported no code finding. Matching remote checks and merge remain.
+Release is deferred.
+Branch: `fix/904-agy-model`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
-Tracking: [issue #910](https://github.com/nyldn/claude-octopus/issues/910)
-PR: [#913](https://github.com/nyldn/claude-octopus/pull/913)
-Next action: wait for matching-head PR #913 checks and review, then merge only
-if they permit it. The separate multi-provider review workflow is currently
-limited because Claude and Copilot exhausted their weekly and monthly quotas.
-Merge and release are deferred.
+Tracking: [issue #904](https://github.com/nyldn/claude-octopus/issues/904),
+[issue #915](https://github.com/nyldn/claude-octopus/issues/915)
+PR: [#912](https://github.com/nyldn/claude-octopus/pull/912)
+Next action: push the final handoff-only review cleanup, verify its matching
+remote checks, dismiss only obsolete resolved review requests, and merge PR #912.
+Release is deferred.
 
 ## Issue #910: Fail-Closed Changed-Scope Local Gate
 
+- Current state: [PR #913](https://github.com/nyldn/claude-octopus/pull/913)
+  was squash-merged as `25a2e80c`; issue #910 is closed. The `make ci-changed`
+  baseline is now on `upstream/main` and selected the full matrix for PR #912.
 - Root cause: repository instructions required all unit and integration suites
   before every code push. The complete unit sweep reached 267-268 suites, and
   the unrelated Council suite alone took 188-218 seconds during recent focused
@@ -112,6 +120,93 @@ Merge and release are deferred.
   matching-head checks and review before merge. The separate `pr-review` job is
   red because Claude hit its weekly limit and the Copilot fallback hit its
   monthly quota; it reported no code finding.
+
+## Issue #904: AGY Catalog IDs and Preflight
+
+- Root cause: current `agy models` emits `model-id<TAB>display label`, but
+  `validate_agy_model_name` compared a requested pin against the entire row.
+  Both `gemini-3.1-pro-high` and `Gemini 3.1 Pro (High)` were therefore rejected
+  even while the error output displayed them.
+- Catalog contract: exact model IDs and exact display labels are accepted;
+  partial matches remain rejected. Legacy one-label-per-line output remains
+  compatible. The live lookup has a five-second default total cap through the
+  repository's portable process-group timeout, configurable within the same
+  one-to-thirty-second bound as other startup probes.
+- Preflight contract: the effective AGY pin comes from `OCTOPUS_AGY_MODEL`, then
+  `providers.agy.default`, then `default`. An absent catalog entry reports
+  `AGY_STATUS=model-invalid`, excludes AGY from available providers, and prints
+  a corrective `agy models`/`default` instruction.
+- Provider boundary: retired direct Gemini execution remains disabled. AGY is
+  the supported Antigravity CLI seat even when that service exposes Gemini
+  models.
+- Evidence: the real installed catalog reproduces the tab-separated shape; both
+  the live ID and label now validate. The AGY provider suite passes 50/50,
+  including a red-to-green one-second stalled catalog test and behavioral
+  `cmd_detect_providers` output/cache checks for valid and invalid models. The
+  AGY research defaults, resolver, council selection, and provider-detection
+  suites pass. `make sync` and `make sync-check` are clean. The final
+  non-interactive `make ci-local` after review hardening passed 16/16 smoke
+  suites, 267/267 unit suites, 7/7 integration suites, and the CI-only
+  verifications. After rebasing onto PR #913, `make ci-changed` correctly failed
+  closed to the full matrix and passed 16/16 smoke suites, 268/268 unit suites,
+  7/7 integration suites, and the CI-only verifications.
+- Tracking blocker: Beads remains unreadable on schema v49 because its reserved
+  v65 migration has not been applied. No migration was run; GitHub issue #904
+  is the temporary tracker.
+
+## Issue #915: Review-Sized AGY Dispatch and Live Health
+
+- Root cause: `scripts/helpers/agy-exec.sh` deleted every whitespace match with
+  Bash global parameter substitution to determine whether a prompt was empty.
+  On macOS Bash 3.2 this became superlinear for review-sized mixed-content
+  prompts and consumed CPU for minutes before `agy` was ever launched. The same
+  pattern also guarded silent-output retry.
+- Dispatch fix: both checks now use Bash 3.2-compatible regular-expression
+  presence tests for a non-whitespace byte. A 64 KiB review-like prompt begins
+  dispatch within the two-second regression bound and arrives byte-for-byte at
+  the fake CLI; the old code failed that test before the child launched.
+- Live diagnostics: `octopus doctor providers --live` is explicit and bounded
+  to 30 seconds by default. It checks the installed version, live `agy models`
+  catalog/keyring access, exact configured model resolution, and a real
+  print-mode response. Normal startup/preflight remains non-billable and never
+  launches this probe.
+- Review-response hardening: `agy --version` now uses the same portable bounded
+  process-group probe before live checks, a failed live catalog/keyring check can
+  no longer coexist with a passing AGY auth result, and environment assignments
+  are quoted as complete `env` arguments. The new tests failed 2/50 before these
+  changes and pass 50/50 after them; the stalled five-second version fixture is
+  terminated and the complete doctor case finishes in two seconds.
+- Authentication contract: AGY v1.1.12 has no separate login shell subcommand.
+  Launch plain `agy` and complete its browser sign-in. On macOS keyring errors,
+  use Keychain Access, find the Antigravity CLI item, and allow `agy` under
+  Access Control. Every stale user-facing instruction was corrected and a
+  repository-wide regression prevents that nonexistent command from returning.
+- Live evidence: AGY CLI v1.1.12 passed all
+  four doctor stages with `gemini-3.1-pro-high`. The repaired adapter then ran a
+  full three-round AGY-only review of PR #913; its three findings were checked
+  against the code and rejected as false positives rather than applied blindly.
+- Verification: AGY provider coverage passes 50/50. `make sync-check` passes.
+  On the post-#913 rebased head, `make ci-changed` selected the full matrix and
+  passed 16/16 smoke suites, 268/268 unit suites, 7/7 integration suites, and
+  the CI-only verifications. The real `doctor providers --live --json` probe
+  then passed CLI install/version, catalog/keyring auth, exact model resolution,
+  and substantive print dispatch for `gemini-3.1-pro-high`.
+- Final review-response verification: `make ci-changed` again selected the full
+  matrix and exited 0 after all smoke, unit, integration, and CI-only checks; the
+  expanded AGY suite passed 50/50 within it. A matching real live probe then
+  passed CLI v1.1.12, catalog/keyring authentication, exact resolution of
+  `gemini-3.1-pro-high`, and substantive dispatch on the final implementation.
+- Matching-head review: the three-round AGY-only review completed for
+  `e68a848c` and returned two findings. Direct sourcing proved doctor timeout
+  helpers are loaded, and production `detect-providers` returned `model-invalid`
+  for a fake pin and `ok` for the real configured pin, so neither finding was
+  applied. CodeRabbit's later feedback was independently checked: the two live
+  doctor defects and coverage gaps above were fixed, while its raw-`echo` style
+  claim was rejected because the cited lines are inside established formatted
+  UI blocks that intentionally use the same output convention throughout.
+- Tracking blocker: Beads remains unreadable on schema v49 because its reserved
+  v65 migration has not been applied. No migration was run; GitHub issue #915
+  is the temporary tracker.
 
 ## Issue #898: Explicit Activation and Hook Latency
 
