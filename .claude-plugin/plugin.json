@@ -1,7 +1,7 @@
 {
   "name": "octo",
-  "version": "9.63.0",
-  "description": "v9.63.0 \u2014 Add cost modes and harden provider and hook reliability. Run /octo:setup.",
+  "version": "9.64.0",
+  "description": "v9.64.0 \u2014 Keep Octopus dormant until explicitly invoked. Run /octo:setup.",
   "author": {
     "name": "nyldn",
     "url": "https://github.com/nyldn"
