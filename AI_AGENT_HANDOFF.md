@@ -1,17 +1,15 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-13
-Status: Issues #901, #903, and #905 are implemented on a combined branch.
-PR #914 review feedback is resolved and CodeRabbit approved the reviewed code;
-matching-head local and remote gates and merge are the remaining steps.
-Branch: `fix/901-tangle-integrity`
+Status: All GitHub issues are closed. Issues #901, #903, and #905 were resolved
+by squash-merging PR #914 as `6e84959d`; no release was requested or created.
+Branch: `main`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [issue #901](https://github.com/nyldn/claude-octopus/issues/901),
 [issue #903](https://github.com/nyldn/claude-octopus/issues/903), and
 [issue #905](https://github.com/nyldn/claude-octopus/issues/905); implementation
 PR [#914](https://github.com/nyldn/claude-octopus/pull/914)
-Next action: complete the matching local and remote gates, then merge PR #914.
-Release remains deferred.
+Next action: none for the issue backlog. Release remains deferred.
 
 ## Issues #900 and #902: Tangle Lifecycle Ownership
 
@@ -304,7 +302,7 @@ Release remains deferred.
   pre-worktree resolution. A later spec review added a failing regression proving
   migration validation incorrectly depended on prompt classification; the gate
   now derives migration changes independently from the actual diff.
-- Current verification: the combined review-response regression set passes,
+- Final verification: the combined review-response regression set passes,
   including 15/15 migration/worktree evidence, 16/16 run-worktree isolation,
   15/15 Markdown context resolution, 11/11 clean baseline, 9/9 ceremonies,
   8/8 subtask context, 8/8 consultative dispatch, 16/16 cancellation cleanup,
@@ -313,9 +311,11 @@ Release remains deferred.
   Council compatibility at 72 passed with one known macOS PTY skip. A fresh
   historical branch-only `make ci-local` at `b2ac6790` exited 0 with 16/16
   smoke suites, 267/267 unit suites, and 7/7 integration suites. Subsequent
-  stacked commits brought the current combined branch to 269 unit suites;
-  matching-head verification is recorded by PR #914 checks and the final
-  session report. The first complete sweep exposed three newly
+  stacked commits brought the combined branch to 269 unit suites. On final PR
+  head `b9dfba4c`, `make ci-local` passed 16/16 smoke, 269/269 unit, 7/7
+  integration, and all CI-only checks. GitHub run `31752805182` passed
+  portability, both smoke platforms, both full unit platforms, symlinked-path,
+  full integration, and summary checks. The first complete sweep exposed three newly
   documented env vars missing from the accountability manifest; a later sweep
   exposed a stale integration assertion that inspected only 80 lines after the
   Tangle wrapper. Both contracts now map to behavioral tests, and the final
@@ -324,9 +324,10 @@ Release remains deferred.
   table requires the reserved v65 migration. No migration was run. These GitHub
   issues are the temporary tracker and this handoff records the blocked `bd`
   state.
-- Push state: the current `fix/901-tangle-integrity` branch head is pushed to
-  both configured remotes, `origin` and `upstream`; PR #914 targets
-  `upstream/main`.
+- Merge state: PR #914 was squash-merged as `6e84959d`; its tree exactly matches
+  tested head `b9dfba4c`. GitHub automatically closed #901, #903, and #905, and
+  a post-merge open-issue query returned an empty list. Canonical `main` is
+  fast-forwarded to `upstream/main`.
 
 ## Issue #898: Explicit Activation and Hook Latency
 
