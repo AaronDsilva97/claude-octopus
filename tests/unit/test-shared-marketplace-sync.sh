@@ -329,7 +329,8 @@ MD
     if ! grep -q "Add Opus 4.8 routing" <<<"$unreleased_block" &&
        grep -q "Add Opus 4.8 routing" <<<"$version_block" &&
        grep -q "Make council runner-backed" <<<"$version_block" &&
-       grep -q '^      preserve this indented example$' "$changelog" &&
+       ! grep -q '^      preserve this indented example$' <<<"$unreleased_block" &&
+       grep -q '^      preserve this indented example$' <<<"$version_block" &&
        python3 -c 'from pathlib import Path; import sys; text = Path(sys.argv[1]).read_text(); header = sys.argv[2]; raise SystemExit(0 if f"{header}\n\n### Added" in text and f"{header}\n\n\n" not in text else 1)' "$changelog" "$expected_header" &&
        grep -q "Previous patch release" "$changelog"; then
         test_pass
