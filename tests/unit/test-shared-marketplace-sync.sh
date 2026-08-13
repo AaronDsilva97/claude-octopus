@@ -292,6 +292,9 @@ test_release_promotes_unreleased_changelog_notes() {
     test_case "release changelog helper promotes Unreleased notes into version entry"
 
     local changelog="$TMP_DIR/CHANGELOG.md"
+    local release_version="9.42.0"
+    local release_date="2026-06-02"
+    local expected_header="## [${release_version}] - ${release_date}"
     local unreleased_block version_block
 
     cat > "$changelog" <<'MD'
@@ -318,16 +321,16 @@ MD
 
     # shellcheck disable=SC1090
     source "$CHANGELOG_LIB"
-    octo_release_update_changelog "$changelog" "9.42.0" "2026-06-02" "Release summary" >"$TMP_DIR/octo-release-changelog.out"
+    octo_release_update_changelog "$changelog" "$release_version" "$release_date" "Release summary" >"$TMP_DIR/octo-release-changelog.out"
 
-    unreleased_block="$(awk '/^## \[Unreleased\]/{flag=1; next} /^## \[9\.42\.0\]/{flag=0} flag {print}' "$changelog")"
-    version_block="$(awk '/^## \[9\.42\.0\]/{flag=1; next} /^## \[9\.41\.2\]/{flag=0} flag {print}' "$changelog")"
+    unreleased_block="$(awk '$0 == "## [Unreleased]" {flag=1; next} /^## \[/ && flag {flag=0} flag {print}' "$changelog")"
+    version_block="$(awk -v heading="$expected_header" '$0 == heading {flag=1; next} /^## \[/ && flag {flag=0} flag {print}' "$changelog")"
 
     if ! grep -q "Add Opus 4.8 routing" <<<"$unreleased_block" &&
        grep -q "Add Opus 4.8 routing" <<<"$version_block" &&
        grep -q "Make council runner-backed" <<<"$version_block" &&
        grep -q '^      preserve this indented example$' "$changelog" &&
-       python3 -c 'from pathlib import Path; import sys; text = Path(sys.argv[1]).read_text(); raise SystemExit(0 if "## [9.42.0] - 2026-06-02\n\n### Added" in text and "## [9.42.0] - 2026-06-02\n\n\n" not in text else 1)' "$changelog" &&
+       python3 -c 'from pathlib import Path; import sys; text = Path(sys.argv[1]).read_text(); header = sys.argv[2]; raise SystemExit(0 if f"{header}\n\n### Added" in text and f"{header}\n\n\n" not in text else 1)' "$changelog" "$expected_header" &&
        grep -q "Previous patch release" "$changelog"; then
         test_pass
     else
