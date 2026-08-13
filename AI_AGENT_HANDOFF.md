@@ -1,19 +1,22 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-13
-Status: Issue #910 is implemented on `fix/910-ci-changed`. The new
-`make ci-changed` gate selects audited focused suites for mapped surfaces and
-fails closed to the complete local matrix for shared, generated, manifest, or
-unknown changes. Focused selection and execution pass; the final full gate
-also passes.
-Implementation commit `63fa6ef8` is pushed to both remotes and
+Status: Issue #910 and its full-gate optimization follow-up are implemented on
+`fix/910-ci-changed`. The new `make ci-changed` gate selects audited focused
+suites for mapped surfaces and fails closed to the complete local matrix for
+shared, generated, manifest, or unknown changes. Full-matrix runs now report
+their slowest suites, Council fixtures reuse identical artifacts and skip only
+the separately tested detached transport, and ordinary unit tests cannot leave
+production-style Tangle worktrees in the real repository.
+Implementation commits `63fa6ef8` and `9d9e6bed` are pushed to both remotes and
 [PR #913](https://github.com/nyldn/claude-octopus/pull/913) is open. Release is
 deferred.
 Branch: `fix/910-ci-changed`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [issue #910](https://github.com/nyldn/claude-octopus/issues/910)
 PR: [#913](https://github.com/nyldn/claude-octopus/pull/913)
-Next action: review PR #913 checks and feedback. Merge and release are deferred.
+Next action: review the new PR #913 checks and feedback for commit `9d9e6bed`.
+Merge and release are deferred.
 
 ## Issue #910: Fail-Closed Changed-Scope Local Gate
 
@@ -60,6 +63,44 @@ Next action: review PR #913 checks and feedback. Merge and release are deferred.
 - Tracking blocker: Beads remains unreadable on schema v49 because its reserved
   v65 migration has not been applied. No migration was run; GitHub issue #910
   is the temporary tracker.
+
+### Full-gate optimization follow-up
+
+- Root cause measurement: a fresh standalone Council baseline passed but took
+  220.65 seconds. Repeated fixture scenarios each paid detached-seat polling
+  and several test cases rebuilt byte-for-byte-equivalent dry-run, standard,
+  chair-fallback, or all-approve artifacts for separate assertions.
+- Optimization boundary: production Council seats remain detached. Internal
+  fixture dispatch uses the existing inline path, while the dedicated atomic
+  rename, signal survival, timeout, descendant cancellation, exit propagation,
+  and escape-hatch tests still exercise the real detached transport. Identical
+  fixture artifacts are cached only within the Council suite; every assertion
+  and unique failure scenario remains.
+- Test isolation: `tests/helpers/test-framework.sh` now defaults
+  `OCTOPUS_TANGLE_RUN_WORKTREE=false` while preserving an explicit caller
+  setting. `test-tangle-run-worktree.sh` explicitly unsets the flag and still
+  proves production-default isolation. Eleven Tangle suites passed without
+  changing repository worktree or `octopus/run/*` ref counts.
+- Profiling: `tests/run-all-tests.sh` records wall time around every suite and
+  prints a deterministic top-ten `Slowest suites` table. The fresh full unit
+  run identified Council (166s), knowledge routing (38s), lifecycle events
+  (24s), Octopus events (23s), and provider auth validity (22s) as the leading
+  remaining costs.
+- Performance evidence: the standalone Council suite fell from 220.65s to
+  150.35s, a 31.9% reduction, while passing 73/74 cases with the same one known
+  macOS PTY skip. No suite or assertion was deleted.
+- TDD/review evidence: the new harness/timing regressions failed 2 cases before
+  implementation and pass 19/19 after it. The fixture parent-context
+  reproduction failed before the inline path and passed afterward. An AGY
+  adversarial test review led to coverage for inherited `true`, failing fixture
+  dispatch, and stale sentinel cleanup. Spec review rejected sharing the
+  standard-depth benchmark fixture with a quick-depth run before delivery.
+- Final verification: fresh `make ci-local` completed in 695.40s and passed
+  smoke 16/16, unit 268/268, integration 7/7, and the CI-only verifications.
+  Repository state remained exactly 15 worktrees and 1,251 `octopus/run/*`
+  refs before and after the complete gate; the prior full run had left 94 stale
+  worktree registrations. Source commit `9d9e6bed` is pushed to origin and
+  upstream.
 
 ## Issue #898: Explicit Activation and Hook Latency
 
