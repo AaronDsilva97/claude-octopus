@@ -4,12 +4,16 @@ Last updated: 2026-08-13
 Status: Issue #910 is implemented on `fix/910-ci-changed`. The new
 `make ci-changed` gate selects audited focused suites for mapped surfaces and
 fails closed to the complete local matrix for shared, generated, manifest, or
-unknown changes. Focused selection and execution pass; the final full gate,
-also passes. Commit, push, and PR remain. Release is deferred.
+unknown changes. Focused selection and execution pass; the final full gate
+also passes.
+Implementation commit `63fa6ef8` is pushed to both remotes and
+[PR #913](https://github.com/nyldn/claude-octopus/pull/913) is open. Release is
+deferred.
 Branch: `fix/910-ci-changed`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [issue #910](https://github.com/nyldn/claude-octopus/issues/910)
-Next action: commit, push, open the upstream PR, and record its URL here.
+PR: [#913](https://github.com/nyldn/claude-octopus/pull/913)
+Next action: review PR #913 checks and feedback. Merge and release are deferred.
 
 ## Issue #910: Fail-Closed Changed-Scope Local Gate
 
