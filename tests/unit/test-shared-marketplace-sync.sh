@@ -329,6 +329,8 @@ MD
     ' "$changelog")"
 
     if ! grep -Fqx -- "- Add Opus 4.8 routing." <<<"$unreleased_block" &&
+       grep -Fqx -- "## [Unreleased]" "$changelog" &&
+       ! grep -q '[^[:space:]]' <<<"$unreleased_block" &&
        grep -Fqx -- "- Add Opus 4.8 routing." <<<"$version_block" &&
        grep -Fqx -- "- Make council runner-backed by default." <<<"$version_block" &&
        ! grep -Fqx -- "      preserve this indented example" <<<"$unreleased_block" &&
