@@ -48,16 +48,19 @@ octo_release_update_changelog() {
                 printf "## [Unreleased]\n\n"
                 printf "## [%s] - %s\n\n", version, release_date
 
-                trimmed = body
-                gsub(/^[[:space:]\n]+|[[:space:]\n]+$/, "", trimmed)
-                if (saw_unreleased && trimmed != "") {
-                    printf "%s", body
-                    if (body !~ /\n$/) {
+                content = body
+                while (substr(content, 1, 1) == "\n") {
+                    content = substr(content, 2)
+                }
+                while (length(content) > 1 && substr(content, length(content) - 1, 2) == "\n\n") {
+                    content = substr(content, 1, length(content) - 1)
+                }
+                if (saw_unreleased && content != "") {
+                    printf "%s", content
+                    if (content !~ /\n$/) {
                         printf "\n"
                     }
-                    if (body !~ /\n\n$/) {
-                        printf "\n"
-                    }
+                    printf "\n"
                 } else {
                     printf "### Changed\n\n"
                     printf "- %s\n\n", summary

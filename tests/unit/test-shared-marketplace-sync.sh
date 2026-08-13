@@ -17,12 +17,6 @@ RELEASE_SCRIPT="$PROJECT_ROOT/scripts/release.sh"
 CHANGELOG_LIB="$PROJECT_ROOT/scripts/lib/release-changelog.sh"
 CI_LIB="$PROJECT_ROOT/scripts/lib/release-ci.sh"
 LOCAL_MARKETPLACE="$PROJECT_ROOT/.claude-plugin/marketplace.json"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/octo-shared-marketplace-test.XXXXXX")"
-
-cleanup() {
-    rm -rf "$TMP_DIR"
-}
-trap cleanup EXIT
 
 pass() { test_case "$1"; test_pass; }
 fail() { test_case "$1"; test_fail "${2:-$1}"; }
@@ -219,7 +213,7 @@ test_marketplace_description_error_uses_logger() {
 test_local_marketplace_sync_aligns_all_versions() {
     test_case "sync-marketplace rejects and repairs stale marketplace version fields"
 
-    local fixture="$TMP_DIR/local-sync"
+    local fixture="$TEST_TMP_DIR/local-sync"
     local check_before_rc=0
     local check_after_rc=0
     local check_entry_rc=0
@@ -254,21 +248,21 @@ JSON
 }
 JSON
 
-    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-before.out" 2>&1 || check_before_rc=$?
-    bash "$fixture/scripts/sync-marketplace.sh" > "$TMP_DIR/local-sync-update.out" 2>&1
-    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-after.out" 2>&1 || check_after_rc=$?
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TEST_TMP_DIR/local-sync-check-before.out" 2>&1 || check_before_rc=$?
+    bash "$fixture/scripts/sync-marketplace.sh" > "$TEST_TMP_DIR/local-sync-update.out" 2>&1
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TEST_TMP_DIR/local-sync-check-after.out" 2>&1 || check_after_rc=$?
 
     jq '(.plugins[] | select(.name == "octo") | .version) = "1.0.0"' \
-        "$fixture/.claude-plugin/marketplace.json" > "$TMP_DIR/local-sync-entry-stale.json"
-    mv "$TMP_DIR/local-sync-entry-stale.json" "$fixture/.claude-plugin/marketplace.json"
-    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-entry.out" 2>&1 || check_entry_rc=$?
+        "$fixture/.claude-plugin/marketplace.json" > "$TEST_TMP_DIR/local-sync-entry-stale.json"
+    mv "$TEST_TMP_DIR/local-sync-entry-stale.json" "$fixture/.claude-plugin/marketplace.json"
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TEST_TMP_DIR/local-sync-check-entry.out" 2>&1 || check_entry_rc=$?
 
     plugin_version="$(jq -r '.version' "$fixture/.claude-plugin/plugin.json")"
     metadata_version="$(jq -r '.metadata.version' "$fixture/.claude-plugin/marketplace.json")"
     stale_entry_version="$(jq -r '.plugins[] | select(.name == "octo") | .version' "$fixture/.claude-plugin/marketplace.json")"
 
-    bash "$fixture/scripts/sync-marketplace.sh" > "$TMP_DIR/local-sync-entry-repair.out" 2>&1
-    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TMP_DIR/local-sync-check-entry-repaired.out" 2>&1 || check_entry_repaired_rc=$?
+    bash "$fixture/scripts/sync-marketplace.sh" > "$TEST_TMP_DIR/local-sync-entry-repair.out" 2>&1
+    bash "$fixture/scripts/sync-marketplace.sh" --check > "$TEST_TMP_DIR/local-sync-check-entry-repaired.out" 2>&1 || check_entry_repaired_rc=$?
     repaired_metadata_version="$(jq -r '.metadata.version' "$fixture/.claude-plugin/marketplace.json")"
     repaired_entry_version="$(jq -r '.plugins[] | select(.name == "octo") | .version' "$fixture/.claude-plugin/marketplace.json")"
 
@@ -281,7 +275,7 @@ JSON
           "$repaired_metadata_version" == "$plugin_version" &&
           "$repaired_entry_version" == "$plugin_version" ]] &&
        grep -Fqx "[WARN] Plugin version: $stale_entry_version (expected $plugin_version)" \
-           "$TMP_DIR/local-sync-check-entry.out"; then
+           "$TEST_TMP_DIR/local-sync-check-entry.out"; then
         test_pass
     else
         test_fail "expected independent entry-version rejection and repair; before=$check_before_rc after=$check_after_rc entry_check=$check_entry_rc entry_repaired=$check_entry_repaired_rc plugin=$plugin_version metadata=$metadata_version stale_entry=$stale_entry_version repaired_metadata=$repaired_metadata_version repaired_entry=$repaired_entry_version"
@@ -291,7 +285,10 @@ JSON
 test_release_promotes_unreleased_changelog_notes() {
     test_case "release changelog helper promotes Unreleased notes into version entry"
 
-    local changelog="$TMP_DIR/CHANGELOG.md"
+    local changelog="$TEST_TMP_DIR/CHANGELOG.md"
+    local release_version="9.42.0"
+    local release_date="2026-06-02"
+    local expected_header="## [${release_version}] - ${release_date}"
     local unreleased_block version_block
 
     cat > "$changelog" <<'MD'
@@ -307,6 +304,8 @@ test_release_promotes_unreleased_changelog_notes() {
 
 - Make council runner-backed by default.
 
+      preserve this indented example
+
 ## [9.41.2] - 2026-05-28
 
 ### Fixed
@@ -316,14 +315,28 @@ MD
 
     # shellcheck disable=SC1090
     source "$CHANGELOG_LIB"
-    octo_release_update_changelog "$changelog" "9.42.0" "2026-06-02" "Release summary" >"$TMP_DIR/octo-release-changelog.out"
+    octo_release_update_changelog "$changelog" "$release_version" "$release_date" "Release summary" >"$TEST_TMP_DIR/octo-release-changelog.out"
 
-    unreleased_block="$(awk '/^## \[Unreleased\]/{flag=1; next} /^## \[9\.42\.0\]/{flag=0} flag {print}' "$changelog")"
-    version_block="$(awk '/^## \[9\.42\.0\]/{flag=1; next} /^## \[9\.41\.2\]/{flag=0} flag {print}' "$changelog")"
+    unreleased_block="$(awk '$0 == "## [Unreleased]" {flag=1; next} /^## \[/ && flag {flag=0} flag {print}' "$changelog")"
+    version_block="$(awk -v heading="$expected_header" '$0 == heading {flag=1; next} /^## \[/ && flag {flag=0} flag {print}' "$changelog")"
 
-    if ! grep -q "Add Opus 4.8 routing" <<<"$unreleased_block" &&
-       grep -q "Add Opus 4.8 routing" <<<"$version_block" &&
-       grep -q "Make council runner-backed" <<<"$version_block" &&
+    local boundary_blank_lines
+    boundary_blank_lines="$(awk -v heading="$expected_header" '
+        $0 == heading { in_version = 1; next }
+        in_version && /^## \[/ { print blank_lines; exit }
+        in_version && $0 == "" { blank_lines++; next }
+        in_version { blank_lines = 0 }
+    ' "$changelog")"
+
+    if ! grep -Fqx -- "- Add Opus 4.8 routing." <<<"$unreleased_block" &&
+       grep -Fqx -- "## [Unreleased]" "$changelog" &&
+       ! grep -q '[^[:space:]]' <<<"$unreleased_block" &&
+       grep -Fqx -- "- Add Opus 4.8 routing." <<<"$version_block" &&
+       grep -Fqx -- "- Make council runner-backed by default." <<<"$version_block" &&
+       ! grep -Fqx -- "      preserve this indented example" <<<"$unreleased_block" &&
+       grep -Fqx -- "      preserve this indented example" <<<"$version_block" &&
+       [[ "$boundary_blank_lines" == "1" ]] &&
+       python3 -c 'from pathlib import Path; import sys; text = Path(sys.argv[1]).read_text(); header = sys.argv[2]; raise SystemExit(0 if f"{header}\n\n### Added" in text and f"{header}\n\n\n" not in text else 1)' "$changelog" "$expected_header" &&
        grep -q "Previous patch release" "$changelog"; then
         test_pass
     else
@@ -365,15 +378,15 @@ test_release_ci_parser_matches_exact_aggregate_checks() {
 }
 
 test_shared_marketplace_sync_updates_only_octo() {
-    local remote="$TMP_DIR/plugins.git"
-    local seed="$TMP_DIR/seed"
-    local work="$TMP_DIR/work"
-    local stale_output="$TMP_DIR/octo-shared-marketplace-check.out"
-    local sync_output="$TMP_DIR/octo-shared-marketplace-sync.out"
-    local check_output="$TMP_DIR/octo-shared-marketplace-check2.out"
-    local drift_output="$TMP_DIR/octo-shared-marketplace-codex-drift.out"
-    local duplicate_output="$TMP_DIR/octo-shared-marketplace-codex-duplicate.out"
-    local source_output="$TMP_DIR/octo-shared-marketplace-codex-source.out"
+    local remote="$TEST_TMP_DIR/plugins.git"
+    local seed="$TEST_TMP_DIR/seed"
+    local work="$TEST_TMP_DIR/work"
+    local stale_output="$TEST_TMP_DIR/octo-shared-marketplace-check.out"
+    local sync_output="$TEST_TMP_DIR/octo-shared-marketplace-sync.out"
+    local check_output="$TEST_TMP_DIR/octo-shared-marketplace-check2.out"
+    local drift_output="$TEST_TMP_DIR/octo-shared-marketplace-codex-drift.out"
+    local duplicate_output="$TEST_TMP_DIR/octo-shared-marketplace-codex-duplicate.out"
+    local source_output="$TEST_TMP_DIR/octo-shared-marketplace-codex-source.out"
     create_shared_marketplace_remote "$remote" "$seed"
 
     test_case "--check fails when shared octo entry is stale"
