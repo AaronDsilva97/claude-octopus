@@ -28,13 +28,18 @@ RED=""
 NC=""
 TMUX_MODE=false
 OCTOPUS_TANGLE_MISSING_MARKER_GRACE=0
+OCTOPUS_TANGLE_IDLE_WORKER_GRACE=0
 DRY_RUN=false
 SUPPORTS_PARALLEL_FILE_SAFETY=false
 RESULTS_DIR="$TEST_TMP_DIR/results"
 WORKSPACE_DIR="$TEST_TMP_DIR/workspace"
+PID_FILE="$WORKSPACE_DIR/pids"
 LOG_CAPTURE_FILE="$TEST_TMP_DIR/tangle.log"
 DATE_COUNTER_FILE="$TEST_TMP_DIR/date-counter"
 SLEEP_COUNTER_FILE="$TEST_TMP_DIR/sleep-counter"
+IDLE_WORKER_PID_FILE="$TEST_TMP_DIR/idle-worker.pid"
+FIXTURE_MODE="dead"
+DATE_MODE="constant"
 mkdir -p "$RESULTS_DIR" "$WORKSPACE_DIR/.octo/agents"
 
 log() {
@@ -61,10 +66,18 @@ spawn_agent_capture_pid() {
 
 ## Output
 EOF
-    ( : ) &
-    local dead_pid="$!"
-    wait "$dead_pid" 2>/dev/null || true
-    printf '%s\n' "$dead_pid"
+    if [[ "$FIXTURE_MODE" == "idle" ]]; then
+        tail -f /dev/null >/dev/null 2>&1 &
+        local idle_pid="$!"
+        printf '%s\n' "$idle_pid" > "$IDLE_WORKER_PID_FILE"
+        printf '%s:%s:%s\n' "$idle_pid" "codex" "$task_id" >> "$PID_FILE"
+        printf '%s\n' "$idle_pid"
+        return 0
+    fi
+    # Use a numeric PID outside the platform range. A real reaped PID can be
+    # recycled immediately by the test's own ps/date helpers, making a dead
+    # worker look live and turning cleanup into a signal against the fixture.
+    printf '%s\n' "2147480000"
 }
 sleep() {
     local count
@@ -79,6 +92,9 @@ sleep() {
         rm -f "$WORKSPACE_DIR/.octo/agents" 2>/dev/null || true
         mkdir -p "$WORKSPACE_DIR/.octo/agents"
         printf '0' > "$WORKSPACE_DIR/.octo/agents/tangle-100-0.done"
+        if [[ -s "$IDLE_WORKER_PID_FILE" ]]; then
+            kill -KILL "$(cat "$IDLE_WORKER_PID_FILE")" 2>/dev/null || true
+        fi
     fi
 }
 date() {
@@ -89,7 +105,11 @@ date() {
         count=$(<"$DATE_COUNTER_FILE")
         count=$((count + 1))
         printf '%s' "$count" > "$DATE_COUNTER_FILE"
-        printf '%s\n' "100"
+        if [[ "$DATE_MODE" == "advancing" ]]; then
+            printf '%s\n' "$((100 + count))"
+        else
+            printf '%s\n' "100"
+        fi
         return 0
     fi
     command date "$@"
@@ -100,6 +120,11 @@ reset_fixture() {
     mkdir -p "$RESULTS_DIR" "$WORKSPACE_DIR/.octo/agents"
     printf '0' > "$DATE_COUNTER_FILE"
     printf '0' > "$SLEEP_COUNTER_FILE"
+    : > "$IDLE_WORKER_PID_FILE"
+    : > "$PID_FILE"
+    FIXTURE_MODE="dead"
+    DATE_MODE="constant"
+    OCTOPUS_TANGLE_IDLE_WORKER_GRACE=0
 }
 
 test_case "dead wrapper writes missing-done-marker and failed status before deadline"
@@ -129,6 +154,55 @@ if [[ "$(<"$SLEEP_COUNTER_FILE")" -le 6 ]] && \
     test_pass
 else
     test_fail "wait loop did not terminate when marker write failed"
+fi
+
+test_case "living worker without provider descendants becomes terminal"
+reset_fixture
+FIXTURE_MODE="idle"
+idle_output="$TEST_TMP_DIR/idle-worker.out"
+tangle_develop "idle worker task" > "$idle_output" 2>&1 || true
+idle_pid=$(cat "$IDLE_WORKER_PID_FILE" 2>/dev/null || true)
+if grep -q 'finished with status: stalled-worker' "$LOG_CAPTURE_FILE" \
+   && [[ -n "$idle_pid" ]] \
+   && ! kill -0 "$idle_pid" 2>/dev/null; then
+    test_pass
+else
+    kill -KILL "$idle_pid" 2>/dev/null || true
+    test_fail "idle worker was not terminated and recorded as stalled-worker"
+fi
+
+test_case "redirected progress prints only when the count changes"
+progress_count=$(grep -o 'Progress:' "$idle_output" 2>/dev/null | wc -l | tr -d ' ')
+if [[ "${progress_count:-0}" -eq 2 ]]; then
+    test_pass
+else
+    test_fail "expected exactly 2 redirected progress lines, found $progress_count"
+fi
+
+test_case "nonzero idle grace waits until the exact threshold"
+reset_fixture
+FIXTURE_MODE="idle"
+DATE_MODE="advancing"
+OCTOPUS_TANGLE_IDLE_WORKER_GRACE=2
+tangle_develop "idle worker grace task" >/dev/null 2>&1 || true
+grace_sleep_count="$(<"$SLEEP_COUNTER_FILE")"
+grace_idle_pid="$(cat "$IDLE_WORKER_PID_FILE" 2>/dev/null || true)"
+if [[ "$grace_sleep_count" -eq 3 ]] \
+   && grep -Fq 'remained idle without provider descendants for 2s' "$LOG_CAPTURE_FILE" \
+   && [[ -n "$grace_idle_pid" ]] \
+   && ! kill -0 "$grace_idle_pid" 2>/dev/null; then
+    test_pass
+else
+    kill -KILL "$grace_idle_pid" 2>/dev/null || true
+    test_fail "idle grace boundary was not enforced exactly (sleep_count=$grace_sleep_count)"
+fi
+
+test_case "idle result status check is SIGPIPE-safe"
+if grep -Fq "grep -c '^## Status:'" "$WORKFLOWS" \
+   && ! grep -Fq "grep -q '^## Status:' \"\$_idle_result_file\"" "$WORKFLOWS"; then
+    test_pass
+else
+    test_fail "idle result status check still uses grep -q"
 fi
 
 unset -f date

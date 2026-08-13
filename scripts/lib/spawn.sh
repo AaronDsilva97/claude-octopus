@@ -136,16 +136,31 @@ _octopus_agent_lifecycle_event() {
 # version at all, so use its generated suffix instead. The reservation file
 # is deliberately kept (not rm'd): deleting it would free that exact name
 # for reuse by a later mktemp call, turning the "genuinely unique" guarantee
-# back into a probabilistic one. Each file is 0 bytes, so the accumulated
-# cost over a session is a handful of empty inodes, not meaningful disk use.
+# back into a probabilistic one. Reservations older than seven days can be
+# deleted safely because the timestamp component makes their full IDs distinct
+# from every current-day allocation.
 # Falls back to the old PID/RANDOM combination only if mktemp itself is
 # unavailable — that path is not a hard uniqueness guarantee, only a
 # best-effort default for environments where mktemp can't run at all.
 # Shared by spawn_agent() and spawn_agent_capture_pid() so both default
 # paths — and their tests — stay in sync from one definition.
+_octopus_prune_task_id_reservations() {
+    local reservation_dir="$1" prune_day marker lock_dir
+    prune_day=$(date +%Y%m%d 2>/dev/null || printf 'unknown')
+    marker="${reservation_dir}/.pruned-${prune_day}"
+    [[ -e "$marker" ]] && return 0
+    lock_dir="${marker}.lock"
+    if mkdir "$lock_dir" 2>/dev/null; then
+        find "$reservation_dir" -type f -mtime +7 -delete 2>/dev/null || true
+        : > "$marker"
+        rmdir "$lock_dir" 2>/dev/null || true
+    fi
+}
+
 _octopus_next_spawn_task_id() {
     local _reservation_dir="${WORKSPACE_DIR:-${HOME}/.claude-octopus}/.octo/task-ids"
     mkdir -p "$_reservation_dir" 2>/dev/null || true
+    _octopus_prune_task_id_reservations "$_reservation_dir"
     local _tmp _uniq
     _tmp=$(mktemp "${_reservation_dir}/XXXXXX" 2>/dev/null) && _uniq="${_tmp##*/}"
     printf '%s-%s\n' "$(date +%s)" "${_uniq:-${BASHPID:-$$}${RANDOM}}"
@@ -703,7 +718,14 @@ ${heuristic_ctx}"
     # LEGACY PATH: Execute an external agent in a Bash subprocess when teams are unavailable.
     # ═══════════════════════════════════════════════════════════════════════════
 
-    # Execute agent in background
+    # Execute each worker in a dedicated process group. The recorded PID is also
+    # its PGID, allowing cancellation to atomically stop every provider
+    # descendant even if the Bash group leader exits during teardown (#900).
+    # Preserve a caller that already enabled monitor mode rather than forcing it
+    # off after the spawn.
+    local _spawn_monitor_was_enabled=false
+    [[ "$-" == *m* ]] && _spawn_monitor_was_enabled=true
+    set -m
     (
         cd "$PROJECT_ROOT" || exit 1
         set -f  # Disable glob expansion
@@ -1190,6 +1212,7 @@ ${heuristic_ctx}"
     ) &
 
     local pid=$!
+    [[ "$_spawn_monitor_was_enabled" == "true" ]] || set +m
 
     _octopus_agent_lifecycle_event "spawned" "$agent_type" "$task_id" "$role" "$phase" "$pid" "$result_file" "" "running"
 

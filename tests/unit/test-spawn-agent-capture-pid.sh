@@ -7,15 +7,12 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "spawn agent PID capture"
 
 # Load only the helpers under test so the fixture controls spawn_agent and log.
+eval "$(sed -n '/^_octopus_prune_task_id_reservations() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")"
 eval "$(sed -n '/^_octopus_next_spawn_task_id() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")"
 eval "$(sed -n '/^spawn_agent_capture_pid() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/spawn.sh")"
 
-TEST_TMP_DIR="/tmp/octopus-tests-$$"
-mkdir -p "$TEST_TMP_DIR"
-trap 'rm -rf "$TEST_TMP_DIR"' EXIT INT TERM
-
-# Keep the permanent per-id reservation files (see _octopus_next_spawn_task_id)
-# inside the test sandbox instead of the real ~/.claude-octopus.
+# Keep per-id reservation files inside the test sandbox instead of the real
+# ~/.claude-octopus.
 export WORKSPACE_DIR="$TEST_TMP_DIR"
 
 log() { printf '%s %s\n' "${1:-}" "${2:-}" >> "$TEST_TMP_DIR/log"; }
@@ -109,6 +106,20 @@ else
     test_fail "expected $total distinct task_ids, got only $unique unique"
 fi
 
+test_case "task_id helper prunes expired reservations"
+reservation_dir="$WORKSPACE_DIR/.octo/task-ids"
+expired_reservation="$reservation_dir/expired-reservation"
+mkdir -p "$reservation_dir"
+find "$reservation_dir" -type f -name '.pruned-*' -delete 2>/dev/null || true
+: > "$expired_reservation"
+touch -t 202001010000 "$expired_reservation"
+_octopus_next_spawn_task_id >/dev/null
+if [[ ! -e "$expired_reservation" ]]; then
+    test_pass
+else
+    test_fail "expired task-id reservation was not pruned"
+fi
+
 # The PID/RANDOM fallback only fires when mktemp itself can't run (e.g. no
 # writable tmp). Force that path and confirm it still produces a validly
 # shaped, non-empty id instead of failing silently or breaking the caller.
@@ -145,6 +156,7 @@ fi
 # orphaning the descendant. Load review.sh's tree-kill helper the same way
 # spawn.sh's fixed code path resolves it, and prove the descendant is reaped.
 test_case "descendant of a failed spawn is reaped, not left orphaned (#736)"
+eval "$(sed -n '/^review_child_pids() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/review.sh")"
 eval "$(sed -n '/^review_process_tree_depth_first() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/review.sh")"
 eval "$(sed -n '/^review_terminate_process_tree() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/review.sh")"
 eval "$(sed -n '/^review_process_is_running() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/review.sh")"

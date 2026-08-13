@@ -1,20 +1,75 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-13
-Status: Issue #908 is implemented and proposed in PR #911 on
-`fix/908-review-aggregation`. Review
-findings now cross a single-document normalization boundary before persistence,
-counting, event emission, rendering, or publishing; non-object entries are
-rejected and duplicate findings collapse without changing synthesis rank or
-equal-severity input order. Review-response commit `7134d789` is pushed to both
-remotes and its final full gate passes; review-thread responses remain. Release
-is deferred.
-Branch: `fix/908-review-aggregation`
+Status: Issues #900 and #902 are implemented on
+`fix/900-tangle-lifecycle`. Tangle workers now run in dedicated process groups,
+INT/TERM and unexpected orchestrator exits cancel active work, completion
+watchers recover from idle wrappers, and redirected progress changes only when
+the count changes. The implementation commits through `696aafd2` are pushed to
+both remotes and [PR #909](https://github.com/nyldn/claude-octopus/pull/909) is
+open. Review-response commits through `afbaa8cc` are pushed to both remotes.
+The remote Linux integration job exposed a pipefail-only SIGPIPE in two test
+assertions, and a follow-up review found a failed-lock path plus a test lifecycle
+override. All three corrections pass focused coverage and the latest full gate;
+commit `29fa740e` is pushed to both remotes. Review replies and rerun checks
+remain. Release remains explicitly deferred.
+Branch: `fix/900-tangle-lifecycle`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
-Tracking: [issue #908](https://github.com/nyldn/claude-octopus/issues/908)
-PR: [#911](https://github.com/nyldn/claude-octopus/pull/911)
-Next action: answer PR #911's three review threads and verify rerun checks.
+Tracking: [issue #900](https://github.com/nyldn/claude-octopus/issues/900),
+[issue #902](https://github.com/nyldn/claude-octopus/issues/902)
+PR: [#909](https://github.com/nyldn/claude-octopus/pull/909)
+Next action: answer the two new review threads, then verify the rerun checks.
 Merge and release remain deferred.
+
+## Issues #900 and #902: Tangle Lifecycle Ownership
+
+- Root causes: the top-level `EXIT INT TERM` cleanup trap removed a temporary
+  directory but swallowed signals without exiting or reaping providers; Tangle
+  had no active-work cancellation registry; tree-only cleanup could lose a
+  child after its shell leader exited; and the completion watcher treated a
+  living but childless wrapper as active forever.
+- Process ownership: legacy workers enter dedicated process groups, so the
+  recorded worker PID is also its PGID. Cancellation first kills that group
+  atomically, with a portable frozen descendant walk for legacy callers and
+  macOS/minimal environments without `pgrep`.
+- Lifecycle ownership: Tangle registers task identity before spawn, reconciles
+  the PID ledger to close the post-spawn handoff race, marks cancelled outputs
+  and completion records, prunes runtime metadata, restores caller traps, and
+  handles both explicit signals and unexpected `set -e` exits.
+- Stalled progress: `OCTOPUS_TANGLE_IDLE_WORKER_GRACE` defaults to 180 seconds.
+  A living wrapper with no active provider descendants becomes
+  `stalled-worker`; non-TTY progress is emitted only when its count changes.
+- Run isolation: default Tangle IDs now use an atomic reservation instead of
+  `date +%s` plus `$$`, preventing same-second worktree and branch collisions
+  exposed when the old final two-second sleep was removed. Explicit run-ID
+  overrides now reject traversal, and zero-byte reservations older than seven
+  days are pruned once daily without weakening same-day atomic uniqueness.
+- Review hardening: cancellation refuses to proceed without its process
+  helpers, never signals the orchestrator PID/group, snapshots reachable legacy
+  descendants before STOP, uses portable `ps -A`, serializes PID-ledger pruning
+  with spawn appends, stops before pruning when `flock` acquisition fails, and
+  ignores dead targeted PIDs. Status checks are SIGPIPE-safe and the integration
+  assertion reads whole Tangle functions. The spawn PID suite again uses the
+  shared test framework's temp-directory cleanup instead of replacing its trap.
+- Linux CI regression: the whole-function assertions still piped a large shell
+  variable through `grep -q`. On Linux, the early reader exit closed the pipe,
+  `echo` received SIGPIPE, and `set -o pipefail` failed the integration job.
+  Here-strings with non-early-closing `grep -c` preserve the semantic assertions
+  without a producer-side broken pipe; the focused suite passes 19/19.
+- TDD evidence: lifecycle cancellation passes 15/15, missing-marker recovery
+  6/6, run-worktree isolation 14/14, Markdown plan/run-ID resolution 13/13,
+  contextual review wiring 56/56, spawn PID capture 10/10, and the
+  value-proposition integration test passes 19/19.
+- Full-gate evidence: the latest non-interactive `make ci-local` after all review
+  fixes passed 16/16 smoke suites, 268/268 unit suites, 7/7 integration suites,
+  and the CI-only verifications. The earlier 267/268 run exposed only a brittle
+  five-line static heartbeat assertion; production ordering was correct, and
+  the replacement semantic-order assertion passes in the final sweep. A prior
+  PTY run was invalid for the stdin-isolation fixture because its deliberate
+  `cat` read waited on terminal input.
+- Tracking blocker: Beads is still unreadable on schema v49 because its reserved
+  v65 migration has not been applied. No migration was run; GitHub issues are
+  the temporary tracker.
 
 ## Issue #908: Canonical Review Findings
 

@@ -131,14 +131,21 @@ test_quality_gates_validation() {
     echo "Validates that tangle phase includes quality validation"
     echo ""
 
-    # Check tangle function code directly
+    # Check both the public wrapper and its workspace implementation. Extract
+    # complete top-level functions so wrapper growth cannot push the actual
+    # decomposition and validation behavior beyond an arbitrary line window.
     local tangle_code=""
     if [[ -f "$ALL_SRC" ]]; then
-        tangle_code=$(grep -A 80 "tangle_develop()" "$ALL_SRC" 2>/dev/null) || tangle_code=""
+        tangle_code=$(
+            sed -n \
+                -e '/^tangle_develop() {/,/^}/p' \
+                -e '/^_tangle_develop_in_workspace() {/,/^}/p' \
+                "$ALL_SRC" 2>/dev/null
+        ) || tangle_code=""
     fi
 
     ((TESTS_RUN++)) || true
-    if echo "$tangle_code" | grep -qE "validation|validate"; then
+    if grep -cE "validation|validate" >/dev/null <<< "$tangle_code"; then
         echo -e "${GREEN}✓${NC} Tangle includes validation step"
         ((TESTS_PASSED++)) || true
     else
@@ -147,7 +154,7 @@ test_quality_gates_validation() {
     fi
 
     ((TESTS_RUN++)) || true
-    if echo "$tangle_code" | grep -qE "decompose|subtask"; then
+    if grep -cE "decompose|subtask" >/dev/null <<< "$tangle_code"; then
         echo -e "${GREEN}✓${NC} Tangle decomposes tasks for parallel execution"
         ((TESTS_PASSED++)) || true
     else
