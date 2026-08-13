@@ -1606,7 +1606,17 @@ council_dispatch_member_detached() {
     # to fall back to the legacy inline dispatch.
     local member_json="$1" phase="$2" output_path="$3"
     local partial="${output_path}.partial" done_file="${output_path}.done"
-    rm -f "$partial" "$done_file" "$output_path"
+    rm -f "$partial" "$done_file" "${done_file}.tmp" "$output_path"
+
+    # Fixture runs already replace provider dispatch with deterministic in-process
+    # responses. Paying the detached seat's polling/reaping protocol for every
+    # fixture seat duplicates the dedicated transport tests below and makes the
+    # Council unit suite take minutes. Keep production dispatch detached, while
+    # fixture scenarios exercise Council behavior through the existing inline path.
+    if [[ -n "$COUNCIL_FIXTURE" ]]; then
+        council_dispatch_member "$member_json" "$phase" > "$output_path"
+        return $?
+    fi
 
     if [[ "${OCTOPUS_COUNCIL_DETACH:-1}" != "1" ]]; then
         council_dispatch_member "$member_json" "$phase" > "$output_path"

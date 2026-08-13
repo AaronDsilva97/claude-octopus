@@ -142,6 +142,25 @@ else
     test_fail "explicit suite selection expanded to the default matrix: $runner_list"
 fi
 
+test_case "test harness disables production Tangle worktree isolation by default"
+preserved_tangle_setting="$(OCTOPUS_TANGLE_RUN_WORKTREE=true bash -c 'source "$1"; printf "%s" "$OCTOPUS_TANGLE_RUN_WORKTREE"' _ "$PROJECT_ROOT/tests/helpers/test-framework.sh")"
+if [[ "${OCTOPUS_TANGLE_RUN_WORKTREE:-}" == "false" ]] &&
+   [[ "$preserved_tangle_setting" == "true" ]] &&
+   grep -q '^unset OCTOPUS_TANGLE_RUN_WORKTREE' "$PROJECT_ROOT/tests/unit/test-tangle-run-worktree.sh"; then
+    test_pass
+else
+    test_fail "ordinary unit suites can still create production-style Tangle worktrees"
+fi
+
+test_case "test runner reports its slowest suites"
+timing_output="$(bash "$RUN_ALL" --suite=unit/test-suite-reachability.sh 2>&1 || true)"
+if grep -q '^Slowest suites:' <<< "$timing_output" &&
+   grep -Eq '^[[:space:]]+[0-9]+s[[:space:]]+unit/test-suite-reachability\.sh$' <<< "$timing_output"; then
+    test_pass
+else
+    test_fail "runner did not emit actionable per-suite timing: $timing_output"
+fi
+
 test_case "test runner rejects non-suite explicit paths"
 invalid_runner_output="$TEST_TMP_DIR/invalid-runner.out"
 if bash "$RUN_ALL" --list --suite=changed-scope.tsv > "$invalid_runner_output" 2>&1; then

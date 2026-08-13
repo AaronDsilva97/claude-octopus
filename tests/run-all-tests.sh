@@ -38,11 +38,13 @@ FAILED_SUITES=0
 SKIPPED_SUITES=0
 FAIL_FAST=false
 LIST_ONLY=false
+SUITE_TIMINGS=()
 
 # Function to run a test suite
 run_test_suite() {
     local test_file="$1"
     local test_name
+    local suite_start suite_end suite_duration
     # Show relative path from tests/ for clarity
     test_name="${test_file#"$SCRIPT_DIR"/}"
 
@@ -53,6 +55,7 @@ run_test_suite() {
     echo ""
 
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
+    suite_start="$(date +%s)"
 
     # Non-live suites must never launch real provider/auth probes. Besides
     # spending API quota, a CLI blocked on Keychain can stall the entire gate.
@@ -62,6 +65,9 @@ run_test_suite() {
     else
         OCTOPUS_SKIP_PROVIDER_PROBES=true bash "$test_file" || test_rc=$?
     fi
+    suite_end="$(date +%s)"
+    suite_duration=$((suite_end - suite_start))
+    SUITE_TIMINGS+=("${suite_duration}"$'\t'"${test_name}")
 
     if [[ "$test_rc" -eq 0 ]]; then
         PASSED_SUITES=$((PASSED_SUITES + 1))
@@ -111,6 +117,15 @@ print_summary() {
     if [[ $SKIPPED_SUITES -gt 0 ]]; then
         echo -e "Skipped:           ${YELLOW}$SKIPPED_SUITES${NC}"
     fi
+    echo ""
+
+    echo "Slowest suites:"
+    printf '%s\n' "${SUITE_TIMINGS[@]}" |
+        LC_ALL=C sort -t $'\t' -k1,1nr -k2,2 |
+        awk 'NR <= 10' |
+        while IFS=$'\t' read -r duration suite; do
+            printf '  %ss %s\n' "$duration" "$suite"
+        done
     echo ""
 
     if [[ $FAILED_SUITES -eq 0 ]]; then

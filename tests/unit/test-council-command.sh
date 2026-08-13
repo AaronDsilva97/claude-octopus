@@ -8,6 +8,12 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 
 test_suite "Council Command"
 
+CACHED_COUNCIL_QUICK_DRY_RUN_SUMMARY=""
+CACHED_COUNCIL_STANDARD_RUN_DIR=""
+CACHED_COUNCIL_CHAIR_FALLBACK_RUN_DIR=""
+CACHED_COUNCIL_CHAIR_FALLBACK_OUTPUT=""
+CACHED_COUNCIL_ALL_APPROVE_RUN_DIR=""
+
 test_council_command_files_are_registered() {
     test_case "Council command and skill are registered"
 
@@ -65,6 +71,52 @@ load_council_lib() {
     source "$lib"
 }
 
+prepare_cached_quick_dry_run() {
+    [[ -f "$CACHED_COUNCIL_QUICK_DRY_RUN_SUMMARY" ]] && return 0
+    local tmp_dir
+    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-quick-cache.XXXXXX")"
+    council_run --dry-run --goal advice --depth quick --benchmark auto \
+        --output-dir "$tmp_dir" "Should we use Redis?"
+    CACHED_COUNCIL_QUICK_DRY_RUN_SUMMARY="$(find "$tmp_dir" -name summary.json -type f | head -1)"
+    [[ -f "$CACHED_COUNCIL_QUICK_DRY_RUN_SUMMARY" ]]
+}
+
+prepare_cached_standard_fixture_run() {
+    [[ -f "$CACHED_COUNCIL_STANDARD_RUN_DIR/summary.json" ]] && return 0
+    local tmp_dir
+    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-standard-cache.XXXXXX")"
+    OCTOPUS_COUNCIL_FIXTURE=full-success \
+    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
+        council_run --goal advice --depth standard --output-dir "$tmp_dir" "Should we use Redis?"
+    CACHED_COUNCIL_STANDARD_RUN_DIR="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [[ -f "$CACHED_COUNCIL_STANDARD_RUN_DIR/summary.json" ]]
+}
+
+prepare_cached_chair_fallback_run() {
+    [[ -f "$CACHED_COUNCIL_CHAIR_FALLBACK_RUN_DIR/summary.json" ]] && return 0
+    local tmp_dir
+    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-chair-cache.XXXXXX")"
+    CACHED_COUNCIL_CHAIR_FALLBACK_OUTPUT="$TEST_TMP_DIR/council-chair-cache.out"
+    OCTOPUS_COUNCIL_FIXTURE=full-success \
+    OCTOPUS_COUNCIL_FAIL_PERSONAS='strategy-analyst' \
+    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
+        council_run --depth quick --output-dir "$tmp_dir" "Review auth" \
+        >"$CACHED_COUNCIL_CHAIR_FALLBACK_OUTPUT" 2>&1
+    CACHED_COUNCIL_CHAIR_FALLBACK_RUN_DIR="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [[ -f "$CACHED_COUNCIL_CHAIR_FALLBACK_RUN_DIR/summary.json" ]]
+}
+
+prepare_cached_all_approve_run() {
+    [[ -f "$CACHED_COUNCIL_ALL_APPROVE_RUN_DIR/summary.json" ]] && return 0
+    local tmp_dir
+    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-approve-cache.XXXXXX")"
+    OCTOPUS_COUNCIL_FIXTURE=full-success \
+    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='codex:available,agy:available' \
+        council_run --depth standard --output-dir "$tmp_dir" "Review X" >/dev/null 2>&1 || true
+    CACHED_COUNCIL_ALL_APPROVE_RUN_DIR="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    [[ -f "$CACHED_COUNCIL_ALL_APPROVE_RUN_DIR/summary.json" ]]
+}
+
 test_council_defaults_are_depth_aware() {
     test_case "Council defaults are depth aware"
     load_council_lib || return 1
@@ -96,14 +148,9 @@ test_council_rejects_non_usd_budget() {
 test_council_dry_run_writes_summary_json() {
     test_case "Council dry-run writes summary JSON"
     load_council_lib || return 1
+    prepare_cached_quick_dry_run || { test_fail "cached quick dry-run failed"; return 1; }
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council.XXXXXX")"
-
-    council_run --dry-run --goal advice --depth quick --output-dir "$tmp_dir" "Should we use Redis?"
-
-    local summary
-    summary="$(find "$tmp_dir" -name summary.json -type f | head -1)"
+    local summary="$CACHED_COUNCIL_QUICK_DRY_RUN_SUMMARY"
     [[ -n "$summary" ]] || { test_fail "summary.json not written"; return 1; }
 
     if jq -e '.command == "council" and .status == "dry-run" and .implementation.worktree == "auto"' "$summary" >/dev/null; then
@@ -149,14 +196,9 @@ test_council_dry_run_maps_implementation_and_worktree() {
 test_council_dry_run_has_multi_seat_recommendation_and_cost() {
     test_case "Council dry-run has multiple seats and positive cost estimate"
     load_council_lib || return 1
+    prepare_cached_quick_dry_run || { test_fail "cached quick dry-run failed"; return 1; }
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-cost.XXXXXX")"
-
-    council_run --dry-run --depth quick --output-dir "$tmp_dir" "Should we use Redis?"
-
-    local summary
-    summary="$(find "$tmp_dir" -name summary.json -type f | head -1)"
+    local summary="$CACHED_COUNCIL_QUICK_DRY_RUN_SUMMARY"
     [[ -n "$summary" ]] || { test_fail "summary.json not written"; return 1; }
 
     if jq -e '(.council | length) >= 2 and .budget.estimated_cost_usd > 0' "$summary" >/dev/null; then
@@ -592,16 +634,9 @@ test_council_pass_parser_accepts_variants() {
 test_council_fixture_run_writes_phase_artifacts() {
     test_case "Council fixture run writes phase artifacts"
     load_council_lib || return 1
+    prepare_cached_standard_fixture_run || { test_fail "cached standard fixture run failed"; return 1; }
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-full.XXXXXX")"
-
-    OCTOPUS_COUNCIL_FIXTURE=full-success \
-    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
-        council_run --goal advice --depth standard --output-dir "$tmp_dir" "Should we use Redis?"
-
-    local run_dir summary
-    run_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    local run_dir="$CACHED_COUNCIL_STANDARD_RUN_DIR" summary
     summary="$run_dir/summary.json"
 
     [[ -f "$run_dir/config.json" ]] || { test_fail "config.json not written"; return 1; }
@@ -630,16 +665,9 @@ test_council_fixture_run_writes_phase_artifacts() {
 test_council_synthesis_is_chair_generated() {
     test_case "Council synthesis is generated by chair dispatch"
     load_council_lib || return 1
+    prepare_cached_standard_fixture_run || { test_fail "cached standard fixture run failed"; return 1; }
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-synthesis.XXXXXX")"
-
-    OCTOPUS_COUNCIL_FIXTURE=full-success \
-    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
-        council_run --goal advice --depth standard --output-dir "$tmp_dir" "Should we use Redis?"
-
-    local synthesis
-    synthesis="$(find "$tmp_dir" -name synthesis.md -type f | head -1)"
+    local synthesis="$CACHED_COUNCIL_STANDARD_RUN_DIR/synthesis.md"
     [[ -n "$synthesis" ]] || { test_fail "synthesis.md not written"; return 1; }
 
     if grep -q "Fixture response for chair-synthesis" "$synthesis" &&
@@ -943,16 +971,9 @@ test_council_chair_fallback_preserves_quorum() {
     test_case "Council retries failed chair with synthesis-capable fallback"
     load_council_lib || return 1
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-chair-fallback.XXXXXX")"
+    prepare_cached_chair_fallback_run || { test_fail "cached chair fallback run failed"; return 1; }
 
-    OCTOPUS_COUNCIL_FIXTURE=full-success \
-    OCTOPUS_COUNCIL_FAIL_PERSONAS='strategy-analyst' \
-    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
-        council_run --depth quick --output-dir "$tmp_dir" "Review auth"
-
-    local summary
-    summary="$(find "$tmp_dir" -name summary.json -type f | head -1)"
+    local summary="$CACHED_COUNCIL_CHAIR_FALLBACK_RUN_DIR/summary.json"
     [[ -n "$summary" ]] || { test_fail "summary.json not written"; return 1; }
 
     if jq -e '
@@ -986,14 +1007,8 @@ test_council_chair_fallback_warning_prints_to_cli() {
     test_case "Council prints chair fallback warning to CLI"
     load_council_lib || return 1
 
-    local tmp_dir out_file
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-chair-output.XXXXXX")"
-    out_file="$TEST_TMP_DIR/council-chair-output.out"
-
-    OCTOPUS_COUNCIL_FIXTURE=full-success \
-    OCTOPUS_COUNCIL_FAIL_PERSONAS='strategy-analyst' \
-    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='claude:available,codex:available,agy:available' \
-        council_run --depth quick --output-dir "$tmp_dir" "Review auth" >"$out_file" 2>&1
+    prepare_cached_chair_fallback_run || { test_fail "cached chair fallback run failed"; return 1; }
+    local out_file="$CACHED_COUNCIL_CHAIR_FALLBACK_OUTPUT"
 
     if grep -q "Council warning: chair fallback used" "$out_file"; then
         test_pass
@@ -1507,12 +1522,8 @@ test_council_split_double_seat_fails_quorum() {
 test_council_all_approve_meets_quorum() {
     test_case "Council quorum meets when >=2 distinct vendors cleanly APPROVE"
     load_council_lib || return 1
-    local tmp_dir rd
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-approve.XXXXXX")"
-    OCTOPUS_COUNCIL_FIXTURE=full-success \
-    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='codex:available,agy:available' \
-        council_run --depth standard --output-dir "$tmp_dir" "Review X" >/dev/null 2>&1 || true
-    rd="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    prepare_cached_all_approve_run || { test_fail "cached all-approve run failed"; return 1; }
+    local rd="$CACHED_COUNCIL_ALL_APPROVE_RUN_DIR"
     if jq -e '.quorum.met == true and .quorum.distinct_approving_providers >= 2' "$rd/summary.json" >/dev/null; then
         test_pass
     else
@@ -1604,6 +1615,52 @@ test_council_detach_escape_hatch_uses_inline() {
         test_pass
     else
         test_fail "escape hatch wrong: rc=$rc content=[$(tr '\n' '|' < "$d/x.md" 2>/dev/null)]"
+        return 1
+    fi
+}
+
+test_council_fixture_dispatch_uses_inline_transport() {
+    test_case "Council fixtures bypass detached transport already covered separately"
+    load_council_lib || return 1
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/fixture-inline.XXXXXX")"
+    local member='{"provider":"codex","persona":"code-reviewer","seat":"member"}'
+    local dispatch_context="parent"
+
+    COUNCIL_FIXTURE="full-success"
+    : > "$d/x.md.partial"
+    : > "$d/x.md.done"
+    : > "$d/x.md.done.tmp"
+    council_dispatch_member() {
+        dispatch_context="inline"
+        printf 'fixture response\nVERDICT: APPROVE\n'
+        return 0
+    }
+
+    local rc=0
+    council_dispatch_member_detached "$member" "independent-advice" "$d/x.md" || rc=$?
+    local success_ok="false"
+    if [[ $rc -eq 0 ]] && [[ "$dispatch_context" == "inline" ]] &&
+       grep -q 'VERDICT: APPROVE' "$d/x.md" &&
+       [[ ! -e "$d/x.md.partial" && ! -e "$d/x.md.done" && ! -e "$d/x.md.done.tmp" ]]; then
+        success_ok="true"
+    fi
+
+    dispatch_context="parent"
+    council_dispatch_member() {
+        dispatch_context="inline"
+        printf 'fixture failure body\n'
+        return 3
+    }
+    rc=0
+    council_dispatch_member_detached "$member" "independent-advice" "$d/fail.md" || rc=$?
+
+    if [[ "$success_ok" == "true" ]] && [[ $rc -eq 3 ]] &&
+       [[ "$dispatch_context" == "inline" ]] &&
+       grep -q 'fixture failure body' "$d/fail.md" &&
+       [[ ! -e "$d/fail.md.partial" && ! -e "$d/fail.md.done" && ! -e "$d/fail.md.done.tmp" ]]; then
+        test_pass
+    else
+        test_fail "fixture dispatch still paid detached transport overhead: success=$success_ok rc=$rc context=$dispatch_context"
         return 1
     fi
 }
@@ -1897,12 +1954,8 @@ test_council_response_has_verdict_salvage() {
 test_council_seats_array_makes_quorum_inspectable() {
     test_case "summary.json seats[] records per-seat state and quorum is recomputable from it"
     load_council_lib || return 1
-    local tmp_dir rd s
-    tmp_dir="$(mktemp -d "$TEST_TMP_DIR/council-seats.XXXXXX")"
-    OCTOPUS_COUNCIL_FIXTURE=full-success \
-    OCTOPUS_COUNCIL_PROVIDER_FIXTURE='codex:available,agy:available' \
-        council_run --depth standard --output-dir "$tmp_dir" "Review X" >/dev/null 2>&1 || true
-    rd="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+    prepare_cached_all_approve_run || { test_fail "cached all-approve run failed"; return 1; }
+    local rd="$CACHED_COUNCIL_ALL_APPROVE_RUN_DIR" s
     s="$rd/summary.json"
     # Every seat carries the FULL documented contract (incl. provider_org, model,
     # verdict), the fields are well-typed, the counted_as_approver invariant holds,
@@ -1969,6 +2022,7 @@ test_council_split_double_seat_fails_quorum
 test_council_all_approve_meets_quorum
 test_council_detached_dispatch_atomic_and_propagates_rc
 test_council_detach_escape_hatch_uses_inline
+test_council_fixture_dispatch_uses_inline_transport
 test_council_detached_seat_survives_interrupt
 test_council_detached_seat_timeout_is_cancelled
 test_council_seat_timeout_precedence

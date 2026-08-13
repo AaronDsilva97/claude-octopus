@@ -22,6 +22,14 @@ TESTS_SKIPPED=0
 TEST_START_TIME=0
 TEST_SUITE_START_TIME=0
 
+# Production Tangle writes are isolated in persistent Git worktrees. Unit tests
+# default to in-place execution inside their disposable TEST_TMP_DIR instead, so
+# ordinary behavior suites cannot leave registrations or octopus/run/* refs in the
+# developer's real repository. The dedicated run-worktree suite explicitly unsets
+# this variable to verify the production default.
+OCTOPUS_TANGLE_RUN_WORKTREE="${OCTOPUS_TANGLE_RUN_WORKTREE:-false}"
+export OCTOPUS_TANGLE_RUN_WORKTREE
+
 # Arrays for tracking
 FAILED_TESTS=()
 SKIPPED_TESTS=()
