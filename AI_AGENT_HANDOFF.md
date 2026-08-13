@@ -9,14 +9,16 @@ their slowest suites, Council fixtures reuse identical artifacts and skip only
 the separately tested detached transport, and ordinary unit tests cannot leave
 production-style Tangle worktrees in the real repository.
 Implementation commits `63fa6ef8` and `9d9e6bed` are pushed to both remotes and
-[PR #913](https://github.com/nyldn/claude-octopus/pull/913) is open. Release is
-deferred.
+[PR #913](https://github.com/nyldn/claude-octopus/pull/913) is open, mergeable,
+and approved by CodeRabbit. Release is deferred.
 Branch: `fix/910-ci-changed`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [issue #910](https://github.com/nyldn/claude-octopus/issues/910)
 PR: [#913](https://github.com/nyldn/claude-octopus/pull/913)
-Next action: review the new PR #913 checks and feedback for commit `9d9e6bed`.
-Merge and release are deferred.
+Next action: merge PR #913 when desired. The complete GitHub test matrix is
+green; the separate multi-provider review workflow failed only because Claude
+and Copilot exhausted their weekly and monthly quotas. Merge and release are
+deferred.
 
 ## Issue #910: Fail-Closed Changed-Scope Local Gate
 
@@ -101,6 +103,11 @@ Merge and release are deferred.
   refs before and after the complete gate; the prior full run had left 94 stale
   worktree registrations. Source commit `9d9e6bed` is pushed to origin and
   upstream.
+- Remote verification: GitHub Test Suite run `31738318645` passed portability,
+  both smoke platforms, the symlinked-path run, both full unit platforms, and
+  full integration. CodeRabbit approved head `4136fa87` without inline findings.
+  The separate `pr-review` job is red because Claude hit its weekly limit and
+  the Copilot fallback hit its monthly quota; it reported no code finding.
 
 ## Issue #898: Explicit Activation and Hook Latency
 
