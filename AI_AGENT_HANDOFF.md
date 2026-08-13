@@ -1,16 +1,117 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-13
-Status: Issue #898 is implemented and passes the complete local gate on branch
-`fix/898-explicit-activation`; PR, merge, and release are the remaining steps.
-Octopus is now dormant until explicit invocation. Native command/skill gates,
-session-affine workflow hooks, passive startup notices, host-filtered tool
-hooks, and opt-in automation replace the previous install-wide engagement.
-The stable plugin entrypoint also advances to the host-loaded version so an old
-but still-present cache cannot strand explicit commands on stale hooks.
-Branch: `fix/898-explicit-activation`
-Current release: [v9.63.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.63.0)
-Tracking: [issue #898](https://github.com/nyldn/claude-octopus/issues/898)
+Status: Issue #910 and its full-gate optimization follow-up are implemented on
+`fix/910-ci-changed`. The new `make ci-changed` gate selects audited focused
+suites for mapped surfaces and fails closed to the complete local matrix for
+shared, generated, manifest, or unknown changes. Full-matrix runs now report
+their slowest suites, Council fixtures reuse identical artifacts and skip only
+the separately tested detached transport, and ordinary unit tests cannot leave
+production-style Tangle worktrees in the real repository.
+Implementation commits `63fa6ef8` and `9d9e6bed` are pushed to both remotes and
+[PR #913](https://github.com/nyldn/claude-octopus/pull/913) is open. The code
+commit has prior full-matrix and CodeRabbit evidence, but merge remains deferred
+until required checks and review complete for the eventual branch head. Release
+is deferred.
+Branch: `fix/910-ci-changed`
+Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
+Tracking: [issue #910](https://github.com/nyldn/claude-octopus/issues/910)
+PR: [#913](https://github.com/nyldn/claude-octopus/pull/913)
+Next action: wait for matching-head PR #913 checks and review, then merge only
+if they permit it. The separate multi-provider review workflow is currently
+limited because Claude and Copilot exhausted their weekly and monthly quotas.
+Merge and release are deferred.
+
+## Issue #910: Fail-Closed Changed-Scope Local Gate
+
+- Root cause: repository instructions required all unit and integration suites
+  before every code push. The complete unit sweep reached 267-268 suites, and
+  the unrelated Council suite alone took 188-218 seconds during recent focused
+  fixes.
+- Selector contract: `tests/changed-scope.tsv` maps known changed-path globs to
+  required suite globs. The selector includes committed branch changes plus
+  staged, unstaged, and untracked paths, prints the changed files, matching
+  rules, and selected suites, and accepts deterministic explicit paths for
+  regression testing.
+- Fail-closed boundary: shared orchestration, workflow, spawn, dispatch,
+  generators, plugin manifests, CI, the Makefile, the test runner, the selector
+  and manifest themselves, and every unmapped path select `make ci-local`.
+  Missing comparison bases, missing mapped suites, and malformed empty mapping
+  policies also select the full matrix. Known user-owned harness artifacts such
+  as `.beads.gate.lock` and `.octo-continue.md` are explicitly ignored.
+- Focused boundary: every focused run still executes `make sync-check`, all 16
+  smoke suites (including syntax and packaging), and the suite-reachability
+  guard. Explicit test-runner suite paths are confined to existing
+  `test-*.sh` or `validate-*.sh` files under `tests/`.
+- CI and release: GitHub Actions continues to run the authoritative complete
+  unit and integration jobs. `make ci-local` remains mandatory before merge and
+  release; agent instructions now distinguish iterative, ordinary-push, and
+  final gates.
+- TDD evidence: the first regression passed only 1/10 cases before the command,
+  manifest, and explicit-suite support existed. It now passes 17/17, including
+  deterministic review/model plans and full-matrix fallback for shared,
+  generator, unknown, selector, manifest, and missing-base changes. Automatic
+  base discovery never narrows to `HEAD~1`, which could omit earlier commits.
+- Runtime evidence: a model-resolver-only plan selected seven model/provider
+  suites plus suite reachability, excluded Council, and passed all 16 smoke
+  suites and all 8 selected suites in roughly one minute. The current #910
+  branch selects the full matrix because it changes the selector, manifest,
+  Makefile, and test runner.
+- Final-gate evidence: `make ci-local` passes 16/16 smoke suites, 268/268 unit
+  suites, 7/7 integration suites, and the CI-only verifications.
+- Review evidence: the implementation matches the requested proportional
+  edit/push/final contract. Code-quality review found one unsafe automatic
+  `HEAD~1` comparison fallback that could omit earlier branch commits; it was
+  removed, covered by the 17/17 selector regression suite, and no blocking
+  review finding remains.
+- Tracking blocker: Beads remains unreadable on schema v49 because its reserved
+  v65 migration has not been applied. No migration was run; GitHub issue #910
+  is the temporary tracker.
+
+### Full-gate optimization follow-up
+
+- Root cause measurement: a fresh standalone Council baseline passed but took
+  220.65 seconds. Repeated fixture scenarios each paid detached-seat polling
+  and several test cases rebuilt byte-for-byte-equivalent dry-run, standard,
+  chair-fallback, or all-approve artifacts for separate assertions.
+- Optimization boundary: production Council seats remain detached. Internal
+  fixture dispatch uses the existing inline path, while the dedicated atomic
+  rename, signal survival, timeout, descendant cancellation, exit propagation,
+  and escape-hatch tests still exercise the real detached transport. Identical
+  fixture artifacts are cached only within the Council suite; every assertion
+  and unique failure scenario remains.
+- Test isolation: `tests/helpers/test-framework.sh` now defaults
+  `OCTOPUS_TANGLE_RUN_WORKTREE=false` while preserving an explicit caller
+  setting. `test-tangle-run-worktree.sh` explicitly unsets the flag and still
+  proves production-default isolation. Eleven Tangle suites passed without
+  changing repository worktree or `octopus/run/*` ref counts.
+- Profiling: `tests/run-all-tests.sh` records wall time around every suite and
+  prints a deterministic top-ten `Slowest suites` table. The fresh full unit
+  run identified Council (166s), knowledge routing (38s), lifecycle events
+  (24s), Octopus events (23s), and provider auth validity (22s) as the leading
+  remaining costs.
+- Performance evidence: the standalone Council suite fell from 220.65s to
+  150.35s, a 31.9% reduction, while passing 73/74 cases with the same one known
+  macOS PTY skip. No suite or assertion was deleted.
+- TDD/review evidence: the new harness/timing regressions failed 2 cases before
+  implementation and pass 19/19 after it. The fixture parent-context
+  reproduction failed before the inline path and passed afterward. An AGY
+  adversarial test review led to coverage for inherited `true`, failing fixture
+  dispatch, and stale sentinel cleanup. Spec review rejected sharing the
+  standard-depth benchmark fixture with a quick-depth run before delivery.
+- Final verification: fresh `make ci-local` completed in 695.40s and passed
+  smoke 16/16, unit 268/268, integration 7/7, and the CI-only verifications.
+  Repository state remained exactly 15 worktrees and 1,251 `octopus/run/*`
+  refs before and after the complete gate; the prior full run had left 94 stale
+  worktree registrations. Source commit `9d9e6bed` is pushed to origin and
+  upstream.
+- Commit-bound remote verification: GitHub Test Suite run `31738318645` passed
+  portability, both smoke platforms, the symlinked-path run, both full unit
+  platforms, and full integration for head `4136fa87`; CodeRabbit approved that
+  head without inline findings. Later handoff-only commits require their own
+  matching-head checks and review before merge. The separate `pr-review` job is
+  red because Claude hit its weekly limit and the Copilot fallback hit its
+  monthly quota; it reported no code finding.
 
 ## Issue #898: Explicit Activation and Hook Latency
 

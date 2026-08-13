@@ -35,7 +35,10 @@ the blockage and work in `AI_AGENT_HANDOFF.md`, then flag it to the maintainer.
   commit rather than the branch head.
 - Scripts remain executable. Recheck for mode changes after local tests because
   test fixtures can change modes as a side effect.
-- Run targeted tests while developing and `make ci-local` before pushing code.
+- Run targeted tests while developing and `make ci-changed` before an ordinary
+  branch push. Its checked-in manifest always runs sync, smoke, packaging, and
+  reachability checks and fails closed to `make ci-local` for shared or unmapped
+  changes. Run the complete `make ci-local` matrix before merge and release.
   At minimum, documentation-only changes run `make sync-check` and
   `git diff --check`.
 - Preserve untracked harness-local files such as `.octo-continue.md` unless the

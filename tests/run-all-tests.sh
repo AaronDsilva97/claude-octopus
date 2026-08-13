@@ -17,6 +17,7 @@
 # Options:
 #   --fail-fast     Stop on first suite failure
 #   --list          List discovered tests without running them
+#   --suite=PATH    Run one explicit suite path relative to tests/ (repeatable)
 
 set -euo pipefail
 
@@ -37,11 +38,13 @@ FAILED_SUITES=0
 SKIPPED_SUITES=0
 FAIL_FAST=false
 LIST_ONLY=false
+SUITE_TIMINGS=()
 
 # Function to run a test suite
 run_test_suite() {
     local test_file="$1"
     local test_name
+    local suite_start suite_end suite_duration
     # Show relative path from tests/ for clarity
     test_name="${test_file#"$SCRIPT_DIR"/}"
 
@@ -52,6 +55,7 @@ run_test_suite() {
     echo ""
 
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
+    suite_start="$(date +%s)"
 
     # Non-live suites must never launch real provider/auth probes. Besides
     # spending API quota, a CLI blocked on Keychain can stall the entire gate.
@@ -61,6 +65,9 @@ run_test_suite() {
     else
         OCTOPUS_SKIP_PROVIDER_PROBES=true bash "$test_file" || test_rc=$?
     fi
+    suite_end="$(date +%s)"
+    suite_duration=$((suite_end - suite_start))
+    SUITE_TIMINGS+=("${suite_duration}"$'\t'"${test_name}")
 
     if [[ "$test_rc" -eq 0 ]]; then
         PASSED_SUITES=$((PASSED_SUITES + 1))
@@ -112,6 +119,15 @@ print_summary() {
     fi
     echo ""
 
+    echo "Slowest suites:"
+    printf '%s\n' "${SUITE_TIMINGS[@]}" |
+        LC_ALL=C sort -t $'\t' -k1,1nr -k2,2 |
+        awk 'NR <= 10' |
+        while IFS=$'\t' read -r duration suite; do
+            printf '  %ss %s\n' "$duration" "$suite"
+        done
+    echo ""
+
     if [[ $FAILED_SUITES -eq 0 ]]; then
         echo -e "${GREEN}  ALL TESTS PASSED  ${NC}"
     else
@@ -122,6 +138,7 @@ print_summary() {
 
 # Parse flags
 declare -a CATEGORIES=()
+declare -a EXPLICIT_SUITE_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --smoke)       CATEGORIES+=("smoke") ;;
@@ -138,19 +155,27 @@ for arg in "$@"; do
         --everything)  CATEGORIES=("smoke" "unit" "integration" "root" "live") ;;
         --fail-fast)   FAIL_FAST=true ;;
         --list)        LIST_ONLY=true ;;
+        --suite=*)
+            suite_arg="${arg#--suite=}"
+            if [[ -z "$suite_arg" ]]; then
+                echo -e "${RED}--suite requires a path relative to tests/${NC}" >&2
+                exit 2
+            fi
+            EXPLICIT_SUITE_ARGS+=("$suite_arg")
+            ;;
         *)
             echo -e "${YELLOW}Unknown flag '$arg', ignoring${NC}" ;;
     esac
 done
 
-# Default to --all if no categories specified
-if [[ ${#CATEGORIES[@]} -eq 0 ]]; then
+# Default to --all only when no category or explicit suite was requested.
+if [[ ${#CATEGORIES[@]} -eq 0 && ${#EXPLICIT_SUITE_ARGS[@]} -eq 0 ]]; then
     CATEGORIES=("smoke" "unit" "integration" "root")
 fi
 
 # Deduplicate categories while preserving order
 declare -a UNIQUE_CATS=()
-for cat in "${CATEGORIES[@]}"; do
+for cat in ${CATEGORIES[@]+"${CATEGORIES[@]}"}; do
     local_dup=false
     for seen in "${UNIQUE_CATS[@]+"${UNIQUE_CATS[@]}"}"; do
         if [[ "$seen" == "$cat" ]]; then
@@ -162,11 +187,14 @@ for cat in "${CATEGORIES[@]}"; do
         UNIQUE_CATS+=("$cat")
     fi
 done
-CATEGORIES=("${UNIQUE_CATS[@]}")
+CATEGORIES=()
+for seen in ${UNIQUE_CATS[@]+"${UNIQUE_CATS[@]}"}; do
+    CATEGORIES+=("$seen")
+done
 
 # Build test list from categories via auto-discovery
 declare -a TEST_SUITES=()
-for cat in "${CATEGORIES[@]}"; do
+for cat in ${CATEGORIES[@]+"${CATEGORIES[@]}"}; do
     case "$cat" in
         smoke)
             while IFS= read -r f; do
@@ -196,8 +224,54 @@ for cat in "${CATEGORIES[@]}"; do
     esac
 done
 
-if [[ ${#TEST_SUITES[@]} -eq 0 ]]; then
-    echo -e "${YELLOW}No test files discovered for categories: ${CATEGORIES[*]}${NC}"
+# Add explicitly requested suites after category discovery. Paths are confined
+# to tests/ and must name existing files; invalid input fails instead of
+# silently expanding to the default matrix.
+for suite_arg in ${EXPLICIT_SUITE_ARGS[@]+"${EXPLICIT_SUITE_ARGS[@]}"}; do
+    case "$suite_arg" in
+        /*|../*|*/../*|*/..)
+            echo -e "${RED}Invalid --suite path outside tests/: $suite_arg${NC}" >&2
+            exit 2
+            ;;
+        tests/*) suite_path="$SCRIPT_DIR/${suite_arg#tests/}" ;;
+        *)       suite_path="$SCRIPT_DIR/$suite_arg" ;;
+    esac
+    suite_name="${suite_path##*/}"
+    case "$suite_name" in
+        test-*.sh|validate-*.sh) ;;
+        *)
+            echo -e "${RED}Explicit suite must be test-*.sh or validate-*.sh: $suite_arg${NC}" >&2
+            exit 2
+            ;;
+    esac
+    if [[ ! -f "$suite_path" ]]; then
+        echo -e "${RED}Explicit suite not found: $suite_arg${NC}" >&2
+        exit 2
+    fi
+    TEST_SUITES+=("$suite_path")
+done
+
+# Deduplicate explicit/category overlap while preserving deterministic order.
+declare -a UNIQUE_SUITES=()
+for suite in "${TEST_SUITES[@]}"; do
+    suite_seen=false
+    for seen in ${UNIQUE_SUITES[@]+"${UNIQUE_SUITES[@]}"}; do
+        if [[ "$seen" == "$suite" ]]; then
+            suite_seen=true
+            break
+        fi
+    done
+    if ! $suite_seen; then
+        UNIQUE_SUITES+=("$suite")
+    fi
+done
+TEST_SUITES=()
+for suite in ${UNIQUE_SUITES[@]+"${UNIQUE_SUITES[@]}"}; do
+    TEST_SUITES+=("$suite")
+done
+
+if [[ -z "${TEST_SUITES[*]-}" ]]; then
+    echo -e "${YELLOW}No test files discovered for categories: ${CATEGORIES[*]-}${NC}"
     exit 0
 fi
 
@@ -206,7 +280,11 @@ echo -e "${CYAN}╔════════════════════�
 echo -e "${CYAN}║          Claude Octopus Test Suite                       ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${BLUE}Categories:${NC} ${CATEGORIES[*]}"
+if [[ -n "${CATEGORIES[*]-}" ]]; then
+    echo -e "${BLUE}Categories:${NC} ${CATEGORIES[*]}"
+else
+    echo -e "${BLUE}Categories:${NC} explicit suites"
+fi
 echo -e "${BLUE}Discovered:${NC} ${#TEST_SUITES[@]} test suites"
 if $FAIL_FAST; then
     echo -e "${BLUE}Fail-fast:${NC} enabled"

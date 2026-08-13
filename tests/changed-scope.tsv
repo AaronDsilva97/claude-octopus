@@ -1,0 +1,46 @@
+# Changed-path glob<TAB>required suite globs or @full/@self/@ignore.
+#
+# A changed path may match more than one row; all selected suites are unioned.
+# Any path with no matching row fails closed to the complete ci-local matrix.
+
+scripts/lib/review.sh	tests/unit/test-review-*.sh tests/unit/test-pr-review-*.sh tests/integration/test-plugin-expert-review.sh
+scripts/lib/model-resolver.sh	tests/unit/test-resolve-model.sh tests/unit/test-agy-provider.sh tests/unit/test-current-provider-model-defaults.sh tests/unit/test-model-config-role-routing.sh tests/unit/test-model-metadata-parity.sh tests/unit/test-bare-auth-probe-timeout.sh tests/unit/test-provider-auth-validity.sh
+scripts/lib/preflight.sh	tests/unit/test-agy-provider.sh tests/unit/test-provider-availability-parity.sh tests/unit/test-provider-banner-auth.sh tests/unit/test-provider-registry*.sh tests/test-version-check.sh
+
+AI_AGENT_HANDOFF.md	tests/unit/test-handoff.sh
+RTK.md	tests/unit/test-rtk-detection.sh tests/unit/test-handoff.sh
+AGENTS.md	tests/unit/test-v8.2.0-agent-fields.sh tests/integration/test-native-first-docs.sh
+CLAUDE.md	tests/unit/test-v8.2.0-agent-fields.sh tests/integration/test-native-first-docs.sh
+README.md	tests/unit/test-readme-release-sync.sh tests/integration/test-readme-compliance.sh
+PRODUCT.md	tests/unit/test-readme-release-sync.sh tests/integration/test-readme-compliance.sh
+docs/*	tests/integration/test-native-first-docs.sh tests/integration/test-readme-compliance.sh
+CHANGELOG.md	tests/unit/test-readme-release-sync.sh
+.beads.gate.lock	@ignore
+.octo-continue.md	@ignore
+
+tests/unit/test-*.sh	@self
+tests/integration/test-*.sh	@self
+tests/smoke/test-*.sh	@self
+tests/test-*.sh	@self
+tests/validate-*.sh	@self
+
+scripts/orchestrate.sh	@full
+scripts/lib/workflows.sh	@full
+scripts/lib/spawn.sh	@full
+scripts/lib/agents.sh	@full
+scripts/lib/dispatch.sh	@full
+scripts/build-*	@full
+scripts/sync-*	@full
+scripts/gen-*	@full
+scripts/validate-*	@full
+scripts/ci-changed.sh	@full
+tests/changed-scope.tsv	@full
+tests/run-all*.sh	@full
+Makefile	@full
+.github/workflows/*	@full
+.claude-plugin/*	@full
+.codex-plugin/*	@full
+.cursor-plugin/*	@full
+.factory-plugin/*	@full
+openclaw/*	@full
+config/*	@full

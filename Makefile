@@ -1,4 +1,4 @@
-.PHONY: test test-smoke test-unit test-integration test-live test-root test-coverage test-all test-plugin-name validate-plugin-assembly clean-tests help sync sync-check ci-local
+.PHONY: test test-smoke test-unit test-integration test-live test-root test-coverage test-all test-plugin-name validate-plugin-assembly clean-tests help sync sync-check ci-changed ci-local
 
 # Default: smoke + unit (fast feedback)
 test: test-smoke test-unit
@@ -22,6 +22,11 @@ sync-check:
 # Local green here predicts remote green; targeted suites alone do not.
 ci-local: sync-check test-smoke test-unit test-integration
 	@echo "ci-local complete: matches required checks (Smoke/Unit/Integration) + CI-only verifications"
+
+# Proportional pre-push gate. The selector always runs sync/smoke coverage and
+# fails closed to ci-local for shared, generated, manifest, or unmapped changes.
+ci-changed:
+	@./scripts/ci-changed.sh
 
 # Validate plugin name (critical - prevents command prefix breakage)
 test-plugin-name:
@@ -88,6 +93,8 @@ help:
 	@echo "  make test-smoke        - Run smoke tests (<30s)"
 	@echo "  make test-unit         - Run unit tests (1-2min)"
 	@echo "  make test-integration  - Run integration tests (5-10min)"
+	@echo "  make ci-changed        - Run fail-closed tests selected from changed files"
+	@echo "  make ci-local          - Run the complete pre-merge/release matrix"
 	@echo "  make          - Run E2E tests (15-30min)"
 	@echo "  make test-live         - Run live tests (real Claude sessions, real API cost)"
 	@echo "  make test-root         - Run tests/ root suites (not in CI, see #741)"
