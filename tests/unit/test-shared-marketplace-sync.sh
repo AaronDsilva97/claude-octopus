@@ -307,6 +307,8 @@ test_release_promotes_unreleased_changelog_notes() {
 
 - Make council runner-backed by default.
 
+      preserve this indented example
+
 ## [9.41.2] - 2026-05-28
 
 ### Fixed
@@ -324,6 +326,7 @@ MD
     if ! grep -q "Add Opus 4.8 routing" <<<"$unreleased_block" &&
        grep -q "Add Opus 4.8 routing" <<<"$version_block" &&
        grep -q "Make council runner-backed" <<<"$version_block" &&
+       grep -q '^      preserve this indented example$' "$changelog" &&
        python3 -c 'from pathlib import Path; import sys; text = Path(sys.argv[1]).read_text(); raise SystemExit(0 if "## [9.42.0] - 2026-06-02\n\n### Added" in text and "## [9.42.0] - 2026-06-02\n\n\n" not in text else 1)' "$changelog" &&
        grep -q "Previous patch release" "$changelog"; then
         test_pass
