@@ -25,6 +25,9 @@ Each skill must include YAML frontmatter with:
   file name.
 - `description`: a concise trigger/use statement. Prefer one direct sentence
   over a broad capability list.
+- `disable-model-invocation: true`: Octopus is an explicit escalation surface;
+  installed skills must not enter model context or self-activate on an ordinary
+  request.
 
 Skill bodies should use this shape when practical:
 
@@ -66,10 +69,16 @@ Agent configuration must keep referenced files resolvable from the plugin root.
 If `agents/config.yaml` references `file: personas/foo.md`, the validator must
 be able to prove that file exists.
 
+Claude Code has no manual-only frontmatter field for subagents: it delegates
+from their descriptions. Plugin subagent descriptions must state that they are
+available only after the user explicitly starts an Octopus workflow. Ordinary
+requests stay on the host's native path.
+
 ## Command Assembly Contract
 
-Commands are explicit entrypoints. They should be thin, predictable, and easy to
-scan. A command can gather arguments, choose a mode, and invoke a skill or
+Commands are explicit entrypoints and must set
+`disable-model-invocation: true`. They should be thin, predictable, and easy to
+scan. A command can gather arguments, choose a mode, and load a skill source or
 orchestration script. It should not silently fork into a separate product.
 
 Every command markdown file in `.cursor-plugin/commands/*.md` or `commands/*.md` must
@@ -80,6 +89,28 @@ include YAML frontmatter with:
 
 Legacy `commands/*.md` files should also keep their `command:` field
 because the existing tests and compatibility surface rely on it.
+
+### Manual composition contract
+
+Because Octopus skills are model-invocation disabled, an explicit command may
+compose a skill by reading its complete source from
+`${HOME}/.claude-octopus/plugin/.claude/skills/<name>/SKILL.md`. The command must
+then treat that body as the active instruction source in the same conversation,
+follow its ordered workflow and safety checkpoints, and pass command arguments
+as textual workflow input. It must not call the Skill tool recursively or treat
+the markdown as a shell script.
+
+Use `${HOME}/.claude-octopus/plugin` in model-facing command instructions. That
+stable symlink is repaired at SessionStart and remains available to model tool
+calls. The repair target is the plugin root loaded by the host, so direct source
+loading does not introduce a second plugin trust boundary. Reserve
+`CLAUDE_PLUGIN_ROOT` for hooks and runtime scripts, where Claude Code supplies
+it. This distinction is intentional rather than an interchangeable path
+convention.
+
+Routers may load only literal command names from a closed allowlist. Never use
+free-form prompt text as a path segment; reject path separators and traversal
+tokens before joining a command name to the stable plugin root.
 
 ## Connector Assembly Contract
 

@@ -1,5 +1,6 @@
 ---
 command: auto
+disable-model-invocation: true
 description: Smart router - Single entry point with natural language intent detection
 version: 3.0.0
 category: workflow
@@ -57,7 +58,6 @@ Match the query against keywords below. Check categories **in priority order** �
 | Brainstorm | brainstorm, ideate, ideas, creative, thought experiment, what if | `octo:brainstorm` |
 | Deck | presentation, slides, deck, pitch deck, slide deck | `octo:deck` |
 | Docs | document, documentation, README, API docs, write docs, docstring | `octo:docs` |
-| Agent topology | too many agents, worth the overhead, coordination cost, agents keep agreeing, collapse agents, before adding an agent | `skill-agent-topology` |
 
 #### Priority 2 — Core Workflows
 
@@ -106,6 +106,14 @@ No intent keywords matched
 
 ### STEP 5: Route Based on Confidence
 
+Before loading any route, validate it against this closed allowlist: `embrace`,
+`multi`, `parallel`, `spec`, `security`, `tdd`, `debug`, `design-ui-ux`, `prd`,
+`brainstorm`, `deck`, `docs`, `discover`, `review`, `debate`, `develop`, `plan`, `quick`.
+The token is control data, never user input: do not derive it from the query or
+accept a user-supplied path. Reject `..`, `/`, `\\`, or non-allowlisted values;
+then load exactly `${HOME}/.claude-octopus/plugin/commands/<validated-token>.md`.
+The full query is passed only as workflow arguments.
+
 **STEP 5a — HIGH confidence (auto-route):**
 
 Display:
@@ -113,9 +121,14 @@ Display:
 Routing to [Workflow Name] (/octo:[command])
 ```
 
-Then display the visual indicator banner (STEP 6) and invoke:
+Then display the visual indicator banner (STEP 6), read the entire validated
+command file, and treat its body as the active instructions in this same
+conversation: follow its workflow in order and supply the full query as its
+arguments. Do not use the Skill tool; Octopus components are hidden from model
+invocation by design.
 ```
-Skill(skill: "octo:[command]", args: "<full user query>")
+Read: ${HOME}/.claude-octopus/plugin/commands/<validated-token>.md
+Arguments: <full user query>
 ```
 
 **STEP 5b — MEDIUM confidence (confirm first):**
@@ -129,7 +142,7 @@ I detected [intent]. Route to:
 Which would you prefer, or rephrase your request?
 ```
 
-Wait for user confirmation before invoking the Skill tool.
+Wait for user confirmation before loading the selected command file.
 
 **STEP 5c — LOW confidence (show complete menu):**
 
@@ -250,7 +263,7 @@ This allows the router to learn user preferences over time.
 - Intent detected via priority-ordered keyword matching
 - Confidence determined via decision tree (not percentage formula)
 - User confirmation obtained (if MEDIUM confidence)
-- Target workflow executed via Skill tool
+- Target workflow executed from its explicit command file
 - Visual indicators displayed (for multi-AI workflows)
 
 ### Prohibited Actions
@@ -259,6 +272,6 @@ This allows the router to learn user preferences over time.
 - Routing without checking keyword priority order
 - Routing to non-existent skills
 - Skipping visual indicators for multi-AI workflows
-- Simulating workflow execution (MUST use Skill tool)
+- Simulating workflow execution instead of following the selected command file
 - Using percentage-based confidence scoring (use the decision tree above)
-- Passing queries to Skill tool without the full original text
+- Dropping any of the full original query when handing off to the command
