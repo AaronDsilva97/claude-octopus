@@ -103,6 +103,25 @@ claude --add-dir=config/workflows          # Double Diamond
 
 ---
 
+## Local CI Gates
+
+Use the smallest gate that matches the delivery stage:
+
+| Stage | Command | Contract |
+|-------|---------|----------|
+| Edit loop | affected test files | Fast feedback while the change is still moving |
+| Ordinary branch push | `make ci-changed` | Always runs sync and all smoke checks, then audited suites from `tests/changed-scope.tsv` |
+| Merge or release | `make ci-local` | Complete smoke, unit, integration, and CI-only matrix |
+
+Inspect a selection without executing it with `scripts/ci-changed.sh --list`.
+The selector fails closed to `make ci-local` for shared orchestration,
+generators, manifests, unknown paths, missing bases, or stale mappings. When a
+new source surface has a proven focused regression set, add its path and suites
+to `tests/changed-scope.tsv`; otherwise leave it unmapped so the full matrix
+remains mandatory.
+
+---
+
 ## E2E Testing Infrastructure
 
 Automated smoke testing runs on a remote VPS, checking for new releases every 2 hours.
