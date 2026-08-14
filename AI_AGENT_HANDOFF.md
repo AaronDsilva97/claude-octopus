@@ -2,12 +2,44 @@
 
 Last updated: 2026-08-14
 Status: all pull requests open at session start are merged; GitHub reports an
-empty open-PR queue. v9.64.0 is published to production from `upstream/main`.
+empty open-PR queue. v9.64.0 is published to production from `upstream/main`,
+and the shared `nyldn/plugins` marketplace now serves v9.64.0.
 Branch: `main`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [PR #877](https://github.com/nyldn/claude-octopus/pull/877)
 Next action: paused at the user's request; do not start new work until the user
 provides the next task.
+
+## Release Currency Audit (post-v9.64.0)
+
+- Open work: `gh pr list` and `gh issue list` with `--json` return empty arrays
+  for both `nyldn/claude-octopus` and `nyldn/claude-octopus-dev`. Bare list
+  output is not sufficient evidence on this host, because a failing RTK hook
+  returns an empty result instead of an error.
+- Generated surfaces: `make sync-check` exits 0 and leaves no working-tree
+  drift, covering README, `PRODUCT.md`, `.claude-plugin/marketplace.json`
+  counts, the openclaw index, and the generated Codex and Cursor commands.
+- Changelog: `## [9.64.0]` is present and `## [Unreleased]` is empty, so no
+  entry is pending. The changelog dates 9.64.0 as 2026-08-13 while the GitHub
+  release published 2026-08-14; cosmetic disagreement, not corrected here.
+- Tags and releases: `v9.64.0` dereferences to `a91f8067`, whose Test Suite run
+  `31825411320` passed. The release is published, not a draft or prerelease.
+  Local tags match `upstream` with no orphans in either direction. Main is two
+  docs-only commits ahead of the tag and was correctly not retagged.
+- Shared marketplace drift found and fixed: `nyldn/plugins` was last synced at
+  v9.63.0 on 2026-08-12 (`8ced4726`), so the v9.64.0 sync step had been missed
+  and installs from `nyldn-plugins` still resolved to 9.63.0.
+  `scripts/sync-shared-marketplace.sh --check` reproduced this
+  (`shared=9.63.0, local=9.64.0`, exit 1). The sync was run and pushed as
+  `2910f8de`; the re-check now reports the octo entry up to date at v9.64.0 and
+  the live file confirms `octo = 9.64.0`. The Codex `claude-octopus` selector is
+  unversioned and was left untouched.
+- Open at handoff time: main Test Suite runs `31829961517` and `31830012819`
+  for the two docs-only commits were still in flight and are unverified here.
+- Host defect: `~/.claude/hooks/rtk-rewrite.sh` fails its integrity check, so
+  RTK refuses to run and swallows `gh`, `grep`, `head`, and `ls`. All commands
+  in this audit used absolute binary paths. Repair with `rtk verify` and
+  `rtk init -g --auto-patch` before trusting rewritten commands.
 
 ## Claude Handoff — Paused Production State
 
