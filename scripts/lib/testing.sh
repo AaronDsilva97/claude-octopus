@@ -217,6 +217,59 @@ tangle_quality_retry_limit_reached() {
     [[ "$retry_count" -ge "$retry_limit" ]]
 }
 
+tangle_result_logical_task_id() {
+    local result_file="$1"
+    local task_id base suffix
+    task_id=$(awk '/^# Task ID: / { sub(/^# Task ID: /, ""); print; exit }' "$result_file" 2>/dev/null || true)
+    if [[ -z "$task_id" ]]; then
+        base=$(basename "$result_file" .md)
+        if [[ "$base" == *-tangle-* ]]; then
+            suffix="${base#*-tangle-}"
+            task_id="tangle-${suffix}"
+        fi
+    fi
+    printf '%s\n' "$task_id" | sed -E 's/-retry[0-9]+-([0-9]+)$/-\1/'
+}
+
+tangle_result_retry_rank() {
+    local result_file="$1"
+    local task_id rank
+    task_id=$(awk '/^# Task ID: / { sub(/^# Task ID: /, ""); print; exit }' "$result_file" 2>/dev/null || true)
+    if [[ -z "$task_id" ]]; then
+        task_id=$(basename "$result_file" .md)
+    fi
+    rank=$(printf '%s\n' "$task_id" | sed -nE 's/.*-retry([0-9]+)-[0-9]+$/\1/p')
+    printf '%s\n' "${rank:-0}"
+}
+
+tangle_effective_result_files() {
+    local task_group="$1"
+    local result task_id retry_rank records=""
+
+    for result in "$RESULTS_DIR"/*-tangle-${task_group}*.md; do
+        [[ -f "$result" ]] || continue
+        [[ "$(basename "$result")" == *validation* ]] && continue
+        task_id=$(tangle_result_logical_task_id "$result")
+        retry_rank=$(tangle_result_retry_rank "$result")
+        records+="${task_id}"$'\t'"${retry_rank}"$'\t'"${result}"$'\n'
+    done
+
+    [[ -n "$records" ]] || return 0
+    printf '%s' "$records" | awk -F '\t' '
+        {
+            key[NR]=$1
+            rank[NR]=$2 + 0
+            path[NR]=$3
+            if (!($1 in max_rank) || ($2 + 0) > max_rank[$1]) max_rank[$1]=$2 + 0
+        }
+        END {
+            for (i=1; i<=NR; i++) {
+                if (rank[i] == max_rank[key[i]]) print path[i]
+            }
+        }
+    '
+}
+
 validate_tangle_results() {
     local task_group="$1"
     local original_prompt="$2"
@@ -243,9 +296,9 @@ validate_tangle_results() {
         FAILED_SUBTASKS=""  # Reset for this validation pass (string-based)
         TANGLE_HARD_GATE_RETRY_FEEDBACK=""
 
-        for result in "$RESULTS_DIR"/*-tangle-${task_group}*.md; do
-            [[ -f "$result" ]] || continue
-            [[ "$(basename "$result")" == *validation* ]] && continue
+        local result
+        while IFS= read -r result; do
+            [[ -n "$result" && -f "$result" ]] || continue
 
             # v8.20.0: Run file path validation (non-blocking warnings)
             if [[ "${OCTOPUS_FILE_VALIDATION:-true}" == "true" ]] && type run_file_validation &>/dev/null 2>&1; then
@@ -281,7 +334,7 @@ validate_tangle_results() {
             fi
             results+="$(<"$result")\n\n---\n\n"
             result_outputs+="$(extract_tangle_result_body "$result")"$'\n'
-        done
+        done <<< "$(tangle_effective_result_files "$task_group")"
 
         local worktree_changes=""
         local requires_worktree_changes=false
