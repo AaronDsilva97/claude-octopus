@@ -2,11 +2,22 @@
 
 Last updated: 2026-08-14
 Status: all pull requests open at session start are merged; GitHub reports an
-empty open-PR queue. PR #877's OrcaRouter provider is on `upstream/main`.
+empty open-PR queue. v9.64.0 is published to production from `upstream/main`.
 Branch: `main`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [PR #877](https://github.com/nyldn/claude-octopus/pull/877)
-Next action: no pull-request follow-up remains. Release remains deferred.
+Next action: no pull-request or release follow-up remains.
+
+## Production Release v9.64.0
+
+- The exact `main` commit `a91f80671dd530a6beed80b0bec56263b491435b` passed
+  the required main Test Suite run `31825411320` with conclusion `success`.
+- Annotated tag `v9.64.0` points to that exact commit and was pushed to the
+  canonical repository. The GitHub release is published, not a draft or
+  prerelease: https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0
+- Release notes were generated from the existing `CHANGELOG.md` v9.64.0 entry;
+  no version bump was repeated because v9.64.0 was already present in the
+  manifests and changelog.
 
 ## Pull Request Queue Closure
 
