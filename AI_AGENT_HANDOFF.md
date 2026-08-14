@@ -6,7 +6,24 @@ empty open-PR queue. v9.64.0 is published to production from `upstream/main`.
 Branch: `main`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [PR #877](https://github.com/nyldn/claude-octopus/pull/877)
-Next action: no pull-request or release follow-up remains.
+Next action: paused at the user's request; do not start new work until the user
+provides the next task.
+
+## Claude Handoff — Paused Production State
+
+- Production deployment is complete: GitHub release `v9.64.0` is published at
+  https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0.
+- The release tag points to tested code commit
+  `a91f80671dd530a6beed80b0bec56263b491435b`; main Test Suite run
+  `31825411320` completed successfully for that exact commit.
+- The later `80d071a6` commit only records this release in the handoff; it is
+  pushed to `upstream/main` and must not be retagged as v9.64.0.
+- Working tree is on `main`, aligned with `upstream/main`; the only untracked
+  item is the preserved harness file `.beads.gate.lock`.
+- No open pull requests remain. Contributor fork branches from merged PRs may
+  still exist because GitHub denied upstream deletion permission.
+- Safe resume: read this handoff, verify `git status --short --branch`, and wait
+  for the user's next instruction before mutating code, releases, or branches.
 
 ## Production Release v9.64.0
 
