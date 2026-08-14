@@ -1,14 +1,28 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-14
-Status: PR #877's OrcaRouter provider and all current review remediations are
-rebased onto current `upstream/main`; the final combined local gate passes.
-Branch: `fix/877-orcarouter-review`
+Status: all pull requests open at session start are merged; GitHub reports an
+empty open-PR queue. PR #877's OrcaRouter provider is on `upstream/main`.
+Branch: `main`
 Current release: [v9.64.0](https://github.com/nyldn/claude-octopus/releases/tag/v9.64.0)
 Tracking: [PR #877](https://github.com/nyldn/claude-octopus/pull/877)
-Next action: commit and push the current review-fix head, resolve the seven
-verified review threads, wait for matching-head remote checks, and merge PR
-#877. Release remains deferred.
+Next action: no pull-request follow-up remains. Release remains deferred.
+
+## Pull Request Queue Closure
+
+- Merged PRs: #867 as `c8189634`, #899 as `c6558757`, #917 as `53d37c1c`,
+  #918 as `ef542498`, and #877 as `318e6f4c`.
+- PR #877's protected head `33ee5b1855a5a5161ab6eff6097c1f07f394ffa0`
+  passed smoke, portability, Ubuntu and macOS unit, symlink-path, full
+  integration, summary, and CodeRabbit checks. CodeRabbit had no unresolved
+  review threads when it completed.
+- GitHub reports zero open pull requests. Upstream-owned merged branches were
+  deleted where controllable. GitHub denied deletion of contributor-owned
+  `Marc-oss-hub:feat/orcarouter-provider`; upstream maintainers can update that
+  branch through maintainer access but cannot delete it from the contributor's
+  fork.
+- Beads remains blocked by its pending schema migration. No migration was run,
+  and the untracked `.beads.gate.lock` remains excluded.
 
 ## PR #877: OrcaRouter Provider
 
@@ -45,11 +59,10 @@ verified review threads, wait for matching-head remote checks, and merge PR
   a fresh `make ci-local` passed 16/16 smoke suites, 273/273 unit suites, and
   7/7 integration suites plus all CI-only verifications. Council passed 73/74
   cases with its one documented macOS PTY skip.
-- Delivery constraint: the GitHub PR head belongs to contributor
-  `Marc-oss-hub`. Its current remote SHA before this review-fix push is
-  `4d61e17ef896b9ade3440bc19a766e1496d6d1ed`; push only with an exact
-  force-with-lease after re-verifying that SHA. A contributor-owned branch may
-  remain after merge if repository maintainers cannot delete it.
+- Delivery: PR #877 was squash-merged from protected head
+  `33ee5b1855a5a5161ab6eff6097c1f07f394ffa0` as `318e6f4c`. The contributor's
+  fork branch remains because GitHub rejected its deletion with permission
+  denied.
 - Tracking blocker: Beads remains blocked by its pending schema migration. No
   migration was run.
 
