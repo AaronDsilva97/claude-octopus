@@ -36,10 +36,45 @@ provides the next task.
   unversioned and was left untouched.
 - Open at handoff time: main Test Suite runs `31829961517` and `31830012819`
   for the two docs-only commits were still in flight and are unverified here.
-- Host defect: `~/.claude/hooks/rtk-rewrite.sh` fails its integrity check, so
-  RTK refuses to run and swallows `gh`, `grep`, `head`, and `ls`. All commands
-  in this audit used absolute binary paths. Repair with `rtk verify` and
-  `rtk init -g --auto-patch` before trusting rewritten commands.
+- Host defect, now fixed: `~/.claude/hooks/rtk-rewrite.sh` failed its integrity
+  check, so RTK refused to run and swallowed `gh`, `grep`, `head`, and `ls`,
+  returning empty output instead of an error. Root cause was version drift, not
+  tampering: rtk 0.45.0 retired the shell-script hook for a native binary hook,
+  and the leftover script from an older rtk no longer matched the recorded hash.
+  The script was read in full and backed up before replacement.
+  `rtk init -g --auto-patch` removed it and registered `rtk hook claude`;
+  `rtk verify` now passes 154/154.
+
+## Beads Tracking Restored (schema v49 to v65)
+
+The long-standing Beads blocker recorded throughout this file is resolved. Every
+older section below that says "Beads remains blocked" or "no migration was run"
+is historically accurate for its own session but no longer describes current
+state.
+
+- Authority: the user confirmed this Mac is the sole clone of the `oco`
+  database, which satisfies the single-designated-migrator rule. The Dolt
+  remote is `origin` (`git+https://github.com/nyldn/claude-octopus-dev.git`);
+  there is no second remote to fork against.
+- Backup before migrating: `.beads/embeddeddolt` was archived to
+  `.beads/backup/embeddeddolt-pre-v65-20260814.tar.gz` (gitignored), with
+  `issues.jsonl` and `config.yaml` copies alongside it.
+- Migration: `bd migrate --force` applied all 16 migrations, set
+  `repo_id 3ce3d674` and `clone_id 14bbce12`, and reported Dolt version 1.2.1.
+  `bd dolt push` advanced `refs/dolt/data` from `1222bc33` to `29158b82`.
+- Verification: reads, writes, and push all work. `bd stats` reports 34 issues.
+  A `bd remember` write succeeded, recording that this machine is the
+  designated migrator.
+- Housekeeping: `git config beads.role maintainer` was set to clear the
+  unconfigured-role warning. Stale `oco-004` (remove dead Gemini provider) was
+  closed against evidence, not assumption: `scripts/helpers/gemini-exec.sh` is
+  absent and `tests/unit/test-retired-gemini-provider.sh` passes 11/11, matching
+  the v9.61.3 delivery via PR #854. `refs/dolt/data` is now `f62293ab`.
+- Current backlog: two open issues remain, `oco-aek` (P2, expand lifecycle event
+  vocabulary) and `oco-fgg` (P3, control-plane major bets). Nothing is in
+  progress or blocked.
+- Going forward: use `bd` as the task system of record again, per `CLAUDE.md`.
+  GitHub issues are no longer the fallback tracker.
 
 ## Claude Handoff — Paused Production State
 
