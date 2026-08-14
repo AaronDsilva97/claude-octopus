@@ -220,6 +220,13 @@ _octo_build_provider_env_impl() {
             fi
             return 0
             ;;
+        orcarouter*)
+            # orcarouter_execute is a shell function — env -i cannot exec it (#300)
+            if [[ -z "${ORCAROUTER_API_KEY:-}" ]]; then
+                resolve_provider_env "ORCAROUTER_API_KEY" 2>/dev/null || true
+            fi
+            return 0
+            ;;
         claude-sdk*)
             # v9.50.0: Agent SDK seat — the shim strips session markers and sets
             # ANTHROPIC_API_KEY itself; just make sure the SDK key is resolvable.
@@ -283,12 +290,20 @@ resolve_provider_env() {
         fi
     fi
 
-    # Try sourcing from project .env or ~/.env
+    # Try static assignments from project/user env files and legacy shell rc
+    # files. Do not source .bashrc/.zshrc: they may contain interactive commands
+    # or arbitrary startup code. Reject dynamic values rather than evaluating
+    # substitutions while recovering credentials from older installations.
     local env_file
-    for env_file in "$PWD/.env" "$HOME/.env"; do
+    for env_file in "$PWD/.env" "$HOME/.env" "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [[ -f "$env_file" ]]; then
-            local val
-            val=$(grep -m1 -E "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- | sed 's/^["'\'']\|["'\''"]$//g')
+            local assignment val
+            assignment=$(grep -m1 -E "^[[:space:]]*(export[[:space:]]+)?${var_name}=" "$env_file" 2>/dev/null || true)
+            val="${assignment#*=}"
+            val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^["'\'']\|["'\''"]$//g')
+            if [[ "$val" == *'$'* || "$val" == *'`'* ]]; then
+                continue
+            fi
             if [[ -n "$val" ]]; then
                 export "$var_name=$val"
                 log DEBUG "Resolved $var_name from $env_file (non-interactive shell fallback)"
@@ -298,6 +313,55 @@ resolve_provider_env() {
     done
 
     return 1
+}
+
+# API-key providers are dispatchable only when the key exists and an explicit
+# providers-config entry has both availability flags enabled. A missing provider
+# section remains backward compatible with pre-provider config files: the live
+# key is authoritative until the user explicitly configures the provider.
+octo_api_key_provider_is_available() {
+    local provider="$1"
+    local env_var="$2"
+    local config_file="${PROVIDERS_CONFIG_FILE:-${WORKSPACE_DIR:-${HOME}/.claude-octopus}/.providers-config}"
+    local configured_state="absent"
+
+    provider="$(octo_provider_canonical "$provider" 2>/dev/null || printf '%s' "$provider")"
+    if declare -f octo_provider_allowed >/dev/null 2>&1 && ! octo_provider_allowed "$provider"; then
+        return 1
+    fi
+    if [[ -z "${!env_var:-}" ]]; then
+        resolve_provider_env "$env_var" 2>/dev/null || true
+    fi
+    [[ -n "${!env_var:-}" ]] || return 1
+
+    if [[ -f "$config_file" ]]; then
+        configured_state="$(awk -v target="$provider" '
+            /^  [[:alnum:]_-]+:[[:space:]]*$/ {
+                section = $0
+                sub(/^  /, "", section)
+                sub(/:[[:space:]]*$/, "", section)
+                in_target = (section == target)
+                if (in_target) seen = 1
+                next
+            }
+            in_target && /^    enabled:[[:space:]]*/ {
+                enabled = $0
+                sub(/^    enabled:[[:space:]]*/, "", enabled)
+                gsub(/[[:space:]\"]/, "", enabled)
+            }
+            in_target && /^    api_key_set:[[:space:]]*/ {
+                key_set = $0
+                sub(/^    api_key_set:[[:space:]]*/, "", key_set)
+                gsub(/[[:space:]\"]/, "", key_set)
+            }
+            END {
+                if (seen) print enabled "|" key_set
+                else print "absent"
+            }
+        ' "$config_file" 2>/dev/null)" || return 1
+    fi
+
+    [[ "$configured_state" == "absent" || "$configured_state" == "true|true" ]]
 }
 
 # [EXTRACTED to lib/dispatch.sh in v9.7.7]
