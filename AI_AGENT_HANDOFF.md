@@ -18,9 +18,9 @@ Next action: no pull-request follow-up remains. Release remains deferred.
   review threads when it completed.
 - GitHub reports zero open pull requests. Upstream-owned merged branches were
   deleted where controllable. GitHub denied deletion of contributor-owned
-  `Marc-oss-hub:feat/orcarouter-provider`; upstream maintainers can update that
-  branch through maintainer access but cannot delete it from the contributor's
-  fork.
+  branches for #867 (`borng`), #899 and #917 (`Jhacarreiro`), and #877
+  (`Marc-oss-hub`); upstream maintainers can update these through maintainer
+  access but cannot delete branches from contributor forks.
 - Beads remains blocked by its pending schema migration. No migration was run,
   and the untracked `.beads.gate.lock` remains excluded.
 
