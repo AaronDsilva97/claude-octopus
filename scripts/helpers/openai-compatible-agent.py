@@ -184,7 +184,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--provider", choices=sorted(PROVIDERS), default="generic")
     ap.add_argument("--base-url"); ap.add_argument("--api-key-env"); ap.add_argument("--model")
-    ap.add_argument("--cwd", required=True); ap.add_argument("--max-turns", type=int, default=env_int("OPENAI_COMPAT_MAX_TURNS", 20, 1)); ap.add_argument("--prompt")
+    ap.add_argument("--cwd", required=True)
+    ap.add_argument("--prompt")
     ap.add_argument("--reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--reasoning-policy", choices=["strict", "best_effort"], default="best_effort")
     ap.add_argument("--tool-policy", choices=["auto", "none"], default="auto")
@@ -214,7 +215,9 @@ def main() -> int:
     print(f"provider={args.provider} base_url={base_url} model={model} cwd={cwd}", file=sys.stderr)
     requested_reasoning = args.reasoning_effort or "none"
     print(f"chat_reasoning requested={requested_reasoning} policy={args.reasoning_policy}", file=sys.stderr)
-    for turn in range(1, args.max_turns + 1):
+    turn = 0
+    while True:
+        turn += 1
         d = api_call(base_url, key, model, cfg.get("headers", {}), messages, max_tokens=max_tokens, request_timeout=request_timeout, max_retries=max_retries, reasoning_effort=args.reasoning_effort, reasoning_policy=args.reasoning_policy, tool_policy=args.tool_policy)
         ch = d.get("choices", [{}])[0]; msg = ch.get("message", {})
         finish = ch.get("finish_reason")
@@ -241,7 +244,6 @@ def main() -> int:
         if content.strip():
             print(content); return 0
         messages.append({"role":"user","content":"Your previous assistant message was empty. Provide a visible final answer, or continue with tools if work remains."})
-    print("ERROR: no visible final answer after max turns", file=sys.stderr); return 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -2902,10 +2902,16 @@ _tangle_develop_in_workspace() {
 
     mkdir -p "$RESULTS_DIR"
     local worktree_before_file="${RESULTS_DIR}/.tangle-${task_group}-worktree-before.txt"
+    local worktree_before_state_file="${RESULTS_DIR}/.tangle-${task_group}-worktree-before-state.txt"
     if type snapshot_tangle_worktree_paths >/dev/null 2>&1; then
         snapshot_tangle_worktree_paths > "$worktree_before_file" 2>/dev/null || true
     else
         : > "$worktree_before_file"
+    fi
+    if type snapshot_tangle_worktree_state >/dev/null 2>&1; then
+        snapshot_tangle_worktree_state > "$worktree_before_state_file" 2>/dev/null || true
+    else
+        : > "$worktree_before_state_file"
     fi
 
     # Initialize tmux if enabled
@@ -3337,14 +3343,42 @@ Every [CODING] line must include a same-line Files: clause."
     local validation_rc=0
     validate_tangle_results "$task_group" "$resolved_prompt" "$worktree_before_file" || validation_rc=$?
 
-    if [[ "$validation_rc" -ne 0 ]]; then
-        log ERROR "Tangle validation failed with status ${validation_rc}; stopping before contextual review and corrections"
+    if ! tangle_should_attempt_contextual_review "$validation_rc" "$worktree_before_state_file"; then
+        log ERROR "Tangle validation failed with status ${validation_rc}; no recoverable worktree progress detected, stopping before contextual review and corrections"
         return "$validation_rc"
+    fi
+    if [[ "$validation_rc" -ne 0 ]]; then
+        log WARN "Tangle validation failed with status ${validation_rc}, but recoverable worktree progress exists; entering contextual review/correction recovery"
     fi
 
     tangle_contextual_review_gate "$task_group" "$resolved_prompt" "$context" "$subtasks" \
         "$validation_file" "$worktree_before_file" "$validation_rc" "$tangle_coding_agent"
     return $?
+}
+
+# Decide whether contextual review is useful after the initial validation gate.
+# A normal validation pass always continues to the existing review path. A failed
+# validation only enters recovery when Tangle produced new worktree changes since
+# its pre-run snapshot; otherwise preserve the historical fail-fast behavior.
+tangle_should_attempt_contextual_review() {
+    local validation_rc="${1:-0}"
+    local worktree_before_state_file="${2:-}"
+
+    if [[ "$validation_rc" -eq 0 ]]; then
+        return 0
+    fi
+    [[ -n "$worktree_before_state_file" && -f "$worktree_before_state_file" ]] || return 1
+    type snapshot_tangle_worktree_state >/dev/null 2>&1 || return 1
+
+    local worktree_after_state_file=""
+    worktree_after_state_file=$(mktemp "${TMPDIR:-/tmp}/octo-tangle-worktree-state-after.XXXXXX") || return 1
+    snapshot_tangle_worktree_state > "$worktree_after_state_file" 2>/dev/null || true
+    if cmp -s "$worktree_before_state_file" "$worktree_after_state_file"; then
+        rm -f "$worktree_after_state_file"
+        return 1
+    fi
+    rm -f "$worktree_after_state_file"
+    return 0
 }
 
 # Contextual review gate + correction loop for tangle_develop. Extracted so

@@ -24,10 +24,10 @@ export PATH="$FIXTURE_DIR/bin:$PATH" MOCK_ARGS MOCK_STDIN="$FIXTURE_DIR/stdin"
 
 test_case "extracts final text and passes plan-mode arguments"
 out=$(printf 'inspect only' | "$PROJECT_ROOT/scripts/helpers/commandcode-exec.sh" deepseek/deepseek-v4-pro plan)
-if [[ "$out" == "HARNESS_OK" ]] && grep -Fx -- '--permission-mode' "$MOCK_ARGS" >/dev/null && grep -Fx -- 'plan' "$MOCK_ARGS" >/dev/null && grep -Fx -- '--output-format' "$MOCK_ARGS" >/dev/null && grep -Fx -- 'json' "$MOCK_ARGS" >/dev/null && ! grep -Fx -- 'inspect only' "$MOCK_ARGS" >/dev/null && [[ "$(cat "$MOCK_STDIN")" == "inspect only" ]]; then
+if [[ "$out" == "HARNESS_OK" ]] && grep -Fx -- '--permission-mode' "$MOCK_ARGS" >/dev/null && grep -Fx -- 'plan' "$MOCK_ARGS" >/dev/null && grep -Fx -- '--output-format' "$MOCK_ARGS" >/dev/null && grep -Fx -- 'json' "$MOCK_ARGS" >/dev/null && ! grep -Fx -- '--max-turns' "$MOCK_ARGS" >/dev/null && ! grep -Fx -- 'inspect only' "$MOCK_ARGS" >/dev/null && [[ "$(cat "$MOCK_STDIN")" == "inspect only" ]]; then
     test_pass
 else
-    test_fail "expected finalText and plan/json arguments"
+    test_fail "expected finalText and plan/json arguments without an Octopus max-turns override"
 fi
 
 test_case "uses yolo only when explicitly selected"
@@ -135,10 +135,10 @@ else
 fi
 
 test_case "provider environment forwards only dedicated controls"
-export COMMAND_CODE_API_KEY=test-key CMD_ZDR=1 OCTOPUS_COMMANDCODE_BIN=/custom/cmd OCTOPUS_COMMANDCODE_MAX_TURNS=12
+export COMMAND_CODE_API_KEY=test-key CMD_ZDR=1 OCTOPUS_COMMANDCODE_BIN=/custom/cmd
 build_provider_env commandcode
 joined=" ${PROVIDER_ENV_ARRAY[*]} "
-if [[ "$joined" == *' COMMAND_CODE_API_KEY=test-key '* ]] && [[ "$joined" == *' CMD_ZDR=1 '* ]] && [[ "$joined" == *' OCTOPUS_COMMANDCODE_BIN=/custom/cmd '* ]] && [[ "$joined" == *' OCTOPUS_COMMANDCODE_MAX_TURNS=12 '* ]]; then
+if [[ "$joined" == *' COMMAND_CODE_API_KEY=test-key '* ]] && [[ "$joined" == *' CMD_ZDR=1 '* ]] && [[ "$joined" == *' OCTOPUS_COMMANDCODE_BIN=/custom/cmd '* ]]; then
     test_pass
 else
     test_fail "missing isolated Command Code environment entries"

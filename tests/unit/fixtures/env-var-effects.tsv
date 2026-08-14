@@ -24,7 +24,6 @@ OCTOPUS_CLAUDE_SDK_MODEL	covered-by	test-claude-sdk-provider.sh
 OCTOPUS_CODEX_MODEL	covered-by	test-role-mapping-v929.sh
 OCTOPUS_COMMANDCODE_ALLOWED_MODELS	skip	allowlist for a provider with no CLI on CI runners
 OCTOPUS_COMMANDCODE_BIN	covered-by	test-commandcode-harness.sh
-OCTOPUS_COMMANDCODE_MAX_TURNS	covered-by	test-commandcode-harness.sh
 OCTOPUS_COMMANDCODE_MODEL	covered-by	test-commandcode-harness.sh
 OCTOPUS_COMPACT_BANNERS	skip	changes banner prose only; asserting it would pin cosmetic output
 OCTOPUS_COST_MODE	covered-by	test-cost-mode-toggle.sh

@@ -3,13 +3,9 @@ set -euo pipefail
 
 model="${1:-${OCTOPUS_COMMANDCODE_MODEL:-deepseek/deepseek-v4-pro}}"
 permission_mode="${2:-${OCTOPUS_COMMANDCODE_PERMISSION_MODE:-plan}}"
-max_turns="${OCTOPUS_COMMANDCODE_MAX_TURNS:-30}"
 
 case "$model" in
   ''|*[!A-Za-z0-9._/-]*) echo "commandcode: invalid model id" >&2; exit 1 ;;
-esac
-case "$max_turns" in
-  ''|*[!0-9]*) echo "commandcode: invalid max-turns" >&2; exit 1 ;;
 esac
 case "$permission_mode" in
   plan|default|dont-ask|auto-accept|yolo) ;;
@@ -34,7 +30,7 @@ prompt="$(cat)"
 tmp="$(mktemp "${TMPDIR:-/tmp}/octopus-commandcode.XXXXXX")" || exit 1
 trap 'rm -f "$tmp"' EXIT INT TERM
 
-args=(-p --model "$model" --output-format json --max-turns "$max_turns" --skip-onboarding --no-auto-update --trust --no-session)
+args=(-p --model "$model" --output-format json --skip-onboarding --no-auto-update --trust --no-session)
 case "$permission_mode" in
   yolo) args+=(--yolo) ;;
   *) args+=(--permission-mode "$permission_mode") ;;

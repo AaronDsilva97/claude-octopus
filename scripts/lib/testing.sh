@@ -64,6 +64,37 @@ check_explicit_file_coverage() {
     printf '%s' "$missing"
 }
 
+snapshot_tangle_worktree_state() {
+    local repo_root=""
+    local path=""
+
+    if [[ -n "${PROJECT_ROOT:-}" ]]; then
+        if [[ -d "$PROJECT_ROOT" ]]; then
+            repo_root=$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null || true)
+            [[ -n "$repo_root" ]] || return 0
+        else
+            repo_root=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null || true)
+        fi
+    else
+        repo_root=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null || true)
+    fi
+    [[ -n "$repo_root" ]] || return 0
+
+    printf '%s\n' '## unstaged'
+    git -C "$repo_root" diff --binary --no-ext-diff 2>/dev/null || true
+    printf '%s\n' '## staged'
+    git -C "$repo_root" diff --cached --binary --no-ext-diff 2>/dev/null || true
+    printf '%s\n' '## untracked'
+    while IFS= read -r path; do
+        [[ -z "$path" ]] && continue
+        case "$path" in
+            .claude-octopus|.claude-octopus/*|.octo|.octo/*) continue ;;
+        esac
+        printf '%s\t' "$path"
+        git -C "$repo_root" hash-object --no-filters -- "$path" 2>/dev/null || printf '%s\n' missing
+    done < <(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null || true)
+}
+
 snapshot_tangle_worktree_paths() {
     local repo_root=""
 

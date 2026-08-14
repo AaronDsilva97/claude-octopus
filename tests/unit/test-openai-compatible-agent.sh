@@ -245,7 +245,6 @@ with tempfile.TemporaryDirectory() as cwd:
         "--model", "vendor/model",
         "--cwd", cwd,
         "--prompt", "verify",
-        "--max-turns", "1",
     ]
     old_argv = sys.argv[:]
     old_key = os.environ.get("TEST_PROVIDER_KEY")
@@ -282,6 +281,65 @@ then
     test_pass
 else
     test_fail "expected main() to omit provider limit for unset/0 and forward positive overrides"
+fi
+
+test_case "openai-compatible-agent does not impose an Octopus turn cap"
+if HELPER="$HELPER" python3 - <<'PYTEST'
+import importlib.util, os, sys, tempfile
+
+helper_path = os.environ["HELPER"]
+spec = importlib.util.spec_from_file_location("openai_compatible_agent_no_turn_cap", helper_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+calls = {"n": 0}
+def fake_api_call(*args, **kwargs):
+    calls["n"] += 1
+    if calls["n"] <= 25:
+        return {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call-" + str(calls["n"]),
+                        "function": {"name": "git_diff", "arguments": "{}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }]
+        }
+    return {"choices": [{"message": {"content": "done"}, "finish_reason": "stop"}]}
+
+mod.api_call = fake_api_call
+mod.tool_exec = lambda *args, **kwargs: "ok"
+
+with tempfile.TemporaryDirectory() as cwd:
+    old_argv = sys.argv[:]
+    old_key = os.environ.get("TEST_PROVIDER_KEY")
+    try:
+        os.environ["TEST_PROVIDER_KEY"] = "test-key"
+        sys.argv = [
+            "openai-compatible-agent.py",
+            "--provider", "generic",
+            "--base-url", "https://example.invalid/v1",
+            "--api-key-env", "TEST_PROVIDER_KEY",
+            "--model", "vendor/model",
+            "--cwd", cwd,
+            "--prompt", "verify",
+        ]
+        assert mod.main() == 0
+        assert calls["n"] == 26, calls
+    finally:
+        sys.argv = old_argv
+        if old_key is None:
+            os.environ.pop("TEST_PROVIDER_KEY", None)
+        else:
+            os.environ["TEST_PROVIDER_KEY"] = old_key
+PYTEST
+then
+    test_pass
+else
+    test_fail "expected the provider loop to continue past the former 20-turn Octopus cap"
 fi
 
 test_case "openai-compatible-agent retries transient HTTP errors"
