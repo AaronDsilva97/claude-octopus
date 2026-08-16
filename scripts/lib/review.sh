@@ -682,35 +682,43 @@ review_supervise_round1() {
     for _pid in "${round1_pids[@]}"; do wait "$_pid" 2>/dev/null || true; done
 }
 
-# review_extract_findings_array: returns a JSON array of findings from a Round 1
-# markdown result file. Providers sometimes echo the full prompt or wrap JSON in
-# prose; prefer the exact ## Output jq path, then fall back to scanning the file
-# for the last JSON object with a findings array.
-review_extract_findings_array() {
+# review_extract_output_text: print only the Output block associated with the final artifact status boundary.
+review_extract_output_text() {
     local review_md="$1"
-    local output_text direct_json
-    [[ -f "$review_md" ]] || { echo "[]"; return 1; }
+    [[ -f "$review_md" ]] || return 1
+    awk '''
+        /^## Output$/ { in_output=1; candidate=""; next }
+        /^## Status:/ { if (in_output) selected=candidate; in_output=0; next }
+        /^## / { in_output=0; next }
+        in_output && !/^```(json|JSON)?$/ { candidate = candidate (candidate == "" ? "" : "\n") $0 }
+        END { if (selected != "") print selected }
+    ''' "$review_md" 2>/dev/null
+}
 
-    output_text=$(awk '/^## Output$/{found=1;next} /^## /{if(found)exit} found && !/^```(json|JSON)?$/{print}' "$review_md" 2>/dev/null || true)
-    if [[ -n "$output_text" ]]; then
-        direct_json=$(printf '%s' "$output_text" | jq -cs '[.[] | objects | .findings | select(type == "array" and length > 0)] | last // []' 2>/dev/null || true)
-        if [[ -n "$direct_json" && "$direct_json" != "null" ]]; then
-            printf '%s\n' "$direct_json"
-            return 0
-        fi
+review_output_has_finding_signal() {
+    local output_text="$1"
+    [[ -n "$output_text" ]] || return 1
+    printf '%s' "$output_text" | grep -Eq '''(^|[^[:alnum:]_])"?severity"?[[:space:]]*:'''
+}
+
+review_extract_findings_text() {
+    local output_text="$1"
+    local direct_json
+    [[ -n "$output_text" ]] || { echo "[]"; return 1; }
+    direct_json=$(printf '%s' "$output_text" | jq -cs '[.[] | objects | .findings | select(type == "array" and length > 0)] | last // []' 2>/dev/null || true)
+    if [[ -n "$direct_json" && "$direct_json" != "null" ]]; then
+        printf '%s\n' "$direct_json"
+        return 0
     fi
-
     if command -v python3 >/dev/null 2>&1; then
-        python3 - "$review_md" <<'PYEXTRACT'
+        printf '%s' "$output_text" | python3 -c '
 import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-text = path.read_text(errors='ignore')
+text = sys.stdin.read()
 decoder = json.JSONDecoder()
 best = None
 idx = 0
 while True:
-    idx = text.find('{', idx)
+    idx = text.find("{", idx)
     if idx < 0:
         break
     try:
@@ -718,26 +726,62 @@ while True:
     except Exception:
         idx += 1
         continue
-    if isinstance(obj, dict) and isinstance(obj.get('findings'), list):
-        # Prefer the last NON-EMPTY findings array. The Round 1 prompt embeds
-        # {"findings": []} as a format example; a provider that echoes the
-        # prompt after its real answer must not have its findings replaced by
-        # the echoed empty example.
-        if obj.get('findings'):
-            best = obj.get('findings')
+    if isinstance(obj, dict) and isinstance(obj.get("findings"), list):
+        if obj["findings"]:
+            best = obj["findings"]
         elif best is None:
-            best = obj.get('findings')
+            best = obj["findings"]
     idx += max(1, end)
 if best is None:
-    print('[]')
+    print("[]")
     sys.exit(1)
-print(json.dumps(best, separators=(',', ':')))
-PYEXTRACT
+print(json.dumps(best, separators=(",", ":")))
+'
         return $?
     fi
-
     echo "[]"
     return 1
+}
+
+review_extract_findings_array() {
+    local review_md="$1"
+    local output_text
+    [[ -f "$review_md" ]] || { echo "[]"; return 1; }
+    output_text=$(review_extract_output_text "$review_md" 2>/dev/null || true)
+    review_extract_findings_text "$output_text"
+}
+
+review_recover_malformed_findings() {
+    local agent_type="$1"
+    local role="$2"
+    local malformed_output="$3"
+    local label="${4:-malformed-output-recovery}"
+    local max_chars="${OCTOPUS_REVIEW_MALFORMED_RECOVERY_CHARS:-20000}"
+    [[ "$max_chars" =~ ^[1-9][0-9]*$ ]] || max_chars=20000
+    max_chars=$((10#$max_chars))
+    malformed_output="${malformed_output:0:$max_chars}"
+
+    local recovery_prompt="Your previous code-review response completed successfully, but its Output could not be parsed as valid JSON.
+
+The text below is your own previous response. Do NOT re-review the code. Do NOT add new findings, remove findings, or reinterpret severity or meaning. Reformat exactly the same findings into ONE valid JSON object with this shape:
+
+{\"findings\":[{\"file\":\"...\",\"line\":1,\"severity\":\"normal|nit|pre-existing\",\"category\":\"...\",\"title\":\"...\",\"detail\":\"...\",\"confidence\":0.9}]}
+
+Return JSON only. No Markdown fences, prose, commentary, or extra keys.
+
+PREVIOUS_REVIEW_OUTPUT:
+-----
+${malformed_output}
+-----"
+
+    local recovery_output=""
+    if ! recovery_output=$(review_run_agent_sync_progress "$agent_type" "$recovery_prompt" "$role" "review" "$label" 2>/dev/null); then
+        return 1
+    fi
+    local recovered
+    recovered=$(review_extract_findings_text "$recovery_output" 2>/dev/null || true)
+    [[ -n "$recovered" && "$recovered" != "[]" ]] || return 1
+    printf '%s\n' "$recovered"
 }
 
 # Provider output is untrusted and may contain multiple top-level JSON values.
@@ -1358,9 +1402,24 @@ ${round1_prompts[$retry_idx]}"
             agent_findings="[]"
         fi
         local severity_count
-        severity_count=$(grep -c '"severity"[[:space:]]*:[[:space:]]*"' "$f" 2>/dev/null || true)
-        severity_count=${severity_count:-0}
-        if [[ "$agent_findings" == "[]" ]] && [[ "${severity_count%%$'\n'*}" -gt 0 ]]; then
+        local provider_output_text
+        provider_output_text=$(review_extract_output_text "$f" 2>/dev/null || true)
+        if review_output_has_finding_signal "$provider_output_text"; then
+            severity_count=1
+        else
+            severity_count=0
+        fi
+        if [[ "$agent_findings" == "[]" ]] && [[ "$severity_count" -gt 0 ]] && review_result_completed_successfully "$f"; then
+            local recovered_findings=""
+            log WARN "review_run: malformed findings output in $(basename "$f"); attempting one format-only recovery with ${atype}/${round1_roles[$idx]}"
+            if recovered_findings=$(review_recover_malformed_findings "$atype" "${round1_roles[$idx]}" "$provider_output_text" "Round 1 ${atype}/${round1_roles[$idx]} malformed-output recovery"); then
+                agent_findings="$recovered_findings"
+                log INFO "review_run: ${atype}/${round1_roles[$idx]} malformed-output recovery succeeded"
+            else
+                ((round1_parse_miss_count++)) || true
+                log WARN "review_run: possible findings in $(basename "$f") but extractor and format-only recovery returned no usable findings"
+            fi
+        elif [[ "$agent_findings" == "[]" ]] && [[ "$severity_count" -gt 0 ]]; then
             ((round1_parse_miss_count++)) || true
             log WARN "review_run: possible findings in $(basename "$f") but extractor returned empty array"
         fi
