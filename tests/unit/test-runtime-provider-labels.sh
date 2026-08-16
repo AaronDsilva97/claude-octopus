@@ -90,6 +90,106 @@ else
   test_fail "design review labels did not expose resolved runtime identity: $label | $research_label"
 fi
 
+run_design_review_dispatch_probe() {
+  local mode="$1"
+  local dispatch_log="$2"
+  env "MODE=${mode}" "PROJECT_ROOT=${PROJECT_ROOT}" "DISPATCH_LOG=${dispatch_log}" \
+    "WORKSPACE_DIR=${TEST_TMP_DIR}/workspace-${mode}" "DRY_RUN=false" "OCTOPUS_CEREMONIES=true" \
+  bash -c '
+    set -e
+    mkdir -p "$WORKSPACE_DIR"
+    source "$PROJECT_ROOT/scripts/lib/quality.sh"
+    if [[ "$MODE" == "role" ]]; then
+      export "OCTOPUS_DESIGN_REVIEW_IMPLEMENTER_AGENT=role-implementer"
+      export "OCTOPUS_DESIGN_REVIEW_RESEARCHER_AGENT=role-researcher"
+      export "OCTOPUS_DESIGN_REVIEW_CODE_REVIEWER_AGENT=role-reviewer"
+      export "OCTOPUS_DESIGN_REVIEW_SYNTHESIZER_AGENT=role-synthesizer"
+      export "OCTOPUS_DESIGN_REVIEW_CODEX_AGENT=legacy-codex"
+      export "OCTOPUS_DESIGN_REVIEW_AGY_AGENT=legacy-agy"
+      export "OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT=legacy-claude"
+      export "OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT=legacy-synth"
+    else
+      unset OCTOPUS_DESIGN_REVIEW_IMPLEMENTER_AGENT OCTOPUS_DESIGN_REVIEW_RESEARCHER_AGENT OCTOPUS_DESIGN_REVIEW_CODE_REVIEWER_AGENT OCTOPUS_DESIGN_REVIEW_SYNTHESIZER_AGENT
+      export "OCTOPUS_DESIGN_REVIEW_CODEX_AGENT=legacy-codex"
+      if [[ "$MODE" == "gemini" ]]; then
+        unset OCTOPUS_DESIGN_REVIEW_AGY_AGENT
+        export "OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT=legacy-gemini"
+      else
+        export "OCTOPUS_DESIGN_REVIEW_AGY_AGENT=legacy-agy"
+        unset OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT
+      fi
+      export "OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT=legacy-claude"
+      export "OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT=legacy-synth"
+    fi
+    : > "$DISPATCH_LOG"
+    run_agent_sync_consultative() {
+      printf "%s|%s|%s\n" "$1" "$4" "$5" >> "$DISPATCH_LOG"
+      printf "approach\n"
+    }
+    octo_provider_identity_label() { printf "%s\n" "$1"; }
+    octo_provider_identity_from_agent_type() { printf "%s\n" "$1"; }
+    get_agent_model() { printf "test-model\n"; }
+    octo_event_emit() { :; }
+    write_structured_decision() { :; }
+    log() { :; }
+    design_review_ceremony "test task" >/dev/null 2>&1 || true
+  '
+}
+
+test_case "design review role overrides win over legacy provider-named overrides at runtime"
+role_log="$TEST_TMP_DIR/role-precedence.log"
+run_design_review_dispatch_probe role "$role_log"
+if grep -q '^role-implementer|implementer|ceremony$' "$role_log" &&
+   grep -q '^role-researcher|researcher|ceremony$' "$role_log" &&
+   grep -q '^role-reviewer|code-reviewer|ceremony$' "$role_log" &&
+   grep -q '^role-synthesizer|synthesizer|ceremony$' "$role_log" &&
+   ! grep -q 'legacy-' "$role_log"; then
+  test_pass
+else
+  test_fail "semantic role override did not take precedence over legacy provider override"
+fi
+
+test_case "legacy provider-named design review overrides remain runtime fallbacks"
+legacy_log="$TEST_TMP_DIR/legacy-fallback.log"
+run_design_review_dispatch_probe legacy "$legacy_log"
+if grep -q '^legacy-codex|implementer|ceremony$' "$legacy_log" &&
+   grep -q '^legacy-agy|researcher|ceremony$' "$legacy_log" &&
+   grep -q '^legacy-claude|code-reviewer|ceremony$' "$legacy_log" &&
+   grep -q '^legacy-synth|synthesizer|ceremony$' "$legacy_log"; then
+  test_pass
+else
+  test_fail "legacy provider override did not remain a functional fallback"
+fi
+
+test_case "legacy GEMINI design review override remains secondary researcher fallback"
+gemini_log="$TEST_TMP_DIR/gemini-fallback.log"
+run_design_review_dispatch_probe gemini "$gemini_log"
+if grep -q '^legacy-gemini|researcher|ceremony$' "$gemini_log" &&
+   ! grep -q '^legacy-agy|researcher|ceremony$' "$gemini_log"; then
+  test_pass
+else
+  test_fail "legacy GEMINI override did not remain the secondary researcher fallback"
+fi
+
+test_case "design review synthesis events carry stable executor and role identity"
+quality="$PROJECT_ROOT/scripts/lib/quality.sh"
+if grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'executor_alias=' &&
+   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'configured_provider=' &&
+   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'configured_model=' &&
+   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'runtime_provider=' &&
+   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'runtime_model=' &&
+   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'role="synthesizer"' &&
+   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'executor_alias=' &&
+   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'configured_provider=' &&
+   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'configured_model=' &&
+   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'runtime_provider=' &&
+   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'runtime_model=' &&
+   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'role="synthesizer"'; then
+  test_pass
+else
+  test_fail "design review synthesis events lack stable lifecycle identity fields"
+fi
+
 test_case "design review synthesis prompt no longer uses historical provider headings"
 if ! grep -q '^CODEX APPROACH:' "$PROJECT_ROOT/scripts/lib/quality.sh" && \
    ! grep -q '^GEMINI APPROACH:' "$PROJECT_ROOT/scripts/lib/quality.sh" && \

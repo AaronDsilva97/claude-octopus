@@ -338,7 +338,7 @@ DECEOF
 }
 
 # v8.18.0 Feature: Pre-Work Design Review Ceremony
-# Before tangle phase, each provider states its approach; conflicts are resolved.
+# Before tangle phase, each review role states its approach; conflicts are resolved.
 # After failures, a retrospective fires.
 
 design_review_ceremony() {
@@ -358,7 +358,7 @@ design_review_ceremony() {
     echo ""
     echo -e "${CYAN}${_BOX_TOP}${NC}"
     echo -e "${CYAN}║  📋 DESIGN REVIEW CEREMONY                               ║${NC}"
-    echo -e "${CYAN}║  Each provider states their approach before implementation ║${NC}"
+    echo -e "${CYAN}║  Each review role states its approach before implementation ║${NC}"
     echo -e "${CYAN}${_BOX_BOT}${NC}"
     echo ""
 
@@ -376,13 +376,14 @@ State your HIGH-LEVEL approach in 3-5 bullet points:
 
 Be concise and specific. This is a planning exercise, not implementation."
 
-    # Gather approaches from available providers. Keep these configurable so
-    # operators can pick cheaper/faster review models without patching code.
+    # Gather approaches by semantic review role. Runtime executor/provider/model
+    # selection is separate from seat identity. The provider-named variables are
+    # compatibility aliases only and may be removed in a future major release.
     local seat_1_approach="" seat_2_approach="" seat_3_approach=""
-    local design_codex_agent="${OCTOPUS_DESIGN_REVIEW_CODEX_AGENT:-codex-mini}"
-    local design_agy_agent="${OCTOPUS_DESIGN_REVIEW_AGY_AGENT:-${OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT:-agy}}"
-    local design_claude_agent="${OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT:-claude-sonnet}"
-    local design_synthesis_agent="${OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT:-claude-opus}"
+    local design_implementer_agent="${OCTOPUS_DESIGN_REVIEW_IMPLEMENTER_AGENT:-${OCTOPUS_DESIGN_REVIEW_CODEX_AGENT:-codex-mini}}"
+    local design_researcher_agent="${OCTOPUS_DESIGN_REVIEW_RESEARCHER_AGENT:-${OCTOPUS_DESIGN_REVIEW_AGY_AGENT:-${OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT:-agy}}}"
+    local design_code_reviewer_agent="${OCTOPUS_DESIGN_REVIEW_CODE_REVIEWER_AGENT:-${OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT:-claude-sonnet}}"
+    local design_synthesizer_agent="${OCTOPUS_DESIGN_REVIEW_SYNTHESIZER_AGENT:-${OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT:-claude-opus}}"
     local design_timeout="${OCTOPUS_DESIGN_REVIEW_TIMEOUT:-0}"
     local design_synth_timeout="${OCTOPUS_DESIGN_REVIEW_SYNTH_TIMEOUT:-0}"
     if [[ ! "$design_timeout" =~ ^[0-9]+$ ]]; then
@@ -400,30 +401,30 @@ Be concise and specific. This is a planning exercise, not implementation."
     [[ "$design_synth_timeout" != "0" ]] && _synth_timeout_label="${design_synth_timeout}s"
 
     local seat_1_label seat_2_label seat_3_label synthesis_label
-    seat_1_label="$(octo_provider_identity_label "$design_codex_agent" "implementer")"
-    seat_2_label="$(octo_provider_identity_label "$design_agy_agent" "researcher")"
-    seat_3_label="$(octo_provider_identity_label "$design_claude_agent" "code-reviewer")"
-    synthesis_label="$(octo_provider_identity_label "$design_synthesis_agent" "synthesizer")"
+    seat_1_label="$(octo_provider_identity_label "$design_implementer_agent" "implementer")"
+    seat_2_label="$(octo_provider_identity_label "$design_researcher_agent" "researcher")"
+    seat_3_label="$(octo_provider_identity_label "$design_code_reviewer_agent" "code-reviewer")"
+    synthesis_label="$(octo_provider_identity_label "$design_synthesizer_agent" "synthesizer")"
 
-    log INFO "Design review: gathering provider approaches..."
+    log INFO "Design review: gathering role approaches..."
     log INFO "Design review seats: seat_1=${seat_1_label}, seat_2=${seat_2_label}, seat_3=${seat_3_label}, synthesis=${synthesis_label}, timeout=${_design_timeout_label}, synth_timeout=${_synth_timeout_label}"
 
     seat_1_approach="$(
         (
             export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_codex_agent" "$ceremony_prompt" "$design_timeout" "implementer" "ceremony"
+            run_agent_sync_consultative "$design_implementer_agent" "$ceremony_prompt" "$design_timeout" "implementer" "ceremony"
         ) 2>/dev/null
     )" || true
     seat_2_approach="$(
         (
             export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_agy_agent" "$ceremony_prompt" "$design_timeout" "researcher" "ceremony"
+            run_agent_sync_consultative "$design_researcher_agent" "$ceremony_prompt" "$design_timeout" "researcher" "ceremony"
         ) 2>/dev/null
     )" || true
     seat_3_approach="$(
         (
             export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_claude_agent" "$ceremony_prompt" "$design_timeout" "code-reviewer" "ceremony"
+            run_agent_sync_consultative "$design_code_reviewer_agent" "$ceremony_prompt" "$design_timeout" "code-reviewer" "ceremony"
         ) 2>/dev/null
     )" || true
 
@@ -435,11 +436,15 @@ Be concise and specific. This is a planning exercise, not implementation."
     _synth_started_at=$(date +%s 2>/dev/null || echo 0)
     if declare -f octo_event_emit >/dev/null 2>&1; then
         octo_event_emit "synthesis.start" phase="ceremony" scope="design-review" \
-            provider="$design_synthesis_agent" inputs="3" || true
+            provider="$design_synthesizer_agent" provider_label_kind="legacy-alias" \
+            executor_alias="$design_synthesizer_agent" \
+            configured_provider="$(octo_provider_identity_from_agent_type "$design_synthesizer_agent")" \
+            configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "synthesizer" 2>/dev/null || echo unresolved)" \
+            runtime_provider="unknown" runtime_model="unknown" role="synthesizer" inputs="3" || true
     fi
 
     local synthesis
-    synthesis=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_synthesis_agent" "You are synthesizing a design review ceremony.
+    synthesis=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_synthesizer_agent" "You are synthesizing a design review ceremony.
 
 Three review seats stated their approach to this task. The headings below reflect configured runtime identity rather than historical provider slot names:
 
@@ -467,7 +472,11 @@ Be brief and actionable." "$design_synth_timeout" "synthesizer" "ceremony" 2>/de
         [[ "$_synth_started_at" =~ ^[0-9]+$ && "$_synth_now" =~ ^[0-9]+$ && "$_synth_started_at" -gt 0 ]] \
             && _synth_elapsed=$(( _synth_now - _synth_started_at ))
         octo_event_emit "synthesis.end" phase="ceremony" scope="design-review" \
-            provider="$design_synthesis_agent" \
+            provider="$design_synthesizer_agent" provider_label_kind="legacy-alias" \
+            executor_alias="$design_synthesizer_agent" \
+            configured_provider="$(octo_provider_identity_from_agent_type "$design_synthesizer_agent")" \
+            configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "synthesizer" 2>/dev/null || echo unresolved)" \
+            runtime_provider="unknown" runtime_model="unknown" role="synthesizer" \
             status="$([[ -n "$synthesis" ]] && echo produced || echo empty)" \
             bytes="${#synthesis}" elapsed_s="$_synth_elapsed" || true
     fi
