@@ -1150,6 +1150,33 @@ council_build_roster() {
     done
 
     council_enforce_provider_diversity
+    council_dedup_vendor_seats
+}
+
+council_dedup_vendor_seats() {
+    # OPT-IN (default off): keep at most one non-chair VOTING seat per provider org.
+    #
+    # With Gemini sunset, a 2-vendor standard council can seat agy + codex + codex,
+    # which (a) weights the panel 2:1 toward one lab and (b) forces that lab to clear
+    # BOTH of its seats to count as an approver — so an internal split (one seat
+    # APPROVE, one REVISE) can deadlock an otherwise-decidable gate. The
+    # distinct-approving-vendor quorum already guards correctness (a split vendor
+    # can't pass on one seat); this addresses the panel *weighting*, which the quorum
+    # layer does not. It is a seating-policy preference, so it stays off unless
+    # explicitly enabled with OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1.
+    #
+    # When enabled: keep the highest-scoring non-chair seat per org; chair
+    # (synthesis) seats are never touched. Default (unset/anything but 1) preserves
+    # today's roster exactly.
+    [[ "${OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR:-}" == "1" ]] || return 0
+    COUNCIL_ROSTER_JSON="$(jq -c '
+        [ to_entries[] ] as $e
+        | ( [ $e[] | select(.value.seat == "chair") ] ) as $chairs
+        | ( [ $e[] | select(.value.seat != "chair") ]
+            | group_by(.value.provider_org)
+            | map( max_by( .value.score | tonumber? // 0 ) ) ) as $voters
+        | ( $chairs + $voters ) | sort_by(.key) | map(.value)
+    ' <<< "$COUNCIL_ROSTER_JSON")"
 }
 
 council_required_non_chair() {

@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in one-vote-per-vendor council seating. Set
+  `OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1` to keep at most one non-chair voting
+  seat per provider org: after diversity enforcement the roster drops all but the
+  highest-scoring seat of each vendor (chair/synthesis seats are never touched).
+  With Gemini sunset, a 2-vendor standard council otherwise seats
+  `agy + codex + codex`, weighting the panel 2:1 toward one lab and forcing that
+  lab to clear both seats to count as an approver — so an internal split (one seat
+  APPROVE, one REVISE) can deadlock an otherwise-decidable gate. The
+  distinct-approving-vendor quorum already guards correctness; this addresses the
+  panel *weighting*, which the quorum layer does not. Only the exact value
+  `OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1` enables it; unset or any other value
+  (including `0`) preserves today's roster exactly.
+
 ## [9.65.0] - 2026-08-16
 
 ### Changed

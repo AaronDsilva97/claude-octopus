@@ -1596,12 +1596,64 @@ test_council_quorum_met_with_host_native_chair() {
     fi
 }
 
+test_council_one_vote_per_vendor_opt_in() {
+    test_case "OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1 keeps one voting seat per vendor; default leaves the roster intact"
+    load_council_lib || return 1
+    local roster='[
+      {"persona":"strategy-analyst","seat":"chair","provider":"claude","provider_org":"anthropic","score":"0.9"},
+      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","score":"0.8"},
+      {"persona":"security-auditor","seat":"member","provider":"codex","provider_org":"openai","score":"0.6"},
+      {"persona":"research-synthesizer","seat":"member","provider":"agy","provider_org":"google","score":"0.7"}
+    ]'
+
+    # Compare the WHOLE roster (normalized), not just seat counts, so a regression
+    # that swaps a seat or replaces the chair can't slip through.
+    local roster_norm; roster_norm="$(jq -Sc . <<< "$roster")"
+    # Enabled result: the lower-scored openai seat (security-auditor) is dropped;
+    # chair + higher-scored openai (backend-architect) + agy remain, order preserved.
+    local expected_on; expected_on="$(jq -Sc . <<< '[
+      {"persona":"strategy-analyst","seat":"chair","provider":"claude","provider_org":"anthropic","score":"0.9"},
+      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","score":"0.8"},
+      {"persona":"research-synthesizer","seat":"member","provider":"agy","provider_org":"google","score":"0.7"}
+    ]')"
+
+    # Default (flag unset): opt-in feature is off, roster is byte-for-byte untouched.
+    local default_norm
+    unset OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR
+    COUNCIL_ROSTER_JSON="$roster"
+    council_dedup_vendor_seats
+    default_norm="$(jq -Sc . <<< "$COUNCIL_ROSTER_JSON")"
+
+    # Explicit disable: ONLY the exact value "1" enables the policy. A non-"1"
+    # value (e.g. "0") must leave the roster identical to unset — guards against a
+    # future nonempty-value predicate silently enabling it on "0"/"false".
+    local off_norm
+    COUNCIL_ROSTER_JSON="$roster"
+    OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=0 council_dedup_vendor_seats
+    off_norm="$(jq -Sc . <<< "$COUNCIL_ROSTER_JSON")"
+
+    # Enabled: roster reduced to exactly the expected one-vote-per-vendor set.
+    local on_norm
+    COUNCIL_ROSTER_JSON="$roster"
+    OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1 council_dedup_vendor_seats
+    on_norm="$(jq -Sc . <<< "$COUNCIL_ROSTER_JSON")"
+
+    if [[ "$default_norm" == "$roster_norm" && "$off_norm" == "$roster_norm" \
+          && "$on_norm" == "$expected_on" ]]; then
+        test_pass
+    else
+        test_fail "dedup roster identity wrong: default==input?$([[ "$default_norm" == "$roster_norm" ]] && echo y || echo n) off==input?$([[ "$off_norm" == "$roster_norm" ]] && echo y || echo n) on=$on_norm"
+        return 1
+    fi
+}
+
 test_council_command_files_are_registered
 test_council_orchestrate_route_exists
 test_council_run_status_beacon_lifecycle
 test_council_benchmark_routing_lib_is_extracted
 test_council_chair_is_host_native_detects_status
 test_council_quorum_met_with_host_native_chair
+test_council_one_vote_per_vendor_opt_in
 test_council_defaults_are_depth_aware
 test_council_rejects_non_usd_budget
 test_council_dry_run_writes_summary_json
