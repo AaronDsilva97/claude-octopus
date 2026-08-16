@@ -3478,8 +3478,12 @@ tangle_contextual_review_gate() {
         current_signature=$(tangle_findings_signature "$findings_file")
 
         if [[ "$review_rc" -ne 0 ]]; then
-            log WARN "Contextual code review returned non-zero after correction round ${correction_round}; not treating review warning/no-diff as improvement"
-            return "$review_rc"
+            if [[ "${normal_count:-0}" -gt 0 ]]; then
+                log WARN "Contextual code review returned non-zero after correction round ${correction_round}, but ${normal_count} actionable blocking finding(s) remain; continuing correction loop"
+            else
+                log WARN "Contextual code review returned non-zero after correction round ${correction_round} with no actionable blockers"
+                return "$review_rc"
+            fi
         fi
 
         if [[ "${normal_count:-0}" -lt "${previous_normal_count:-0}" ]]; then
