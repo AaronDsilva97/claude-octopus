@@ -33,17 +33,24 @@ run_gate() {
         octopus_agent_override() { echo "codex"; }
 
         COUNTS=($1)
+        REVIEW_RCS=(${REVIEW_RC_SEQUENCE:-})
         IDX_FILE="$RESULTS_DIR/count-idx"
+        REVIEW_IDX_FILE="$RESULTS_DIR/review-idx"
         echo 0 > "$IDX_FILE"
+        echo 0 > "$REVIEW_IDX_FILE"
         CORRECTION_CALLS=0
 
         source "$2/scripts/lib/workflows.sh" 2>/dev/null
 
         tangle_build_develop_review_context() { echo "$RESULTS_DIR/ctx-$7.md"; }
         tangle_run_context_code_review() {
+            local ridx rc
             TANGLE_REVIEW_FINDINGS_FILE="$RESULTS_DIR/findings-$3.json"
             echo "{\"findings\":[]}" > "$TANGLE_REVIEW_FINDINGS_FILE"
-            return 0
+            ridx=$(cat "$REVIEW_IDX_FILE")
+            rc="${REVIEW_RCS[$ridx]:-0}"
+            echo $((ridx + 1)) > "$REVIEW_IDX_FILE"
+            return "$rc"
         }
         # Stub state lives in a file: these stubs run inside command
         # substitutions, so in-shell variable increments would be lost.
@@ -91,6 +98,22 @@ if [[ "$out" == "rounds=3 rc=0" ]]; then
     test_pass
 else
     test_fail "expected rounds=3 rc=0, got '$out'"
+fi
+
+test_case "partial review warning with actionable blockers continues correction loop"
+out=$(REVIEW_RC_SEQUENCE="0 1 0" run_gate "2 1 0")
+if [[ "$out" == "rounds=2 rc=0" ]]; then
+    test_pass
+else
+    test_fail "expected rounds=2 rc=0, got '$out'"
+fi
+
+test_case "partial review warning with zero blockers remains fatal"
+out=$(REVIEW_RC_SEQUENCE="0 1" run_gate "1 0")
+if [[ "$out" == "rounds=1 rc=1" ]]; then
+    test_pass
+else
+    test_fail "expected rounds=1 rc=1, got '$out'"
 fi
 
 test_case "static blockers trip convergence guard (default 3 no-progress rounds)"

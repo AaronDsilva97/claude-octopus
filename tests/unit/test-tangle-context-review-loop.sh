@@ -51,7 +51,7 @@ assert_contains "$WORKFLOWS" 'run_agent_sync "$correction_agent" "$correction_pr
 assert_contains "$WORKFLOWS" "OCTOPUS_TANGLE_CODE_REVIEW" "code review gate is toggleable"
 assert_contains "$WORKFLOWS" "Contextual code review warning" "review warnings are blocking"
 assert_contains "$WORKFLOWS" "No changes found to review" "legacy no-diff message is detected"
-assert_contains "$WORKFLOWS" "not treating review warning/no-diff as improvement" "no-diff review is blocking"
+assert_contains "$WORKFLOWS" "with no actionable blockers" "non-zero review without actionable blockers is blocking"
 assert_contains "$WORKFLOWS" "Skipping ink/deliver because tangle validation gate returned non-zero" "ink is skipped when validation fails"
 assert_contains "$HELP" "Contextual code review" "develop help documents contextual review"
 assert_contains "$HELP" "OCTOPUS_TANGLE_REVIEW_CORRECTION_MODE" "develop help documents bounded mode"

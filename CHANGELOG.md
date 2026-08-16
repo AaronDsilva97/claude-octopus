@@ -25,6 +25,10 @@
 
 ### Fixed
 
+- Tangle contextual-review correction now continues when a post-correction
+  review returns non-zero but still produced actionable blockers. A non-zero
+  review with zero blockers stays fail-closed.
+
 - Council quorum now treats a host-native chair as present even when it cannot
   self-dispatch a chair response file. `met` reflects vendor approvals plus a
   present, synthesis-capable chair (`chair_received` or `chair_host_native`),
