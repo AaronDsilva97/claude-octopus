@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [9.65.0] - 2026-08-16
+
 ### Changed
 
 - Completing `/octo:setup` now persists `auto_router_mode=suggest`, so Octopus
