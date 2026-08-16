@@ -1356,6 +1356,129 @@ test_council_dispatch_strips_blocked_env_but_sets_disposable_mode() {
     fi
 }
 
+test_council_run_emits_summary_when_body_leaves_none() {
+    test_case "council_run emits a fallback summary.json when the run body exits without one"
+    load_council_lib || return 1
+
+    # Simulate the killer signature: the run body reaches a real run directory
+    # (synthesis dispatched) then exits nonzero WITHOUT writing summary.json —
+    # e.g. the chair-synthesis seat is SIGKILLed at the timeout cap, or a late
+    # `|| return 1` fires after synthesis but before the completed-summary write.
+    # A caller polling for summary.json would otherwise wait forever.
+    local d
+    d="$(mktemp -d "$TEST_TMP_DIR/council-incomplete.XXXXXX")"
+
+    _council_run_impl() { COUNCIL_RUN_DIR="$d"; return 1; }
+    # Keep the writer/warnings deterministic and independent of the full summary
+    # generator (already covered by the dry-run / full-success tests).
+    council_write_summary_json() { printf '{"status":"%s"}\n' "$1" > "${COUNCIL_RUN_DIR}/summary.json"; }
+    council_print_run_warnings() { :; }
+
+    local rc=0
+    council_run "dummy task" >/dev/null 2>&1 || rc=$?
+
+    local status=""
+    [[ -f "$d/summary.json" ]] && status="$(jq -r '.status' "$d/summary.json" 2>/dev/null)"
+
+    unset -f _council_run_impl council_write_summary_json council_print_run_warnings
+
+    if [[ "$status" == "incomplete" && "$rc" -ne 0 ]]; then
+        test_pass
+    else
+        test_fail "expected fallback summary status=incomplete and nonzero rc; got status='$status' rc=$rc"
+        return 1
+    fi
+}
+
+test_council_run_does_not_clobber_healthy_summary() {
+    test_case "council_run leaves a body-written summary.json untouched on a healthy run"
+    load_council_lib || return 1
+
+    local d
+    d="$(mktemp -d "$TEST_TMP_DIR/council-healthy.XXXXXX")"
+
+    # Healthy body: writes its own summary and returns success. The wrapper must
+    # NOT re-invoke the writer or overwrite the status.
+    _council_run_impl() { COUNCIL_RUN_DIR="$d"; printf '{"status":"completed"}\n' > "$d/summary.json"; return 0; }
+    council_write_summary_json() { printf '{"status":"WRAPPER_CLOBBERED"}\n' > "${COUNCIL_RUN_DIR}/summary.json"; }
+    council_print_run_warnings() { :; }
+
+    local rc=0
+    council_run "dummy task" >/dev/null 2>&1 || rc=$?
+
+    local status
+    status="$(jq -r '.status' "$d/summary.json" 2>/dev/null)"
+
+    unset -f _council_run_impl council_write_summary_json council_print_run_warnings
+
+    if [[ "$status" == "completed" && "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "wrapper clobbered a healthy summary or changed rc; status='$status' rc=$rc"
+        return 1
+    fi
+}
+
+test_council_run_replaces_malformed_body_summary() {
+    test_case "council_run treats an empty/malformed body summary.json as missing and repairs it"
+    load_council_lib || return 1
+
+    local d
+    d="$(mktemp -d "$TEST_TMP_DIR/council-malformed.XXXXXX")"
+
+    # A jq failure mid-write can leave garbage that -f would accept. The wrapper
+    # must treat unparseable JSON as no summary and replace it with a valid one.
+    _council_run_impl() { COUNCIL_RUN_DIR="$d"; printf 'not json{' > "$d/summary.json"; return 0; }
+    council_write_summary_json() { printf '{"status":"%s"}\n' "$1" > "${COUNCIL_RUN_DIR}/summary.json"; }
+    council_print_run_warnings() { :; }
+
+    local rc=0
+    council_run "dummy task" >/dev/null 2>&1 || rc=$?
+
+    local status valid=1
+    jq -e . "$d/summary.json" >/dev/null 2>&1 || valid=0
+    status="$(jq -r '.status' "$d/summary.json" 2>/dev/null)"
+
+    unset -f _council_run_impl council_write_summary_json council_print_run_warnings
+
+    if [[ "$valid" -eq 1 && "$status" == "incomplete" && "$rc" -ne 0 ]]; then
+        test_pass
+    else
+        test_fail "expected repaired valid incomplete summary + nonzero rc; valid=$valid status='$status' rc=$rc"
+        return 1
+    fi
+}
+
+test_council_run_writes_minimal_summary_when_rich_writer_fails() {
+    test_case "council_run drops a minimal valid summary.json when the rich writer fails"
+    load_council_lib || return 1
+
+    local d
+    d="$(mktemp -d "$TEST_TMP_DIR/council-writerfail.XXXXXX")"
+
+    # Body leaves no summary AND the rich writer itself fails (e.g. jq errors) —
+    # the wrapper must still guarantee a parseable, machine-detectable artifact.
+    _council_run_impl() { COUNCIL_RUN_DIR="$d"; return 1; }
+    council_write_summary_json() { return 1; }
+    council_print_run_warnings() { :; }
+
+    local rc=0
+    council_run "dummy task" >/dev/null 2>&1 || rc=$?
+
+    local status valid=1
+    jq -e . "$d/summary.json" >/dev/null 2>&1 || valid=0
+    status="$(jq -r '.status' "$d/summary.json" 2>/dev/null)"
+
+    unset -f _council_run_impl council_write_summary_json council_print_run_warnings
+
+    if [[ "$valid" -eq 1 && "$status" == "incomplete" && "$rc" -ne 0 ]]; then
+        test_pass
+    else
+        test_fail "expected minimal valid incomplete summary + nonzero rc; valid=$valid status='$status' rc=$rc"
+        return 1
+    fi
+}
+
 test_council_command_files_are_registered
 test_council_orchestrate_route_exists
 test_council_benchmark_routing_lib_is_extracted
@@ -1411,6 +1534,10 @@ test_council_scans_artifact_critical_veto
 test_council_structured_veto_requires_veto_role
 test_council_veto_scan_ignores_discussed_token
 test_council_dispatch_strips_blocked_env_but_sets_disposable_mode
+test_council_run_emits_summary_when_body_leaves_none
+test_council_run_does_not_clobber_healthy_summary
+test_council_run_replaces_malformed_body_summary
+test_council_run_writes_minimal_summary_when_rich_writer_fails
 
 test_council_host_native_detection() {
     test_case "council_detect_providers marks host provider as host-native (issue #444)"

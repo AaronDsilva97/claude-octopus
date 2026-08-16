@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `orchestrate.sh council` now always emits a valid `summary.json`. The runner
+  wrote one only on its four intended exit paths (dry-run, no-quorum, veto-abort,
+  completed); if the chair-synthesis seat was SIGKILLed at the timeout cap, a
+  late helper returned nonzero after synthesis but before the completed-summary
+  write, or the summary write itself failed and left an empty/garbage file, the
+  run directory was left with no usable `summary.json` and a caller polling for
+  it waited indefinitely. `council_run` now wraps its body and, on any exit that
+  leaves no parseable summary, writes a machine-detectable `status: "incomplete"`
+  summary — falling back to a minimal valid `{"status":"incomplete"}` if the rich
+  writer also fails — prints the partial-artifact location, and returns nonzero,
+  so "runner unhealthy" is a clean signal, never an unbounded wait.
+
 ## [9.64.0] - 2026-08-13
 
 ### Changed
