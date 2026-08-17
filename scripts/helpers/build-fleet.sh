@@ -21,6 +21,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/../lib/cursor-agent.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/../lib/provider-registry.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/../lib/provider-policy.sh" 2>/dev/null || true
 
 WORKFLOW="${1:-research}"
 INTENSITY="${2:-standard}"
@@ -275,32 +277,78 @@ build_research_fleet() {
 }
 
 # ── Review Fleet ──────────────────────────────────────────────────────────────
-build_review_fleet() {
-    local logic_provider
-    logic_provider=$(pick_provider "claude-sonnet" codex opencode copilot)
-    [[ -n "$logic_provider" ]] && emit "$logic_provider" "Logic Reviewer" "Review for correctness and logic bugs, edge cases, regressions in: $PROMPT"
+# Review seats are provider-neutral. Build a deterministic, family-diverse pool
+# from providers that are both admitted by check-providers.sh and declare the
+# registry `council` capability. Claude remains an implicit candidate because it
+# is the host runtime and therefore is not reported by check-providers.sh.
+build_council_order() {
+    local provider family canonical used_families="" first="" rest="" candidates="" preferred=""
 
-    local sec_provider
-    sec_provider=$(pick_provider "claude-sonnet" agy qwen copilot)
-    # Ensure different from logic reviewer
-    if [[ -n "$sec_provider" && "$sec_provider" == "$logic_provider" && "$sec_provider" != "claude-sonnet" ]]; then
-        local alternate_provider
-        alternate_provider=$(pick_provider "" claude-sonnet)
-        if [[ -n "$alternate_provider" && "$alternate_provider" != "$logic_provider" ]]; then
-            sec_provider="$alternate_provider"
+    # Provider policy controls preference order, not eligibility. Any admitted
+    # provider with the registry `council` capability may still fill a seat when
+    # preferred providers are unavailable or denied.
+    preferred="$(octo_council_default_providers 2>/dev/null || true)"
+    for provider in $(printf '%s' "$preferred" | tr ',' ' '); do
+        canonical="$(octo_provider_canonical "$provider" 2>/dev/null || true)"
+        [[ -n "$canonical" ]] || continue
+        octo_provider_has_capability "$canonical" council || continue
+        if [[ "$canonical" == "claude" ]]; then
+            octo_provider_allowed claude-sonnet || continue
+            provider="claude-sonnet"
+        else
+            is_available "$canonical" || continue
+            octo_provider_allowed "$canonical" || continue
+            provider="$canonical"
         fi
-    fi
-    [[ -n "$sec_provider" ]] && emit "$sec_provider" "Security Reviewer" "Review for OWASP vulnerabilities, injection, auth flaws, data exposure in: $PROMPT"
+        _contains "$candidates" "$provider" || candidates="${candidates}${candidates:+ }${provider}"
+    done
 
-    emit_if_allowed "claude-sonnet" "Architecture Reviewer" "Review architecture, integration, API contracts, breaking changes in: $PROMPT"
+    # Append eligible council providers omitted from the preference policy so a
+    # usable backend can naturally replace an unavailable one.
+    for canonical in $(octo_provider_ids council 2>/dev/null); do
+        if [[ "$canonical" == "claude" ]]; then
+            octo_provider_allowed claude-sonnet || continue
+            provider="claude-sonnet"
+        else
+            is_available "$canonical" || continue
+            octo_provider_allowed "$canonical" || continue
+            provider="$canonical"
+        fi
+        _contains "$candidates" "$provider" || candidates="${candidates}${candidates:+ }${provider}"
+    done
 
-    local cve_provider
-    if is_available perplexity; then
-        cve_provider="perplexity"
-    else
-        cve_provider=$(pick_provider "claude-sonnet" agy copilot qwen)
-    fi
-    [[ -n "$cve_provider" ]] && emit "$cve_provider" "CVE Reviewer" "Check for known CVEs, library advisories, and security bulletins related to: $PROMPT"
+    for provider in $candidates; do
+        family=$(get_family "$provider")
+        if ! _contains "$used_families" "$family"; then
+            first="${first}${first:+ }${provider}"
+            used_families="${used_families}${used_families:+ }${family}"
+        else
+            rest="${rest}${rest:+ }${provider}"
+        fi
+    done
+    printf '%s\n' "${first}${rest:+ $rest}"
+}
+
+build_review_fleet() {
+    local order
+    order="$(build_council_order)"
+    # shellcheck disable=SC2206
+    local providers=($order)
+    local count=${#providers[@]}
+    [[ $count -gt 0 ]] || return 0
+
+    local labels=("Logic Reviewer" "Security Reviewer" "Architecture Reviewer" "CVE Reviewer")
+    local prompts=(
+        "Review for correctness and logic bugs, edge cases, regressions in: $PROMPT"
+        "Review for OWASP vulnerabilities, injection, auth flaws, data exposure in: $PROMPT"
+        "Review architecture, integration, API contracts, breaking changes in: $PROMPT"
+        "Check for known CVEs, library advisories, and security bulletins related to: $PROMPT"
+    )
+    local i provider
+    for ((i=0; i<4; i++)); do
+        provider="${providers[$((i % count))]}"
+        emit "$provider" "${labels[$i]}" "${prompts[$i]}"
+    done
     return 0
 }
 
