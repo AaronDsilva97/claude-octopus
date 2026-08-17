@@ -34,10 +34,13 @@ run_gate() {
 
         COUNTS=($1)
         REVIEW_RCS=(${REVIEW_RC_SEQUENCE:-})
+        KEY_SEQ="${FINDING_KEY_SEQUENCE:-}"
         IDX_FILE="$RESULTS_DIR/count-idx"
         REVIEW_IDX_FILE="$RESULTS_DIR/review-idx"
+        KEY_IDX_FILE="$RESULTS_DIR/key-idx"
         echo 0 > "$IDX_FILE"
         echo 0 > "$REVIEW_IDX_FILE"
+        echo 0 > "$KEY_IDX_FILE"
         CORRECTION_CALLS=0
 
         source "$2/scripts/lib/workflows.sh" 2>/dev/null
@@ -64,6 +67,17 @@ run_gate() {
             echo "$c"
         }
         tangle_findings_signature() { echo "sig-$(cat "$IDX_FILE")"; }
+        tangle_normal_finding_keys() {
+            local idx c i
+            idx=$(cat "$KEY_IDX_FILE")
+            echo $((idx + 1)) > "$KEY_IDX_FILE"
+            if [[ -n "$KEY_SEQ" ]]; then
+                printf "%s\n" "$KEY_SEQ" | sed -n "$((idx + 1))p" | tr "," "\n"
+            else
+                c="${COUNTS[$idx]:-0}"
+                for ((i=1; i<=c; i++)); do echo "same-$i"; done
+            fi
+        }
         tangle_validation_signature() { echo "vsig"; }
         tangle_apply_review_corrections() {
             CORRECTION_CALLS=$((CORRECTION_CALLS + 1))
@@ -122,6 +136,25 @@ if [[ "$out" == "rounds=3 rc=1" ]]; then
     test_pass
 else
     test_fail "expected rounds=3 rc=1, got '$out'"
+fi
+
+test_case "resolved blocker identities reset convergence even without a new best count"
+# Best count reaches 3, then later reviews expose different blockers. Each round
+# resolves at least one blocker from the immediately previous review, so the
+# no-progress watchdog must not stop before the hard cap / eventual convergence.
+out=$(FINDING_KEY_SEQUENCE=$'a,b,c,d,e,f,g\na,b,c\nd,e,f,g,h,i,j\nd,e,f,g,h,i,j\ne,f,g,h,i' OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 OCTOPUS_TANGLE_CORRECTION_HARD_CAP=5 run_gate "7 3 7 7 5 0")
+if [[ "$out" == "rounds=5 rc=0" ]]; then
+    test_pass
+else
+    test_fail "expected identity-aware progress to continue to zero, got '$out'"
+fi
+
+test_case "rewritten count without resolved identities still trips convergence guard"
+out=$(FINDING_KEY_SEQUENCE=$'a,b,c,d,e\na,b,c,d,e\na,b,c,d,e\na,b,c,d,e' OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "5 5 5 5 5")
+if [[ "$out" == "rounds=3 rc=1" ]]; then
+    test_pass
+else
+    test_fail "expected unchanged blocker identities to stop at 3 rounds, got '$out'"
 fi
 
 test_case "hard cap stops improving-but-never-zero loop"
