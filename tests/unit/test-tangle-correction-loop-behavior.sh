@@ -34,6 +34,7 @@ run_gate() {
 
         COUNTS=($1)
         REVIEW_RCS=(${REVIEW_RC_SEQUENCE:-})
+        CORRECTION_STATUSES=(${CORRECTION_STATUS_SEQUENCE:-})
         KEY_SEQ="${FINDING_KEY_SEQUENCE:-}"
         IDX_FILE="$RESULTS_DIR/count-idx"
         REVIEW_IDX_FILE="$RESULTS_DIR/review-idx"
@@ -42,6 +43,7 @@ run_gate() {
         echo 0 > "$REVIEW_IDX_FILE"
         echo 0 > "$KEY_IDX_FILE"
         CORRECTION_CALLS=0
+        CORRECTION_STRATEGIES=()
 
         source "$2/scripts/lib/workflows.sh" 2>/dev/null
 
@@ -80,19 +82,37 @@ run_gate() {
         }
         tangle_validation_signature() { echo "vsig"; }
         tangle_apply_review_corrections() {
+            CORRECTION_STRATEGIES+=("${6:-}")
+            local status="${CORRECTION_STATUSES[$((CORRECTION_CALLS))]:-done}"
             CORRECTION_CALLS=$((CORRECTION_CALLS + 1))
-            TANGLE_CORRECTION_STATUS="done"
-            TANGLE_CORRECTION_CHANGED=1
+            TANGLE_CORRECTION_STATUS="$status"
             TANGLE_CORRECTION_CONTAMINATION=""
             TANGLE_CORRECTION_FILE="$RESULTS_DIR/corr-$CORRECTION_CALLS.md"
-            return 0
+            case "$status" in
+                failed-no-progress)
+                    TANGLE_CORRECTION_CHANGED=0
+                    return 1
+                    ;;
+                interrupted-partial)
+                    TANGLE_CORRECTION_CHANGED=0
+                    return 1
+                    ;;
+                *)
+                    TANGLE_CORRECTION_CHANGED=1
+                    return 0
+                    ;;
+            esac
         }
         validate_tangle_results() { return 0; }
 
         rc=0
         tangle_contextual_review_gate tg "prompt" "ctx" "subtasks" \
             "$RESULTS_DIR/validation.md" "$RESULTS_DIR/wt.txt" 0 codex || rc=$?
-        echo "rounds=$CORRECTION_CALLS rc=$rc"
+        if [[ "${ASSERT_STRATEGIES:-0}" == "1" ]]; then
+            echo "rounds=$CORRECTION_CALLS rc=$rc strategies=${CORRECTION_STRATEGIES[*]}"
+        else
+            echo "rounds=$CORRECTION_CALLS rc=$rc"
+        fi
     ' _ "$seq" "$PROJECT_ROOT"
 }
 
@@ -128,6 +148,30 @@ if [[ "$out" == "rounds=1 rc=1" ]]; then
     test_pass
 else
     test_fail "expected rounds=1 rc=1, got '$out'"
+fi
+
+test_case "single failed-no-progress round consumes convergence budget and retries"
+out=$(ASSERT_STRATEGIES=1 CORRECTION_STATUS_SEQUENCE="failed-no-progress done" OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "2 1 0")
+if [[ "$out" == "rounds=3 rc=0 strategies=delta single-finding delta" ]]; then
+    test_pass
+else
+    test_fail "expected failed-no-progress retry to recover, got '$out'"
+fi
+
+test_case "three consecutive failed-no-progress rounds stop at convergence limit"
+out=$(ASSERT_STRATEGIES=1 CORRECTION_STATUS_SEQUENCE="failed-no-progress failed-no-progress failed-no-progress done" OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "2 1 0")
+if [[ "$out" == "rounds=3 rc=1 strategies=delta single-finding single-finding" ]]; then
+    test_pass
+else
+    test_fail "expected three failed-no-progress rounds to stop, got '$out'"
+fi
+
+test_case "interrupted correction remains terminal"
+out=$(ASSERT_STRATEGIES=1 CORRECTION_STATUS_SEQUENCE="interrupted-partial done" OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "2 1 0")
+if [[ "$out" == "rounds=1 rc=1 strategies=delta" ]]; then
+    test_pass
+else
+    test_fail "expected interrupted correction to remain terminal, got '$out'"
 fi
 
 test_case "static blockers trip convergence guard (default 3 no-progress rounds)"

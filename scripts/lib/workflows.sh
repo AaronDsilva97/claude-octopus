@@ -3470,9 +3470,22 @@ tangle_contextual_review_gate() {
             return 1
         fi
 
-        if ! tangle_apply_review_corrections "$resolved_prompt" "$review_context_file" "$findings_file" "$correction_round" "$tangle_coding_agent" "$correction_strategy"; then
-            log WARN "Correction round ${correction_round} made no observable progress; escalating without starting a hot loop"
-            return 1
+        local correction_rc=0
+        tangle_apply_review_corrections "$resolved_prompt" "$review_context_file" "$findings_file" "$correction_round" "$tangle_coding_agent" "$correction_strategy" || correction_rc=$?
+        if [[ "$correction_rc" -ne 0 ]]; then
+            if [[ "${TANGLE_CORRECTION_STATUS:-}" == "failed-no-progress" && "${TANGLE_CORRECTION_CHANGED:-0}" != "1" ]]; then
+                no_progress_rounds=$((no_progress_rounds + 1))
+                correction_strategy="single-finding"
+                log WARN "Correction round ${correction_round} made no observable worktree progress (${no_progress_rounds}/${convergence_round_limit}); retrying under convergence policy"
+                if [[ "${convergence_round_limit:-0}" -gt 0 && "$no_progress_rounds" -ge "$convergence_round_limit" ]]; then
+                    log ERROR "Stopping tangle correction loop after ${no_progress_rounds} consecutive failed-no-progress rounds"
+                    return 1
+                fi
+                ((correction_round++)) || true
+                continue
+            fi
+            log WARN "Correction round ${correction_round} failed with terminal status=${TANGLE_CORRECTION_STATUS:-unknown}; stopping correction loop"
+            return "$correction_rc"
         fi
 
         if [[ -n "${TANGLE_CORRECTION_CONTAMINATION:-}" ]]; then
