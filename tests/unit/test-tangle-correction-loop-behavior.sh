@@ -39,9 +39,13 @@ run_gate() {
         IDX_FILE="$RESULTS_DIR/count-idx"
         REVIEW_IDX_FILE="$RESULTS_DIR/review-idx"
         KEY_IDX_FILE="$RESULTS_DIR/key-idx"
+        VALIDATE_CALLS_FILE="$RESULTS_DIR/validate-calls"
+        REVIEW_CALLS_FILE="$RESULTS_DIR/context-review-calls"
         echo 0 > "$IDX_FILE"
         echo 0 > "$REVIEW_IDX_FILE"
         echo 0 > "$KEY_IDX_FILE"
+        echo 0 > "$VALIDATE_CALLS_FILE"
+        echo 0 > "$REVIEW_CALLS_FILE"
         CORRECTION_CALLS=0
         CORRECTION_STRATEGIES=()
 
@@ -49,7 +53,9 @@ run_gate() {
 
         tangle_build_develop_review_context() { echo "$RESULTS_DIR/ctx-$7.md"; }
         tangle_run_context_code_review() {
-            local ridx rc
+            local ridx rc calls
+            calls=$(cat "$REVIEW_CALLS_FILE")
+            echo $((calls + 1)) > "$REVIEW_CALLS_FILE"
             TANGLE_REVIEW_FINDINGS_FILE="$RESULTS_DIR/findings-$3.json"
             echo "{\"findings\":[]}" > "$TANGLE_REVIEW_FINDINGS_FILE"
             ridx=$(cat "$REVIEW_IDX_FILE")
@@ -103,13 +109,18 @@ run_gate() {
                     ;;
             esac
         }
-        validate_tangle_results() { return 0; }
+        validate_tangle_results() {
+            local calls
+            calls=$(cat "$VALIDATE_CALLS_FILE")
+            echo $((calls + 1)) > "$VALIDATE_CALLS_FILE"
+            return 0
+        }
 
         rc=0
         tangle_contextual_review_gate tg "prompt" "ctx" "subtasks" \
             "$RESULTS_DIR/validation.md" "$RESULTS_DIR/wt.txt" 0 codex || rc=$?
         if [[ "${ASSERT_STRATEGIES:-0}" == "1" ]]; then
-            echo "rounds=$CORRECTION_CALLS rc=$rc strategies=${CORRECTION_STRATEGIES[*]}"
+            echo "rounds=$CORRECTION_CALLS rc=$rc strategies=${CORRECTION_STRATEGIES[*]} validate=$(cat "$VALIDATE_CALLS_FILE") reviews=$(cat "$REVIEW_CALLS_FILE")"
         else
             echo "rounds=$CORRECTION_CALLS rc=$rc"
         fi
@@ -152,7 +163,7 @@ fi
 
 test_case "single failed-no-progress round consumes convergence budget and retries"
 out=$(ASSERT_STRATEGIES=1 CORRECTION_STATUS_SEQUENCE="failed-no-progress done" OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "2 1 0")
-if [[ "$out" == "rounds=3 rc=0 strategies=delta single-finding delta" ]]; then
+if [[ "$out" == "rounds=3 rc=0 strategies=delta single-finding delta validate=2 reviews=3" ]]; then
     test_pass
 else
     test_fail "expected failed-no-progress retry to recover, got '$out'"
@@ -160,7 +171,7 @@ fi
 
 test_case "three consecutive failed-no-progress rounds stop at convergence limit"
 out=$(ASSERT_STRATEGIES=1 CORRECTION_STATUS_SEQUENCE="failed-no-progress failed-no-progress failed-no-progress done" OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "2 1 0")
-if [[ "$out" == "rounds=3 rc=1 strategies=delta single-finding single-finding" ]]; then
+if [[ "$out" == "rounds=3 rc=1 strategies=delta single-finding single-finding validate=0 reviews=1" ]]; then
     test_pass
 else
     test_fail "expected three failed-no-progress rounds to stop, got '$out'"
@@ -168,7 +179,7 @@ fi
 
 test_case "interrupted correction remains terminal"
 out=$(ASSERT_STRATEGIES=1 CORRECTION_STATUS_SEQUENCE="interrupted-partial done" OCTOPUS_TANGLE_CONVERGENCE_NO_PROGRESS_ROUNDS=3 run_gate "2 1 0")
-if [[ "$out" == "rounds=1 rc=1 strategies=delta" ]]; then
+if [[ "$out" == "rounds=1 rc=1 strategies=delta validate=0 reviews=1" ]]; then
     test_pass
 else
     test_fail "expected interrupted correction to remain terminal, got '$out'"
