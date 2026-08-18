@@ -341,6 +341,39 @@ DECEOF
 # Before tangle phase, each review role states its approach; conflicts are resolved.
 # After failures, a retrospective fires.
 
+# Resolve the default provider pool through the same provider-neutral council
+# builder used by review. This keeps admission, allowlist, capability and
+# provider-family diversity policy in one place. The design-review role is
+# applied later by run_agent_sync_consultative; provider choice remains separate.
+design_review_default_agents() {
+    local prompt="${1:-design review}"
+    local plugin_root="${PLUGIN_DIR:-}"
+    local helper fleet provider pool=""
+    if [[ -z "$plugin_root" ]]; then
+        plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+    fi
+    helper="$plugin_root/scripts/helpers/build-fleet.sh"
+    if [[ -x "$helper" ]]; then
+        fleet="$(bash "$helper" review standard "$prompt" 2>/dev/null || true)"
+        while IFS='|' read -r provider _; do
+            [[ -n "$provider" ]] || continue
+            pool="${pool}${pool:+ }${provider}"
+        done <<EOF
+$fleet
+EOF
+    fi
+
+    # Claude is the host runtime and remains the safe compatibility fallback if
+    # discovery cannot produce any admitted council provider.
+    [[ -n "$pool" ]] || pool="claude-sonnet"
+    # shellcheck disable=SC2206
+    local providers=($pool)
+    local count=${#providers[@]} i
+    for ((i=0; i<4; i++)); do
+        printf '%s\n' "${providers[$((i % count))]}"
+    done
+}
+
 design_review_ceremony() {
     local prompt="$1"
     local context="${2:-}"
@@ -376,14 +409,20 @@ State your HIGH-LEVEL approach in 3-5 bullet points:
 
 Be concise and specific. This is a planning exercise, not implementation."
 
-    # Gather approaches by semantic review role. Runtime executor/provider/model
-    # selection is separate from seat identity. The provider-named variables are
-    # compatibility aliases only and may be removed in a future major release.
+    # Gather approaches by semantic review role. Runtime provider selection uses
+    # the same admitted, council-capable provider pool as review. Provider-named
+    # env vars remain compatibility aliases only; they no longer define defaults.
     local seat_1_approach="" seat_2_approach="" seat_3_approach=""
-    local design_implementer_agent="${OCTOPUS_DESIGN_REVIEW_IMPLEMENTER_AGENT:-${OCTOPUS_DESIGN_REVIEW_CODEX_AGENT:-codex-mini}}"
-    local design_researcher_agent="${OCTOPUS_DESIGN_REVIEW_RESEARCHER_AGENT:-${OCTOPUS_DESIGN_REVIEW_AGY_AGENT:-${OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT:-agy}}}"
-    local design_code_reviewer_agent="${OCTOPUS_DESIGN_REVIEW_CODE_REVIEWER_AGENT:-${OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT:-claude-sonnet}}"
-    local design_synthesizer_agent="${OCTOPUS_DESIGN_REVIEW_SYNTHESIZER_AGENT:-${OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT:-claude-opus}}"
+    local design_defaults design_implementer_default design_researcher_default design_code_reviewer_default design_synthesizer_default
+    design_defaults="$(design_review_default_agents "$prompt")"
+    design_implementer_default="$(printf '%s\n' "$design_defaults" | sed -n '1p')"
+    design_researcher_default="$(printf '%s\n' "$design_defaults" | sed -n '2p')"
+    design_code_reviewer_default="$(printf '%s\n' "$design_defaults" | sed -n '3p')"
+    design_synthesizer_default="$(printf '%s\n' "$design_defaults" | sed -n '4p')"
+    local design_implementer_agent="${OCTOPUS_DESIGN_REVIEW_IMPLEMENTER_AGENT:-${OCTOPUS_DESIGN_REVIEW_CODEX_AGENT:-$design_implementer_default}}"
+    local design_researcher_agent="${OCTOPUS_DESIGN_REVIEW_RESEARCHER_AGENT:-${OCTOPUS_DESIGN_REVIEW_AGY_AGENT:-${OCTOPUS_DESIGN_REVIEW_GEMINI_AGENT:-$design_researcher_default}}}"
+    local design_code_reviewer_agent="${OCTOPUS_DESIGN_REVIEW_CODE_REVIEWER_AGENT:-${OCTOPUS_DESIGN_REVIEW_CLAUDE_AGENT:-$design_code_reviewer_default}}"
+    local design_synthesizer_agent="${OCTOPUS_DESIGN_REVIEW_SYNTHESIZER_AGENT:-${OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT:-$design_synthesizer_default}}"
     local design_timeout="${OCTOPUS_DESIGN_REVIEW_TIMEOUT:-0}"
     local design_synth_timeout="${OCTOPUS_DESIGN_REVIEW_SYNTH_TIMEOUT:-0}"
     if [[ ! "$design_timeout" =~ ^[0-9]+$ ]]; then

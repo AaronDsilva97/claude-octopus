@@ -26,10 +26,13 @@ cat >"$TMP_HOME/.claude-octopus/config/providers.json" <<'EOF'
   "version":"3.0",
   "providers": {
     "codex": {"default":"gpt-5.6-sol"},
-    "commandcode": {"default":"deepseek/deepseek-v4-flash"},
+    "commandcode": {
+      "default":"deepseek/deepseek-v4-flash",
+      "roles":{"architecture-reviewer":"minimaxai/minimax-m3"}
+    },
     "claude": {"default":"claude-sonnet-5"}
   },
-  "routing":{"phases":{},"roles":{"architecture-reviewer":{"provider":"commandcode","model":"minimaxai/minimax-m3"}}},
+  "routing":{"phases":{},"roles":{}},
   "tiers":{},
   "overrides":{}
 }
@@ -80,7 +83,7 @@ case "$labels" in
   *) test_fail "review role labels changed: $labels" ;;
 esac
 
-test_case "role routing resolves a role-specific model without changing provider identity"
+test_case "provider-local role model resolves without changing provider identity"
 log() { :; }
 export PLUGIN_DIR="$PROJECT_ROOT"
 export OCTOPUS_PLATFORM=Linux
@@ -89,7 +92,16 @@ model="$(resolve_octopus_model commandcode commandcode review architecture-revie
 if [[ "$model" == "minimaxai/minimax-m3" ]]; then
   test_pass
 else
-  test_fail "expected role-routed MiniMax model, got '$model'"
+  test_fail "expected provider-local MiniMax role model, got '$model'"
+fi
+
+test_case "provider-local role model does not become a provider route"
+source "$PROJECT_ROOT/scripts/lib/execution-profile.sh"
+provider="$(octopus_execution_profile_provider review review architecture-reviewer commandcode)"
+if [[ "$provider" == "commandcode" ]]; then
+  test_pass
+else
+  test_fail "provider-local role model changed provider selection to '$provider'"
 fi
 
 test_summary
