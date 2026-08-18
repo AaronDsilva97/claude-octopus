@@ -21,8 +21,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/../lib/cursor-agent.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/../lib/provider-registry.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/../lib/provider-policy.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/../lib/provider-registry.sh"
+source "${SCRIPT_DIR}/../lib/provider-policy.sh"
 
 WORKFLOW="${1:-research}"
 INTENSITY="${2:-standard}"
@@ -287,7 +287,7 @@ build_council_order() {
     # Provider policy controls preference order, not eligibility. Any admitted
     # provider with the registry `council` capability may still fill a seat when
     # preferred providers are unavailable or denied.
-    preferred="$(octo_council_default_providers 2>/dev/null || true)"
+    preferred="$(octo_council_default_providers)" || return $?
     for provider in $(printf '%s' "$preferred" | tr ',' ' '); do
         canonical="$(octo_provider_canonical "$provider" 2>/dev/null || true)"
         [[ -n "$canonical" ]] || continue
@@ -331,7 +331,7 @@ build_council_order() {
 
 build_review_fleet() {
     local order
-    order="$(build_council_order)"
+    order="$(build_council_order)" || return $?
     # shellcheck disable=SC2206
     local providers=($order)
     local count=${#providers[@]}
