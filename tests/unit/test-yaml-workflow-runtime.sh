@@ -202,4 +202,73 @@ else
     test_pass
 fi
 
+# ── same-phase sibling template substitution (issue #944) ───────────────────
+# embrace.yaml's ink phase briefs its sequential synthesis agent with
+# {{ink_codex}} / {{ink_agy}} — the parallel siblings' own outputs, not the
+# previous phase's output. Those must reach the sequential agent's prompt.
+OPENAI_API_KEY="test-key"
+ANTIGRAVITY_API_KEY="test-key"
+spawn_agent_capture_pid() {
+    local agent_type="$1" agent_prompt="$2" task_id="$3"
+    echo "spawn:$agent_type:$task_id" >> "$SPAWN_LOG"
+    printf '%s' "$agent_prompt" > "$TEST_TMP_DIR/prompt-${task_id}.txt"
+    (
+        sleep 1
+        echo "output of $agent_type for $task_id" > "$RESULTS_DIR/${agent_type}-${task_id}.md"
+        echo "0" > "$WORKSPACE_DIR/.octo/agents/${task_id}.done"
+    ) &
+    echo $!
+}
+spawn_agent() { spawn_agent_capture_pid "$@" >/dev/null; }
+
+SIB_YAML="$TEST_TMP_DIR/sibling.yaml"
+cat > "$SIB_YAML" <<'EOF'
+name: mini-sibling
+description: "mini sibling workflow"
+version: "1.0.0"
+
+phases:
+  - name: beta
+    alias: beta
+    description: "Beta phase"
+    emoji: "B"
+    agents:
+      - provider: codex
+        role: "Quality"
+        parallel: true
+        prompt_template: |
+          Quality check: {{prompt}}
+      - provider: agy
+        role: "Security"
+        parallel: true
+        prompt_template: |
+          Security check: {{prompt}}
+      - provider: claude
+        role: "Synthesis"
+        parallel: false
+        prompt_template: |
+          Combine:
+          - Quality: {{beta_codex}}
+          - Security: {{beta_agy}}
+    quality_gate:
+      threshold: 1.0
+
+quality_gates:
+  consensus:
+    threshold: 0.75
+EOF
+
+execute_workflow_phase "$SIB_YAML" "beta" "test prompt" "" "tg3" >/dev/null 2>&1
+seq_prompt=$(cat "$TEST_TMP_DIR/prompt-beta-tg3-2.txt" 2>/dev/null || true)
+
+test_case "sequential agent prompt substitutes same-phase sibling vars"
+if [[ "$seq_prompt" == *"output of codex for beta-tg3-0"* \
+      && "$seq_prompt" == *"output of agy for beta-tg3-1"* \
+      && "$seq_prompt" != *'{{beta_codex}}'* \
+      && "$seq_prompt" != *'{{beta_agy}}'* ]]; then
+    test_pass
+else
+    test_fail "sibling vars not substituted: $(printf '%s' "$seq_prompt" | head -c 200)"
+fi
+
 test_summary

@@ -211,6 +211,42 @@ resolve_prompt_template() {
     echo "$resolved"
 }
 
+# Substitute {{<phase>_<provider>}} variables (e.g. {{ink_codex}}, {{ink_agy}})
+# with that same-phase sibling agent's own result content. Only meaningful for
+# a sequential agent's template, since it runs after its phase's parallel
+# agents have already written their result files; a variable naming a sibling
+# that hasn't produced a result yet (still running, skipped, or unknown
+# provider) is left as-is rather than silently dropped.
+_yaml_resolve_sibling_vars() {
+    local template="$1"
+    local phase_name="$2"
+    local task_group="$3"
+
+    [[ "$template" == *"{{${phase_name}_"* ]] || { echo "$template"; return 0; }
+
+    local resolved="$template"
+    local sib_provider
+    for sib_provider in codex agy claude cursor-agent; do
+        local sib_var="{{${phase_name}_${sib_provider}}}"
+        [[ "$resolved" == *"$sib_var"* ]] || continue
+
+        local sib_agent_type="$sib_provider"
+        [[ "$sib_provider" == "claude" ]] && sib_agent_type="claude-sonnet"
+
+        local sib_file
+        sib_file=$(ls -t "${RESULTS_DIR}"/${sib_agent_type}-${phase_name}-${task_group}-*.md 2>/dev/null | head -1)
+        if [[ -n "$sib_file" && -f "$sib_file" ]]; then
+            local sib_output
+            sib_output=$(cat "$sib_file" 2>/dev/null)
+            resolved="${resolved//$sib_var/$sib_output}"
+        else
+            log "WARN" "Template variable $sib_var in phase $phase_name has no sibling result yet; leaving it unsubstituted"
+        fi
+    done
+
+    echo "$resolved"
+}
+
 _yaml_wait_for_pids() {
     local max_wait="${1:-${TIMEOUT:-600}}"
     shift || true
@@ -332,11 +368,23 @@ execute_workflow_phase() {
 
         local task_id="${phase_name}-${task_group}-${agent_idx}"
 
+        # A sequential agent's template may reference a same-phase sibling's
+        # own output (e.g. {{ink_codex}}, {{ink_agy}}). That output only
+        # exists once the sibling's result file is written, so wait for the
+        # parallel agents here, before resolving this agent's prompt, rather
+        # than after (the previous order left those variables unsubstituted).
+        if [[ "$is_parallel" != "true" && ${#pids[@]} -gt 0 ]]; then
+            log "DEBUG" "Waiting for ${#pids[@]} parallel agents before sequential agent"
+            _yaml_wait_for_pids "${TIMEOUT:-600}" "${pids[@]}"
+            pids=()
+        fi
+
         # Resolve prompt template
         local agent_prompt
         agent_prompt=$(yaml_get_agent_prompt "$yaml_file" "$phase_name" "$provider")
         if [[ -n "$agent_prompt" ]]; then
             agent_prompt=$(resolve_prompt_template "$agent_prompt" "$prompt" "$previous_output")
+            agent_prompt=$(_yaml_resolve_sibling_vars "$agent_prompt" "$phase_name" "$task_group")
         else
             # Fallback: construct prompt from role
             agent_prompt="$role: $prompt"
@@ -377,12 +425,6 @@ $previous_output"
             pid=$(spawn_agent_capture_pid "$agent_type" "$agent_prompt" "$task_id" "$role" "$phase_name")
             pids+=("$pid")
         else
-            # Sequential agent - wait for parallel agents first
-            if [[ ${#pids[@]} -gt 0 ]]; then
-                log "DEBUG" "Waiting for ${#pids[@]} parallel agents before sequential agent"
-                _yaml_wait_for_pids "${TIMEOUT:-600}" "${pids[@]}"
-                pids=()
-            fi
             # spawn_agent backgrounds the provider internally, so capture the
             # PID and block until it exits. Without this the phase synthesized
             # and moved on while its sequential agent was still running, losing
