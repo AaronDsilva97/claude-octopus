@@ -381,6 +381,15 @@ execute_workflow_phase() {
             log "DEBUG" "Waiting for ${#pids[@]} parallel agents before sequential agent"
             _yaml_wait_for_pids "${TIMEOUT:-600}" "${pids[@]}"
             pids=()
+            # A PID wait alone races the result-file write (see
+            # _yaml_wait_for_done_markers above): the spawn wrapper writes the
+            # file and its .done marker after the provider PID exits. Wait for
+            # the markers too, or _yaml_resolve_sibling_vars below can read a
+            # sibling result file that isn't fully written yet.
+            if [[ ${#spawned_tasks[@]} -gt 0 ]]; then
+                _yaml_wait_for_done_markers "${OCTOPUS_YAML_DONE_WAIT:-30}" "${spawned_tasks[@]}" \
+                    || log "WARN" "Phase $phase_name: sibling completion markers not all seen before sequential agent"
+            fi
         fi
 
         # Resolve prompt template
