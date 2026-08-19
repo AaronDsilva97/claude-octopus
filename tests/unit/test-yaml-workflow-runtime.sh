@@ -298,4 +298,55 @@ else
     test_fail "expected unresolved placeholders + integrity warnings: prompt='$(printf '%s' "$seq_prompt_bad" | head -c 200)' log='$(cat "$LOG_CAPTURE" 2>/dev/null)'"
 fi
 
+# A sequential agent that follows another *sequential* agent (no intervening
+# parallel batch) must still see that sibling's output: the marker wait must
+# not be gated on a non-empty `pids` array, since sequential spawns never
+# populate it.
+log() { :; }
+verify_result_integrity() { return 0; }
+
+GAMMA_YAML="$TEST_TMP_DIR/gamma.yaml"
+cat > "$GAMMA_YAML" <<'EOF'
+name: mini-gamma
+description: "mini chained-sequential workflow"
+version: "1.0.0"
+
+phases:
+  - name: gamma
+    alias: gamma
+    description: "Gamma phase"
+    emoji: "G"
+    agents:
+      - provider: codex
+        role: "First"
+        parallel: false
+        prompt_template: |
+          First: {{prompt}}
+      - provider: claude
+        role: "Second"
+        parallel: false
+        prompt_template: |
+          Second combining: {{gamma_codex}}
+    quality_gate:
+      threshold: 1.0
+
+quality_gates:
+  consensus:
+    threshold: 0.75
+EOF
+
+phase_status=0
+execute_workflow_phase "$GAMMA_YAML" "gamma" "test prompt" "" "tg5" >/dev/null 2>&1 || phase_status=$?
+seq_chain_prompt=$(cat "$TEST_TMP_DIR/prompt-gamma-tg5-1.txt" 2>/dev/null || true)
+
+test_case "sequential agent prompt substitutes a preceding sequential sibling's output"
+if (( phase_status != 0 )); then
+    test_fail "execute_workflow_phase failed with status $phase_status"
+elif [[ "$seq_chain_prompt" == *"output of codex for gamma-tg5-0"* \
+      && "$seq_chain_prompt" != *'{{gamma_codex}}'* ]]; then
+    test_pass
+else
+    test_fail "chained sequential sibling not substituted: $(printf '%s' "$seq_chain_prompt" | head -c 200)"
+fi
+
 test_summary

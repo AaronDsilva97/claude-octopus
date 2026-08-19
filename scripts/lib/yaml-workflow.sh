@@ -213,10 +213,13 @@ resolve_prompt_template() {
 
 # Substitute {{<phase>_<provider>}} variables (e.g. {{ink_codex}}, {{ink_agy}})
 # with that same-phase sibling agent's own result content. Only meaningful for
-# a sequential agent's template, since it runs after its phase's parallel
-# agents have already written their result files; a variable naming a sibling
-# that hasn't produced a result yet (still running, skipped, or unknown
-# provider) is left as-is rather than silently dropped.
+# a sequential agent's template, since it runs after its phase's earlier
+# agents have already written their result files. A variable naming a sibling
+# that hasn't produced a result yet (still running, skipped, or failed
+# integrity verification) is left as-is rather than silently dropped -- but
+# only for the providers this loop knows about (codex, agy, claude,
+# cursor-agent); a variable naming any other provider isn't inspected at all
+# and is left unresolved with no warning.
 _yaml_resolve_sibling_vars() {
     local template="$1"
     local phase_name="$2"
@@ -377,15 +380,20 @@ execute_workflow_phase() {
         # exists once the sibling's result file is written, so wait for the
         # parallel agents here, before resolving this agent's prompt, rather
         # than after (the previous order left those variables unsubstituted).
-        if [[ "$is_parallel" != "true" && ${#pids[@]} -gt 0 ]]; then
-            log "DEBUG" "Waiting for ${#pids[@]} parallel agents before sequential agent"
-            _yaml_wait_for_pids "${TIMEOUT:-600}" "${pids[@]}"
-            pids=()
+        if [[ "$is_parallel" != "true" ]]; then
+            if [[ ${#pids[@]} -gt 0 ]]; then
+                log "DEBUG" "Waiting for ${#pids[@]} parallel agents before sequential agent"
+                _yaml_wait_for_pids "${TIMEOUT:-600}" "${pids[@]}"
+                pids=()
+            fi
             # A PID wait alone races the result-file write (see
             # _yaml_wait_for_done_markers above): the spawn wrapper writes the
             # file and its .done marker after the provider PID exits. Wait for
-            # the markers too, or _yaml_resolve_sibling_vars below can read a
-            # sibling result file that isn't fully written yet.
+            # the markers of every sibling spawned so far in this phase --
+            # not just the just-finished parallel batch -- so a sequential
+            # agent that follows another sequential agent (no intervening
+            # parallel batch, so `pids` alone would look empty) still gets a
+            # fully-written file before _yaml_resolve_sibling_vars reads it.
             if [[ ${#spawned_tasks[@]} -gt 0 ]]; then
                 _yaml_wait_for_done_markers "${OCTOPUS_YAML_DONE_WAIT:-30}" "${spawned_tasks[@]}" \
                     || log "WARN" "Phase $phase_name: sibling completion markers not all seen before sequential agent"
