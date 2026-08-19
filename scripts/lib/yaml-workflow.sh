@@ -236,6 +236,10 @@ _yaml_resolve_sibling_vars() {
         local sib_file
         sib_file=$(ls -t "${RESULTS_DIR}"/${sib_agent_type}-${phase_name}-${task_group}-*.md 2>/dev/null | head -1)
         if [[ -n "$sib_file" && -f "$sib_file" ]]; then
+            if ! verify_result_integrity "$sib_file"; then
+                log "WARN" "Sibling result failed integrity verification: $sib_file"
+                continue
+            fi
             local sib_output
             sib_output=$(cat "$sib_file" 2>/dev/null)
             resolved="${resolved//$sib_var/$sib_output}"
