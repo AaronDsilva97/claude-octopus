@@ -380,6 +380,7 @@ execute_workflow_phase() {
         # exists once the sibling's result file is written, so wait for the
         # parallel agents here, before resolving this agent's prompt, rather
         # than after (the previous order left those variables unsubstituted).
+        local _sibling_markers_ready=true
         if [[ "$is_parallel" != "true" ]]; then
             if [[ ${#pids[@]} -gt 0 ]]; then
                 log "DEBUG" "Waiting for ${#pids[@]} parallel agents before sequential agent"
@@ -395,8 +396,10 @@ execute_workflow_phase() {
             # parallel batch, so `pids` alone would look empty) still gets a
             # fully-written file before _yaml_resolve_sibling_vars reads it.
             if [[ ${#spawned_tasks[@]} -gt 0 ]]; then
-                _yaml_wait_for_done_markers "${OCTOPUS_YAML_DONE_WAIT:-30}" "${spawned_tasks[@]}" \
-                    || log "WARN" "Phase $phase_name: sibling completion markers not all seen before sequential agent"
+                if ! _yaml_wait_for_done_markers "${OCTOPUS_YAML_DONE_WAIT:-30}" "${spawned_tasks[@]}"; then
+                    _sibling_markers_ready=false
+                    log "WARN" "Phase $phase_name: sibling completion markers not all seen before sequential agent"
+                fi
             fi
         fi
 
@@ -405,7 +408,16 @@ execute_workflow_phase() {
         agent_prompt=$(yaml_get_agent_prompt "$yaml_file" "$phase_name" "$provider")
         if [[ -n "$agent_prompt" ]]; then
             agent_prompt=$(resolve_prompt_template "$agent_prompt" "$prompt" "$previous_output")
-            agent_prompt=$(_yaml_resolve_sibling_vars "$agent_prompt" "$phase_name" "$task_group")
+            if [[ "$_sibling_markers_ready" == "true" ]]; then
+                agent_prompt=$(_yaml_resolve_sibling_vars "$agent_prompt" "$phase_name" "$task_group")
+            else
+                # A result file that exists this early has no recorded hash yet,
+                # so verify_result_integrity would pass it as trivially valid --
+                # it can't tell "not yet hashed" from "tampered". Rather than risk
+                # splicing a partially-written sibling result into this prompt,
+                # skip substitution entirely and leave the placeholders as-is.
+                log "WARN" "Phase $phase_name: skipping sibling-var substitution for $task_id (markers not confirmed)"
+            fi
         else
             # Fallback: construct prompt from role
             agent_prompt="$role: $prompt"

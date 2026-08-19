@@ -349,4 +349,51 @@ else
     test_fail "chained sequential sibling not substituted: $(printf '%s' "$seq_chain_prompt" | head -c 200)"
 fi
 
+# A sibling that writes its result file but never writes its .done marker
+# (crash mid-write, killed before completion, etc.) must not have that file
+# spliced into the sequential agent's prompt: verify_result_integrity passes
+# a not-yet-hashed file trivially, so it can't be trusted to catch a partial
+# write. The whole sibling-substitution step must be skipped for this agent
+# when the marker wait times out, not just silently read whatever is on disk.
+OCTOPUS_YAML_DONE_WAIT=1
+LOG_CAPTURE="$TEST_TMP_DIR/log-capture-timeout.txt"
+: > "$LOG_CAPTURE"
+log() { [[ "$1" == "WARN" ]] && echo "$2" >> "$LOG_CAPTURE"; return 0; }
+verify_result_integrity() { return 0; }
+spawn_agent_capture_pid() {
+    local agent_type="$1" agent_prompt="$2" task_id="$3"
+    echo "spawn:$agent_type:$task_id" >> "$SPAWN_LOG"
+    printf '%s' "$agent_prompt" > "$TEST_TMP_DIR/prompt-${task_id}.txt"
+    if [[ "$agent_type" == "codex" ]]; then
+        # Writes its result file but never its .done marker.
+        echo "output of $agent_type for $task_id" > "$RESULTS_DIR/${agent_type}-${task_id}.md"
+        ( sleep 0.2 ) &
+        echo $!
+    else
+        (
+            sleep 0.2
+            echo "output of $agent_type for $task_id" > "$RESULTS_DIR/${agent_type}-${task_id}.md"
+            echo "0" > "$WORKSPACE_DIR/.octo/agents/${task_id}.done"
+        ) &
+        echo $!
+    fi
+}
+spawn_agent() { spawn_agent_capture_pid "$@" >/dev/null; }
+
+phase_status=0
+execute_workflow_phase "$SIB_YAML" "beta" "test prompt" "" "tg6" >/dev/null 2>&1 || phase_status=$?
+seq_prompt_timeout=$(cat "$TEST_TMP_DIR/prompt-beta-tg6-2.txt" 2>/dev/null || true)
+
+test_case "sibling substitution skipped entirely when the marker wait times out"
+if (( phase_status != 0 )); then
+    test_fail "execute_workflow_phase failed with status $phase_status"
+elif [[ "$seq_prompt_timeout" == *'{{beta_codex}}'* \
+      && "$seq_prompt_timeout" == *'{{beta_agy}}'* \
+      && "$seq_prompt_timeout" != *"output of codex for beta-tg6-0"* \
+      && $(grep -c "skipping sibling-var substitution" "$LOG_CAPTURE") -ge 1 ]]; then
+    test_pass
+else
+    test_fail "expected substitution skipped on marker timeout: prompt='$(printf '%s' "$seq_prompt_timeout" | head -c 200)' log='$(cat "$LOG_CAPTURE" 2>/dev/null)'"
+fi
+
 test_summary
