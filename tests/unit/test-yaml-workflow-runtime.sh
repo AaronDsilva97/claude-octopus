@@ -279,15 +279,20 @@ LOG_CAPTURE="$TEST_TMP_DIR/log-capture.txt"
 log() { [[ "$1" == "WARN" ]] && echo "$2" >> "$LOG_CAPTURE"; return 0; }
 verify_result_integrity() { return 1; }
 
-execute_workflow_phase "$SIB_YAML" "beta" "test prompt" "" "tg4" >/dev/null 2>&1
+phase_status=0
+execute_workflow_phase "$SIB_YAML" "beta" "test prompt" "" "tg4" >/dev/null 2>&1 || phase_status=$?
 seq_prompt_bad=$(cat "$TEST_TMP_DIR/prompt-beta-tg4-2.txt" 2>/dev/null || true)
 
 test_case "sequential agent prompt leaves sibling var unresolved when integrity check fails"
-if [[ "$seq_prompt_bad" == *'{{beta_codex}}'* \
+if (( phase_status != 0 )); then
+    test_fail "execute_workflow_phase failed with status $phase_status"
+elif [[ "$seq_prompt_bad" == *'{{beta_codex}}'* \
       && "$seq_prompt_bad" == *'{{beta_agy}}'* \
       && "$seq_prompt_bad" != *"output of codex for beta-tg4-0"* \
       && "$seq_prompt_bad" != *"output of agy for beta-tg4-1"* \
-      && $(grep -c "Sibling result failed integrity verification" "$LOG_CAPTURE") -ge 2 ]]; then
+      && $(grep -c "Sibling result failed integrity verification" "$LOG_CAPTURE") -ge 2 \
+      && $(grep -Fc "codex-beta-tg4-0" "$LOG_CAPTURE") -ge 1 \
+      && $(grep -Fc "agy-beta-tg4-1" "$LOG_CAPTURE") -ge 1 ]]; then
     test_pass
 else
     test_fail "expected unresolved placeholders + integrity warnings: prompt='$(printf '%s' "$seq_prompt_bad" | head -c 200)' log='$(cat "$LOG_CAPTURE" 2>/dev/null)'"
