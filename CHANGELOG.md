@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [9.66.0] - 2026-08-21
+
 ### Added
 
 - Opt-in one-vote-per-vendor council seating. Set
