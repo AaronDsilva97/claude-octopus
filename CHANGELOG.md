@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [9.66.0] - 2026-08-21
+
 ### Added
 
 - Opt-in one-vote-per-vendor council seating. Set
@@ -16,6 +18,30 @@
   panel *weighting*, which the quorum layer does not. Only the exact value
   `OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1` enables it; unset or any other value
   (including `0`) preserves today's roster exactly.
+
+### Changed
+
+- Installation and command docs now state that
+  `disable-model-invocation` is the expected default: Octopus stays dormant
+  until an explicit `/octo:*` command is invoked, while its hooks and statusline
+  remain available.
+
+### Fixed
+
+- Documented personas such as `backend-architect` now resolve through the
+  configured primary/fallback provider while preserving the requested persona
+  as the runtime role. Direct provider names keep their existing dispatch path,
+  so persona names are no longer rejected as unknown backends.
+- Review workflows now fail closed on invalid fleet policy or environment
+  configuration, honor role-specific routing precedence, preserve timeout
+  provenance, emit an incomplete Council liveness beacon when synthesis cannot
+  finish, and use case-sensitive Tangle runtime identities.
+- YAML workflows now wait for same-phase parallel siblings before sequential
+  synthesis, substitute verified sibling output (or an explicit unavailable
+  note), and halt instead of dispatching prompts with unresolved placeholders.
+- The parent PID wait window is now derived from the full summarizer budget,
+  including `OCTOPUS_AGENT_TIMEOUT` overrides, rather than expiring after a
+  fixed 120 seconds while a valid summarizer chain is still running.
 
 ## [9.65.0] - 2026-08-16
 
