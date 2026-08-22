@@ -40,5 +40,19 @@
       }
     },
     "additionalProperties": false
+  },
+  "contracts": {
+    "tools": [
+      "octopus_discover",
+      "octopus_define",
+      "octopus_develop",
+      "octopus_deliver",
+      "octopus_embrace",
+      "octopus_debate",
+      "octopus_council",
+      "octopus_review",
+      "octopus_security",
+      "octopus_list_skills"
+    ]
   }
 }

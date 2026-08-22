@@ -235,6 +235,74 @@ test_openclaw_plugin_json() {
     fi
 }
 
+test_openclaw_tool_contracts_match_runtime() {
+    test_case "OpenClaw manifest declares every registered agent tool"
+    if python3 - "$PROJECT_ROOT/openclaw/openclaw.plugin.json" \
+        "$PROJECT_ROOT/openclaw/src/index.ts" <<'PY'
+import json
+import re
+import sys
+
+def extract_registered_tools(source):
+    definitions = re.search(
+        r"const\s+WORKFLOW_DEFS\s*:\s*WorkflowDef\[\]\s*=\s*\[(.*?)\n\];"
+        r"\s*// --- Extension Entry Point ---",
+        source,
+        re.DOTALL,
+    )
+    registration_loop = re.search(
+        r"for\s*\(\s*const\s+def\s+of\s+WORKFLOW_DEFS\s*\)\s*\{(.*?)"
+        r"// Register introspection tool",
+        source,
+        re.DOTALL,
+    )
+    if definitions is None or registration_loop is None:
+        raise ValueError("workflow definitions are not registered through WORKFLOW_DEFS")
+
+    loop_body = registration_loop.group(1)
+    if not re.search(r"\bname:\s*def\.name\b", loop_body):
+        raise ValueError("registered workflow tools do not use def.name")
+    if not re.search(r"api\.registerTool\(\s*tool\s*\)", loop_body):
+        raise ValueError("workflow tool object is not passed to api.registerTool")
+
+    workflow_names = re.findall(
+        r"\bname:\s*[\"'](octopus_[a-z0-9_]+)[\"']",
+        definitions.group(1),
+    )
+    direct_names = re.findall(
+        r"api\.registerTool\(\s*\{.*?\bname:\s*[\"'](octopus_[a-z0-9_]+)[\"']",
+        source,
+        re.DOTALL,
+    )
+    register_calls = re.findall(r"api\.registerTool\(", source)
+    if len(register_calls) != 1 + len(direct_names):
+        raise ValueError("an api.registerTool call is not covered by contract extraction")
+
+    return workflow_names + direct_names
+
+manifest_path, source_path = sys.argv[1:]
+with open(manifest_path, encoding="utf-8") as handle:
+    manifest = json.load(handle)
+with open(source_path, encoding="utf-8") as handle:
+    source = handle.read()
+
+declared = manifest.get("contracts", {}).get("tools", [])
+registered = extract_registered_tools(source)
+valid = (
+    isinstance(declared, list)
+    and len(declared) == len(set(declared))
+    and len(registered) == len(set(registered))
+    and sorted(declared) == sorted(registered)
+)
+sys.exit(0 if valid else 1)
+PY
+    then
+        test_pass
+    else
+        test_fail "openclaw.plugin.json contracts.tools must exactly match registered OpenClaw tools"
+    fi
+}
+
 test_openclaw_correct_command_mapping() {
     test_case "OpenClaw extension uses correct orchestrate.sh command names"
     local src="$PROJECT_ROOT/openclaw/src/index.ts"
@@ -511,6 +579,7 @@ test_skill_schema_platform_support
 test_openclaw_package_json
 test_openclaw_extensions_field
 test_openclaw_plugin_json
+test_openclaw_tool_contracts_match_runtime
 test_openclaw_correct_command_mapping
 test_openclaw_flags_before_command
 
