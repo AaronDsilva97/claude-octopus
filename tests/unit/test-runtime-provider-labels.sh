@@ -93,7 +93,8 @@ fi
 run_design_review_dispatch_probe() {
   local mode="$1"
   local dispatch_log="$2"
-  env "MODE=${mode}" "PROJECT_ROOT=${PROJECT_ROOT}" "DISPATCH_LOG=${dispatch_log}" \
+  local event_log="${3:-${dispatch_log}.events}"
+  env "MODE=${mode}" "PROJECT_ROOT=${PROJECT_ROOT}" "DISPATCH_LOG=${dispatch_log}" "EVENT_LOG=${event_log}" \
     "WORKSPACE_DIR=${TEST_TMP_DIR}/workspace-${mode}" "DRY_RUN=false" "OCTOPUS_CEREMONIES=true" \
   bash -c '
     set -e
@@ -122,6 +123,9 @@ run_design_review_dispatch_probe() {
       export "OCTOPUS_DESIGN_REVIEW_SYNTH_AGENT=legacy-synth"
     fi
     : > "$DISPATCH_LOG"
+    : > "$EVENT_LOG"
+    # Probe fake seat aliases without inheriting repository/user allowlist policy.
+    octo_provider_allowed() { return 0; }
     run_agent_sync_consultative() {
       printf "%s|%s|%s\n" "$1" "$4" "$5" >> "$DISPATCH_LOG"
       printf "approach\n"
@@ -129,7 +133,14 @@ run_design_review_dispatch_probe() {
     octo_provider_identity_label() { printf "%s\n" "$1"; }
     octo_provider_identity_from_agent_type() { printf "%s\n" "$1"; }
     get_agent_model() { printf "test-model\n"; }
-    octo_event_emit() { :; }
+    octo_event_emit() {
+      local event="$1"
+      shift
+      printf "%s" "$event" >> "$EVENT_LOG"
+      local arg
+      for arg in "$@"; do printf "|%s" "$arg" >> "$EVENT_LOG"; done
+      printf "\n" >> "$EVENT_LOG"
+    }
     write_structured_decision() { :; }
     log() { :; }
     design_review_ceremony "test task" >/dev/null 2>&1 || true
@@ -139,10 +150,10 @@ run_design_review_dispatch_probe() {
 test_case "design review role overrides win over legacy provider-named overrides at runtime"
 role_log="$TEST_TMP_DIR/role-precedence.log"
 run_design_review_dispatch_probe role "$role_log"
-if grep -q '^role-implementer|implementer|ceremony$' "$role_log" &&
-   grep -q '^role-researcher|researcher|ceremony$' "$role_log" &&
-   grep -q '^role-reviewer|code-reviewer|ceremony$' "$role_log" &&
-   grep -q '^role-synthesizer|synthesizer|ceremony$' "$role_log" &&
+if grep -q '^role-implementer|design-feasibility-reviewer|ceremony$' "$role_log" &&
+   grep -q '^role-researcher|design-research-reviewer|ceremony$' "$role_log" &&
+   grep -q '^role-reviewer|design-code-reviewer|ceremony$' "$role_log" &&
+   grep -q '^role-synthesizer|design-synthesizer|ceremony$' "$role_log" &&
    ! grep -q 'legacy-' "$role_log"; then
   test_pass
 else
@@ -152,10 +163,10 @@ fi
 test_case "legacy provider-named design review overrides remain runtime fallbacks"
 legacy_log="$TEST_TMP_DIR/legacy-fallback.log"
 run_design_review_dispatch_probe legacy "$legacy_log"
-if grep -q '^legacy-codex|implementer|ceremony$' "$legacy_log" &&
-   grep -q '^legacy-agy|researcher|ceremony$' "$legacy_log" &&
-   grep -q '^legacy-claude|code-reviewer|ceremony$' "$legacy_log" &&
-   grep -q '^legacy-synth|synthesizer|ceremony$' "$legacy_log"; then
+if grep -q '^legacy-codex|design-feasibility-reviewer|ceremony$' "$legacy_log" &&
+   grep -q '^legacy-agy|design-research-reviewer|ceremony$' "$legacy_log" &&
+   grep -q '^legacy-claude|design-code-reviewer|ceremony$' "$legacy_log" &&
+   grep -q '^legacy-synth|design-synthesizer|ceremony$' "$legacy_log"; then
   test_pass
 else
   test_fail "legacy provider override did not remain a functional fallback"
@@ -164,30 +175,50 @@ fi
 test_case "legacy GEMINI design review override remains secondary researcher fallback"
 gemini_log="$TEST_TMP_DIR/gemini-fallback.log"
 run_design_review_dispatch_probe gemini "$gemini_log"
-if grep -q '^legacy-gemini|researcher|ceremony$' "$gemini_log" &&
-   ! grep -q '^legacy-agy|researcher|ceremony$' "$gemini_log"; then
+if grep -q '^legacy-gemini|design-research-reviewer|ceremony$' "$gemini_log" &&
+   ! grep -q '^legacy-agy|design-research-reviewer|ceremony$' "$gemini_log"; then
   test_pass
 else
   test_fail "legacy GEMINI override did not remain the secondary researcher fallback"
 fi
 
+event_has_field() {
+  local event="$1" expected="$2"
+  case "|${event}|" in
+    *"|${expected}|"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 test_case "design review synthesis events carry stable executor and role identity"
-quality="$PROJECT_ROOT/scripts/lib/quality.sh"
-if grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'executor_alias=' &&
-   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'configured_provider=' &&
-   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'configured_model=' &&
-   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'runtime_provider=' &&
-   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'runtime_model=' &&
-   grep -A9 'octo_event_emit "synthesis.start"' "$quality" | grep -q 'role="synthesizer"' &&
-   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'executor_alias=' &&
-   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'configured_provider=' &&
-   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'configured_model=' &&
-   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'runtime_provider=' &&
-   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'runtime_model=' &&
-   grep -A10 'octo_event_emit "synthesis.end"' "$quality" | grep -q 'role="synthesizer"'; then
+synthesis_dispatch_log="$TEST_TMP_DIR/synthesis-events-dispatch.log"
+synthesis_event_log="$TEST_TMP_DIR/synthesis-events.log"
+run_design_review_dispatch_probe role "$synthesis_dispatch_log" "$synthesis_event_log"
+start_count="$(grep -Fc 'synthesis.start|' "$synthesis_event_log" || true)"
+end_count="$(grep -Fc 'synthesis.end|' "$synthesis_event_log" || true)"
+start_line="$(grep -Fn 'synthesis.start|' "$synthesis_event_log" | cut -d: -f1)"
+end_line="$(grep -Fn 'synthesis.end|' "$synthesis_event_log" | cut -d: -f1)"
+start_event="$(grep -F 'synthesis.start|' "$synthesis_event_log")"
+end_event="$(grep -F 'synthesis.end|' "$synthesis_event_log")"
+if [[ "$start_count" == 1 ]] &&
+   [[ "$end_count" == 1 ]] &&
+   [[ "$start_line" =~ ^[0-9]+$ ]] && [[ "$end_line" =~ ^[0-9]+$ ]] &&
+   [[ "$start_line" -lt "$end_line" ]] &&
+   event_has_field "$start_event" "executor_alias=role-synthesizer" &&
+   event_has_field "$start_event" "configured_provider=role-synthesizer" &&
+   event_has_field "$start_event" "configured_model=test-model" &&
+   event_has_field "$start_event" "runtime_provider=unknown" &&
+   event_has_field "$start_event" "runtime_model=unknown" &&
+   event_has_field "$start_event" "role=design-synthesizer" &&
+   event_has_field "$end_event" "executor_alias=role-synthesizer" &&
+   event_has_field "$end_event" "configured_provider=role-synthesizer" &&
+   event_has_field "$end_event" "configured_model=test-model" &&
+   event_has_field "$end_event" "runtime_provider=unknown" &&
+   event_has_field "$end_event" "runtime_model=unknown" &&
+   event_has_field "$end_event" "role=design-synthesizer"; then
   test_pass
 else
-  test_fail "design review synthesis events lack stable lifecycle identity fields"
+  test_fail "design review synthesis events lack stable lifecycle identity fields: start=$start_event end=$end_event"
 fi
 
 test_case "design review synthesis prompt no longer uses historical provider headings"

@@ -455,10 +455,10 @@ Be concise and specific. This is a planning exercise, not implementation."
     [[ "$design_synth_timeout" != "0" ]] && _synth_timeout_label="${design_synth_timeout}s"
 
     local seat_1_label seat_2_label seat_3_label synthesis_label
-    seat_1_label="$(octo_provider_identity_label "$design_implementer_agent" "implementer")"
-    seat_2_label="$(octo_provider_identity_label "$design_researcher_agent" "researcher")"
-    seat_3_label="$(octo_provider_identity_label "$design_code_reviewer_agent" "code-reviewer")"
-    synthesis_label="$(octo_provider_identity_label "$design_synthesizer_agent" "synthesizer")"
+    seat_1_label="$(octo_provider_identity_label "$design_implementer_agent" "design-feasibility-reviewer")"
+    seat_2_label="$(octo_provider_identity_label "$design_researcher_agent" "design-research-reviewer")"
+    seat_3_label="$(octo_provider_identity_label "$design_code_reviewer_agent" "design-code-reviewer")"
+    synthesis_label="$(octo_provider_identity_label "$design_synthesizer_agent" "design-synthesizer")"
 
     log INFO "Design review: gathering role approaches..."
     log INFO "Design review seats: seat_1=${seat_1_label}, seat_2=${seat_2_label}, seat_3=${seat_3_label}, synthesis=${synthesis_label}, timeout=${_design_timeout_label}, synth_timeout=${_synth_timeout_label}"
@@ -466,19 +466,19 @@ Be concise and specific. This is a planning exercise, not implementation."
     seat_1_approach="$(
         (
             export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_implementer_agent" "$ceremony_prompt" "$design_timeout" "implementer" "ceremony"
+            run_agent_sync_consultative "$design_implementer_agent" "$ceremony_prompt" "$design_timeout" "design-feasibility-reviewer" "ceremony"
         ) 2>/dev/null
     )" || true
     seat_2_approach="$(
         (
             export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_researcher_agent" "$ceremony_prompt" "$design_timeout" "researcher" "ceremony"
+            run_agent_sync_consultative "$design_researcher_agent" "$ceremony_prompt" "$design_timeout" "design-research-reviewer" "ceremony"
         ) 2>/dev/null
     )" || true
     seat_3_approach="$(
         (
             export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_code_reviewer_agent" "$ceremony_prompt" "$design_timeout" "code-reviewer" "ceremony"
+            run_agent_sync_consultative "$design_code_reviewer_agent" "$ceremony_prompt" "$design_timeout" "design-code-reviewer" "ceremony"
         ) 2>/dev/null
     )" || true
 
@@ -493,8 +493,8 @@ Be concise and specific. This is a planning exercise, not implementation."
             provider="$design_synthesizer_agent" provider_label_kind="legacy-alias" \
             executor_alias="$design_synthesizer_agent" \
             configured_provider="$(octo_provider_identity_from_agent_type "$design_synthesizer_agent")" \
-            configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "synthesizer" 2>/dev/null || echo unresolved)" \
-            runtime_provider="unknown" runtime_model="unknown" role="synthesizer" inputs="3" || true
+            configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "design-synthesizer" 2>/dev/null || echo unresolved)" \
+            runtime_provider="unknown" runtime_model="unknown" role="design-synthesizer" inputs="3" || true
     fi
 
     local synthesis
@@ -518,7 +518,7 @@ Identify:
 2. GAPS: What did everyone miss?
 3. RESOLUTION: The recommended unified approach (2-3 sentences)
 
-Be brief and actionable." "$design_synth_timeout" "synthesizer" "ceremony" 2>/dev/null) || true
+Be brief and actionable." "$design_synth_timeout" "design-synthesizer" "ceremony" 2>/dev/null) || true
 
     if declare -f octo_event_emit >/dev/null 2>&1; then
         local _synth_now _synth_elapsed="unknown"
@@ -529,8 +529,8 @@ Be brief and actionable." "$design_synth_timeout" "synthesizer" "ceremony" 2>/de
             provider="$design_synthesizer_agent" provider_label_kind="legacy-alias" \
             executor_alias="$design_synthesizer_agent" \
             configured_provider="$(octo_provider_identity_from_agent_type "$design_synthesizer_agent")" \
-            configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "synthesizer" 2>/dev/null || echo unresolved)" \
-            runtime_provider="unknown" runtime_model="unknown" role="synthesizer" \
+            configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "design-synthesizer" 2>/dev/null || echo unresolved)" \
+            runtime_provider="unknown" runtime_model="unknown" role="design-synthesizer" \
             status="$([[ -n "$synthesis" ]] && echo produced || echo empty)" \
             bytes="${#synthesis}" elapsed_s="$_synth_elapsed" || true
     fi

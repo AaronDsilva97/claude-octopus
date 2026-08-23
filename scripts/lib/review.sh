@@ -70,19 +70,19 @@ _review_fleet_from_config() {
         case "$provider" in
             codex|codex-*)
                 if [[ "$has_logic" == "false" ]]; then
-                    fleet+="${provider}:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+                    fleet+="${provider}:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
                     has_logic=true
                 fi
                 ;;
             opencode|opencode-*)
                 if [[ "$has_logic" == "false" ]]; then
-                    fleet+="${provider}:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+                    fleet+="${provider}:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
                     has_logic=true
                 fi
                 ;;
             agy|agy-*|antigravity|gemini|gemini-*)
                 if [[ "$has_security" == "false" ]]; then
-                    fleet+="agy:security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
+                    fleet+="agy:implementation-security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
                     has_security=true
                 fi
                 ;;
@@ -90,46 +90,46 @@ _review_fleet_from_config() {
                 if [[ "$has_arch" == "false" ]]; then
                     local agent="${provider}"
                     [[ "$provider" == "claude" ]] && agent="claude-sonnet"
-                    fleet+="${agent}:arch-reviewer:architecture, integration, API contracts, breaking changes"$'\n'
+                    fleet+="${agent}:implementation-architecture-reviewer:architecture, integration, API contracts, breaking changes"$'\n'
                     has_arch=true
                 fi
                 ;;
             perplexity|perplexity-*)
                 if [[ "$has_cve" == "false" ]]; then
-                    fleet+="${provider}:cve-reviewer:known CVEs, library advisories, live web search"$'\n'
+                    fleet+="${provider}:implementation-cve-reviewer:known CVEs, library advisories, live web search"$'\n'
                     has_cve=true
                 fi
                 ;;
             openrouter|openrouter-*)
                 if [[ "$has_diversity" == "false" ]]; then
-                    fleet+="${provider}:diversity-reviewer:cross-family perspective on logic, missed assumptions, training-data divergence from primary providers"$'\n'
+                    fleet+="${provider}:implementation-diversity-reviewer:cross-family perspective on logic, missed assumptions, training-data divergence from primary providers"$'\n'
                     has_diversity=true
                 fi
                 ;;
-            openai-compatible|openai-tools|openai-compatible-agent)
+            openai-compatible|openai-tools|openai-compatible-agent*)
                 if [[ "$has_logic" == "false" ]]; then
-                    fleet+="${provider}:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+                    fleet+="${provider}:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
                     has_logic=true
                 elif [[ "$has_diversity" == "false" ]]; then
-                    fleet+="${provider}:diversity-reviewer:OpenAI-compatible independent review path"$'\n'
+                    fleet+="${provider}:implementation-diversity-reviewer:OpenAI-compatible independent review path"$'\n'
                     has_diversity=true
                 fi
                 ;;
             qwen|qwen-*)
                 if [[ "$has_security" == "false" ]]; then
-                    fleet+="${provider}:security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
+                    fleet+="${provider}:implementation-security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
                     has_security=true
                 elif [[ "$has_diversity" == "false" ]]; then
-                    fleet+="${provider}:diversity-reviewer:cross-family perspective on logic and assumptions"$'\n'
+                    fleet+="${provider}:implementation-diversity-reviewer:cross-family perspective on logic and assumptions"$'\n'
                     has_diversity=true
                 fi
                 ;;
             copilot|copilot-*)
                 if [[ "$has_cve" == "false" ]]; then
-                    fleet+="${provider}:cve-reviewer:known CVEs via web search, library advisories"$'\n'
+                    fleet+="${provider}:implementation-cve-reviewer:known CVEs via web search, library advisories"$'\n'
                     has_cve=true
                 elif [[ "$has_diversity" == "false" ]]; then
-                    fleet+="${provider}:diversity-reviewer:cross-perspective review"$'\n'
+                    fleet+="${provider}:implementation-diversity-reviewer:cross-perspective review"$'\n'
                     has_diversity=true
                 fi
                 ;;
@@ -141,7 +141,7 @@ _review_fleet_from_config() {
     # Anchor: always include arch-reviewer (claude-sonnet) if config didn't supply one.
     # Architecture context bridges per-finding noise from the specialist agents.
     if [[ "$has_arch" == "false" ]]; then
-        fleet+="claude-sonnet:arch-reviewer:architecture, integration, API contracts, breaking changes"$'\n'
+        fleet+="claude-sonnet:implementation-architecture-reviewer:architecture, integration, API contracts, breaking changes"$'\n'
     fi
 
     log INFO "review fleet: config-driven (.routing.features.review)"
@@ -203,44 +203,44 @@ build_review_fleet() {
 
     # logic-reviewer: Codex (OpenAI) → OpenCode → Copilot → claude-sonnet fallback
     if command -v codex >/dev/null 2>&1; then
-        fleet+="codex:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+        fleet+="codex:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
     elif command -v opencode >/dev/null 2>&1; then
-        fleet+="opencode:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+        fleet+="opencode:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
     elif command -v copilot >/dev/null 2>&1; then
-        fleet+="copilot:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+        fleet+="copilot:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
     else
-        fleet+="claude-sonnet:logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
+        fleet+="claude-sonnet:implementation-logic-reviewer:correctness and logic bugs, edge cases, regressions"$'\n'
     fi
 
     # security-reviewer: AGY (Google) → Qwen → Copilot → claude-sonnet fallback
     # Prefer different family from logic-reviewer for diversity
     if command -v agy >/dev/null 2>&1; then
-        fleet+="agy:security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
+        fleet+="agy:implementation-security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
     elif command -v qwen >/dev/null 2>&1; then
-        fleet+="qwen:security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
+        fleet+="qwen:implementation-security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
     elif command -v copilot >/dev/null 2>&1; then
-        fleet+="copilot:security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
+        fleet+="copilot:implementation-security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
     else
-        fleet+="claude-sonnet:security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
+        fleet+="claude-sonnet:implementation-security-reviewer:OWASP vulnerabilities, injection, auth flaws, data exposure"$'\n'
     fi
 
     # arch-reviewer: claude-sonnet (always available — best at holistic analysis)
-    fleet+="claude-sonnet:arch-reviewer:architecture, integration, API contracts, breaking changes"$'\n'
+    fleet+="claude-sonnet:implementation-architecture-reviewer:architecture, integration, API contracts, breaking changes"$'\n'
 
     # cve-reviewer: Perplexity → AGY → Copilot → Qwen → claude WebSearch
     if command -v perplexity >/dev/null 2>&1 || [[ -n "${PERPLEXITY_API_KEY:-}" ]]; then
-        fleet+="perplexity:cve-reviewer:known CVEs, library advisories, live web search"$'\n'
+        fleet+="perplexity:implementation-cve-reviewer:known CVEs, library advisories, live web search"$'\n'
     elif command -v agy >/dev/null 2>&1; then
-        fleet+="agy:cve-reviewer:known CVEs and library advisories"$'\n'
+        fleet+="agy:implementation-cve-reviewer:known CVEs and library advisories"$'\n'
         log INFO "CVE lookup: Perplexity unavailable, using AGY"
     elif command -v copilot >/dev/null 2>&1; then
-        fleet+="copilot:cve-reviewer:known CVEs via web search, library advisories"$'\n'
+        fleet+="copilot:implementation-cve-reviewer:known CVEs via web search, library advisories"$'\n'
         log INFO "CVE lookup: Perplexity+AGY unavailable, using Copilot"
     elif command -v qwen >/dev/null 2>&1; then
-        fleet+="qwen:cve-reviewer:known CVEs via web search, library advisories"$'\n'
+        fleet+="qwen:implementation-cve-reviewer:known CVEs via web search, library advisories"$'\n'
         log INFO "CVE lookup: Perplexity+AGY unavailable, using Qwen"
     else
-        fleet+="claude-sonnet:cve-reviewer:known CVEs via WebSearch tool, library advisories"$'\n'
+        fleet+="claude-sonnet:implementation-cve-reviewer:known CVEs via WebSearch tool, library advisories"$'\n'
         log WARN "CVE lookup: no dedicated web-search provider, using Claude WebSearch (degraded)"
     fi
 
@@ -1450,7 +1450,7 @@ ${round1_prompts[$retry_idx]}"
         if [[ "$agent_findings" != "[]" ]] && declare -f octo_event_emit >/dev/null 2>&1; then
             while IFS=$'\t' read -r _rf_sev _rf_title; do
                 [[ -z "${_rf_sev}${_rf_title}" ]] && continue
-                octo_event_emit "review.finding" provider="$provider_key" provider_label_kind="legacy-alias" executor_alias="$atype" configured_provider="$(octo_provider_identity_from_agent_type "${atype:-unknown}")" configured_model="$(get_agent_model "$atype" "review" "reviewer" 2>/dev/null || echo unresolved)" runtime_provider="unknown" runtime_model="unknown" role="reviewer" severity="${_rf_sev:-unknown}" message="${_rf_title:-}" round="1" || true
+                octo_event_emit "review.finding" provider="$provider_key" provider_label_kind="legacy-alias" executor_alias="$atype" configured_provider="$(octo_provider_identity_from_agent_type "${atype:-unknown}")" configured_model="$(get_agent_model "$atype" "review" "${round1_roles[$idx]}" 2>/dev/null || echo unresolved)" runtime_provider="unknown" runtime_model="unknown" role="${round1_roles[$idx]}" severity="${_rf_sev:-unknown}" message="${_rf_title:-}" round="1" || true
             done < <(printf '%s' "$agent_findings" | jq -r '.[]? | [(.severity // "unknown"), (.title // .message // "")] | @tsv' 2>/dev/null)
         fi
         if ! review_result_completed_successfully "$f"; then
@@ -1529,7 +1529,7 @@ Return ONLY valid JSON with 'findings' array including verdict field."
     verifier_provider="$(review_phase_provider "codex")" || return 1
     verifier_provider_key="$(review_provider_key_from_agent_type "$verifier_provider")"
     if [[ -n "${OCTOPUS_REVIEW_SINGLE_PROVIDER:-}" ]]; then
-        verified_findings=$(review_run_agent_sync_progress "$verifier_provider" "$verifier_prompt" "code-reviewer" "review" "verifier-${verifier_provider}") && {
+        verified_findings=$(review_run_agent_sync_progress "$verifier_provider" "$verifier_prompt" "implementation-verifier" "review" "verifier-${verifier_provider}") && {
             echo "${verifier_provider_key}|ok|Round 2 verification" >> "$provider_status_file"
         } || {
             log WARN "review_run: ${verifier_provider} verification failed, using all findings as confirmed"
@@ -1539,13 +1539,13 @@ Return ONLY valid JSON with 'findings' array including verdict field."
             )")
         }
     else
-        verified_findings=$(review_run_agent_sync_progress "codex" "$verifier_prompt" "code-reviewer" "review" "verifier-codex") && {
+        verified_findings=$(review_run_agent_sync_progress "codex" "$verifier_prompt" "implementation-verifier" "review" "verifier-codex") && {
             echo "codex|ok|Round 2 verification" >> "$provider_status_file"
         } || {
             log WARN "review_run: codex verifier failed, falling back to claude-sonnet"
             log "USER" "⚠ Round 2: Codex unavailable → claude-sonnet (fallback). Codex API usage will NOT change."
             echo "codex|fallback|Round 2 → claude-sonnet" >> "$provider_status_file"
-            verified_findings=$(review_run_agent_sync_progress "claude-sonnet" "$verifier_prompt" "code-reviewer" "review" "verifier-claude-sonnet") || {
+            verified_findings=$(review_run_agent_sync_progress "claude-sonnet" "$verifier_prompt" "implementation-verifier" "review" "verifier-claude-sonnet") || {
                 log WARN "review_run: verification failed entirely, using all findings as confirmed"
                 verified_findings=$(printf '{"findings":%s}' "$(
                     echo "$all_findings" | jq 'map(. + {"verdict":"confirmed"})' 2>/dev/null || echo "[]"
@@ -1589,7 +1589,7 @@ Return JSON: {\"include\": [...finding titles...], \"exclude\": [...finding titl
             local debate_result debate_provider debate_provider_key
             debate_provider="$(review_phase_provider "codex")" || return 1
             debate_provider_key="$(review_provider_key_from_agent_type "$debate_provider")"
-            debate_result=$(review_run_agent_sync_progress "$debate_provider" "$debate_prompt" "code-reviewer" "review" "debate-${debate_provider}") && {
+            debate_result=$(review_run_agent_sync_progress "$debate_provider" "$debate_prompt" "implementation-debater" "review" "debate-${debate_provider}") && {
                 echo "${debate_provider_key}|ok|Round 3 debate" >> "$provider_status_file"
             } || {
                 log WARN "review_run: ${debate_provider} debate agent failed, including all contested findings"
@@ -1623,7 +1623,7 @@ Return ONLY JSON: {\"findings\": [...ranked, deduplicated findings...]}"
     local final_json synth_ok="true" synthesis_provider synthesis_provider_key
     synthesis_provider="$(review_phase_provider "claude-sonnet")" || return 1
     synthesis_provider_key="$(review_provider_key_from_agent_type "$synthesis_provider")"
-    final_json=$(review_run_agent_sync_progress "$synthesis_provider" "$synthesis_prompt" "code-reviewer" "review" "synthesis-${synthesis_provider}") || {
+    final_json=$(review_run_agent_sync_progress "$synthesis_provider" "$synthesis_prompt" "implementation-synthesizer" "review" "synthesis-${synthesis_provider}") || {
         synth_ok="false"
         log WARN "review_run: ${synthesis_provider} synthesis failed, using confirmed findings sorted as-is"
         echo "${synthesis_provider_key}|fallback|Round 3 synthesis failed; using local deterministic fallback" >> "$provider_status_file"
@@ -1663,7 +1663,7 @@ Return ONLY JSON: {\"findings\": [...ranked, deduplicated findings...]}"
         if ! _synth_count=$(review_findings_count "$final_json"); then
             _synth_count=0
         fi
-        octo_event_emit "synthesis" phase="review" provider="$synthesis_provider" provider_label_kind="legacy-alias" executor_alias="$synthesis_provider" configured_provider="$(octo_provider_identity_from_agent_type "$synthesis_provider")" configured_model="$(get_agent_model "$synthesis_provider" "review" "synthesizer" 2>/dev/null || echo unresolved)" runtime_provider="unknown" runtime_model="unknown" council_role="synthesizer" synthesis_strategy="review" count="${_synth_count:-0}" || true
+        octo_event_emit "synthesis" phase="review" provider="$synthesis_provider" provider_label_kind="legacy-alias" executor_alias="$synthesis_provider" configured_provider="$(octo_provider_identity_from_agent_type "$synthesis_provider")" configured_model="$(get_agent_model "$synthesis_provider" "review" "implementation-synthesizer" 2>/dev/null || echo unresolved)" runtime_provider="unknown" runtime_model="unknown" council_role="implementation-synthesizer" synthesis_strategy="review" count="${_synth_count:-0}" || true
     fi
 
     if [[ -n "$proof_dir" ]]; then

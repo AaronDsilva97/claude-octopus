@@ -855,6 +855,25 @@ ${prompt}"
     fi
 }
 
+# Map namespaced council roles to their legacy persona/tool-policy semantics.
+# Model/provider routing must keep the original namespaced role so council seats
+# cannot inherit unrelated execution-role routes from routing.roles.
+octo_persona_role() {
+    case "${1:-}" in
+        design-feasibility-reviewer) echo "implementer" ;;
+        design-research-reviewer) echo "researcher" ;;
+        design-code-reviewer) echo "code-reviewer" ;;
+        design-synthesizer) echo "synthesizer" ;;
+        implementation-logic-reviewer) echo "logic-reviewer" ;;
+        implementation-security-reviewer) echo "security-reviewer" ;;
+        implementation-architecture-reviewer) echo "arch-reviewer" ;;
+        implementation-cve-reviewer) echo "cve-reviewer" ;;
+        implementation-diversity-reviewer) echo "reviewer" ;;
+        implementation-verifier|implementation-debater|implementation-synthesizer) echo "code-reviewer" ;;
+        *) printf '%s\n' "${1:-}" ;;
+    esac
+}
+
 # Apply persona instruction to a prompt
 # Usage: apply_persona <role> <prompt>
 # Returns: Enhanced prompt with persona prefix
@@ -870,8 +889,9 @@ apply_persona() {
         return
     fi
 
-    local persona
-    persona=$(get_persona_instruction "$role")
+    local persona_role persona
+    persona_role="$(octo_persona_role "$role")"
+    persona=$(get_persona_instruction "$persona_role")
 
     if [[ -z "$persona" ]]; then
         echo "$prompt"
@@ -891,7 +911,7 @@ EOF
 )
 
     # v8.19.0: Apply tool policy RBAC (v8.53.0: pass agent_name for readonly check)
-    combined=$(apply_tool_policy "$role" "$combined" "$agent_name")
+    combined=$(apply_tool_policy "$persona_role" "$combined" "$agent_name")
 
     echo "$combined"
 }
