@@ -4,6 +4,8 @@ Every AI model has blind spots. Claude Octopus supports ten external provider in
 
 **Claude-native first, Octopus for escalation.** Use Claude-native `/init`, `/review`, and `/security-review` when Claude is enough. Use Octopus when you want multiple model opinions, adversarial review, or stricter multi-LLM workflows.
 
+> Claude Octopus is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic.
+
 <p align="center">
   <img src="docs/assets/demo.gif" alt="Claude Octopus Demo — debate and research with multiple AI providers" width="720">
 </p>
