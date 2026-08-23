@@ -94,7 +94,7 @@ run_agent_sync_consultative() {
 design_review_ceremony "test" >/dev/null
 roles="$(cut -d'|' -f2 "$CAPTURE" | tr '\n' '|')"
 providers="$(cut -d'|' -f1 "$CAPTURE" | tr '\n' '|')"
-expected_calls=$'claude-sonnet|implementer|ceremony\ncodex|researcher|ceremony\ncommandcode|code-reviewer|ceremony\nclaude-sonnet|synthesizer|ceremony'
+expected_calls=$'claude-sonnet|design-feasibility-reviewer|ceremony\ncodex|design-research-reviewer|ceremony\ncommandcode|design-code-reviewer|ceremony\nclaude-sonnet|design-synthesizer|ceremony'
 if [[ "$(<"$CAPTURE")" == "$expected_calls" ]]; then
   test_pass
 else
@@ -122,6 +122,37 @@ if [[ "$model" == "minimaxai/minimax-m3" ]]; then
   test_pass
 else
   test_fail "expected provider-local MiniMax researcher model, got '$model'"
+fi
+
+test_case "design council roles do not inherit execution-role model routes"
+cat >"$TMP_HOME/.claude-octopus/config/providers.json" <<'EOF'
+{
+  "version":"3.0",
+  "providers": {
+    "codex": {"default":"gpt-5.6-sol"},
+    "commandcode": {"default":"deepseek/deepseek-v4-flash"},
+    "claude": {"default":"claude-sonnet-5"}
+  },
+  "routing": {
+    "phases": {},
+    "roles": {
+      "implementer": {"provider":"commandcode","model":"deepseek/deepseek-v4-flash"},
+      "researcher": {"provider":"commandcode","model":"minimaxai/minimax-m3"},
+      "code-reviewer": {"provider":"commandcode","model":"deepseek/deepseek-v4-pro"},
+      "synthesizer": {"provider":"commandcode","model":"deepseek/deepseek-v4-pro"}
+    }
+  },
+  "tiers":{},
+  "overrides":{}
+}
+EOF
+source "$PROJECT_ROOT/scripts/lib/model-resolver.sh"
+if [[ "$(resolve_octopus_model commandcode commandcode ceremony design-feasibility-reviewer)" == "deepseek/deepseek-v4-flash" ]] && \
+   [[ "$(resolve_octopus_model commandcode commandcode ceremony design-research-reviewer)" == "deepseek/deepseek-v4-flash" ]] && \
+   [[ "$(resolve_octopus_model commandcode commandcode ceremony design-code-reviewer)" == "deepseek/deepseek-v4-flash" ]]; then
+  test_pass
+else
+  test_fail "namespaced design roles inherited execution-role routing"
 fi
 
 test_case "build-fleet keeps multiline prompts in one record per provider"
