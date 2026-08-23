@@ -1,16 +1,48 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-22
-Status: v9.66.1 is released from exact tested `main`. PR #950's OpenClaw tool
-contracts and PR #953's deterministic benchmark-gated council tests are merged
-and shipped. The shared marketplace, development-wrapper submodule, and
-user-scoped installation are current. The installed plugin still resolves
-`backend-architect` through AGY while preserving the persona role.
-Branch: `main` (this handoff update is delivered through a docs-only PR)
+Last updated: 2026-08-23
+Status: The live GitHub queue audit is complete after PR #962 reaches `main`.
+PRs #956, #957, #958, #960, and #962 are resolved; PR #940 was closed without
+merge; PR #959 remains open and blocked on two reproduced defects. Issue #943
+is fixed by PR #962 and closes with that squash merge.
+Branch: `main` (this state is delivered through PR #962)
 Current release: [v9.66.1](https://github.com/nyldn/claude-octopus/releases/tag/v9.66.1)
-Tracking: Beads `oco-8ws`; release commit `28d3de9c`; Test Suite `32549434980`
-Next action: keep PR #940 excluded until its third-party chart dependency has
-proportional repository evidence. Investigate issue #943 independently.
+Tracking: Beads `oco-j08`; PRs #940, #956 through #962; issue #943
+Next action: Do not merge PR #959 until its history append propagates failure
+and it preserves the newline/CR sanitization already on `main`; then require a
+fresh exact-head full matrix, approval, and zero unresolved review threads.
+
+## GitHub Queue Audit (2026-08-23)
+
+- Canonical source of truth: `nyldn/claude-octopus`, protected `main`. The dirty
+  `claude-octopus-dev` coordination checkout, its `.beads` state, gate lock,
+  stash, and unrelated worktrees were preserved.
+- Verified and squash-merged: #956 as `3d25f8ba`, #958 as `ac57d513`, #957 as
+  `5043528b`, and #960 as `5c663f68`. Each merge used the exact approved head
+  after the required local/hosted checks and review-thread audit. PR #960's
+  final hosted run passed macOS/Ubuntu smoke and unit suites, symlink-path,
+  portability, full integration, and Test Summary; all five threads were
+  resolved.
+- PR #962 fixes issue #943: synchronous AGY dispatch retries one exit-139
+  failure inside the original timeout, retains mode-0600 crash evidence, uses
+  collision-safe temporary paths, and preserves degraded reasons and caller
+  shell options. Its focused regressions cover recovery, terminal retry,
+  non-AGY behavior, classification failure, timeout exhaustion, real timeout
+  interruption, and caller `errexit` preservation.
+- PR #962 review response: independent Codex and Claude review identified the
+  fractional timeout risk before publication; CodeRabbit later found the
+  caller-`errexit` and non-enforcing fixture gaps. Each finding was reproduced
+  before editing. The focused signal suite passes 8/8 and timeout-budget suite
+  passes 7/7 after the response.
+- PR #959 remains held. `provider_history_append` reports success when its
+  append fails because it captures the status of `!`, and the branch restores
+  raw fleet record emission, undoing merged multiline/CR sanitization. Both
+  defects were reproduced against its exact head and posted through the safe
+  GitHub text helper.
+- PR #940 was closed without merge: the chart break was real, but ownership and
+  security of the unaffiliated replacement endpoint were not established.
+  PR #961 was independently observed after its owner merge; its disclaimer was
+  propagated across the three product docs and its exact hosted matrix passed.
 
 ## Production Release v9.66.1
 

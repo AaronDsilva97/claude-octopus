@@ -46,6 +46,25 @@ octopus_agent_teams_can_honor_timeout() {
     [[ "$effective_timeout" -eq 0 ]]
 }
 
+# Return the integer timeout for one synchronous attempt within a fixed
+# wall-clock deadline. Retried attempts reserve one second because date(1) and
+# run_with_timeout both operate at whole-second precision; without that margin,
+# differing fractional start times can extend the original budget by <1s.
+octopus_sync_attempt_timeout() {
+    local deadline="$1"
+    local now="$2"
+    local retry_count="${3:-0}"
+    local remaining
+
+    [[ "$deadline" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ && "$retry_count" =~ ^[0-9]+$ ]] || return 1
+    remaining=$((deadline - now))
+    if [[ "$retry_count" -gt 0 ]]; then
+        remaining=$((remaining - 1))
+    fi
+    [[ "$remaining" -gt 0 ]] || return 1
+    printf '%s\n' "$remaining"
+}
+
 # Check if an agent should use Agent Teams dispatch
 # Returns 0 (true) if agent should use native teams, 1 (false) for legacy bash
 should_use_agent_teams() {
@@ -385,8 +404,8 @@ ${provider_ctx}"
     # Capture output and exit code separately
     local output
     local exit_code
-    local temp_err="${RESULTS_DIR}/.tmp-agent-error-$$.err"
-    local temp_out="${RESULTS_DIR}/.tmp-agent-out-$$.out"
+    local temp_err="${RESULTS_DIR}/.tmp-agent-error-${_progress_unique}.err"
+    local temp_out="${RESULTS_DIR}/.tmp-agent-out-${_progress_unique}.out"
 
     # -p "" triggers headless mode for CLIs that require it while prompt content
     # comes via stdin to avoid OS argument limits. Qwen and Cursor Agent follow
@@ -398,9 +417,12 @@ ${provider_ctx}"
 
     # v9.2.2: All agents use stdin to avoid ARG_MAX "Argument list too long" on large diffs (Issue #173)
     # Captured for partial-writes detection on timeout.
-    local _dispatch_start _dispatch_cwd
+    local _dispatch_start _dispatch_cwd _sync_timeout_deadline=0
     _dispatch_start=$(date +%s)
     _dispatch_cwd=$(pwd)
+    if [[ "$timeout_secs" =~ ^[0-9]+$ ]] && [[ "$timeout_secs" -gt 0 ]]; then
+        _sync_timeout_deadline=$((_dispatch_start + timeout_secs))
+    fi
 
     local _quota_watcher_pid=""
 
@@ -412,10 +434,56 @@ ${provider_ctx}"
         "$agent_type" "running" 0 "$_estimated_cost" "$timeout_secs" \
         "$_progress_task_id" "${phase:-unknown}" "" || true
 
-    set +e
-    printf '%s' "$enhanced_prompt" | run_with_timeout "$timeout_secs" "${cmd_array[@]}" 2>"$temp_err" >"$temp_out"
-    exit_code=$?
-    set -e
+    # AGY has an intermittent native SIGSEGV under heterogeneous orchestration
+    # (#943). Retry that provider exactly once, while keeping both attempts
+    # inside the caller's original wall-clock budget. Signal stderr is retained
+    # for every provider so terminal crashes remain diagnosable from run data.
+    local _sync_retry_count=0
+    local _sync_sigsegv_retries=0
+    local _sync_recovered_sigsegv=false
+    local _sync_signal_artifact=""
+    case "$agent_type" in
+        agy*|antigravity) _sync_sigsegv_retries=1 ;;
+    esac
+
+    while true; do
+        local _attempt_timeout="$timeout_secs"
+        if [[ "$_sync_timeout_deadline" -gt 0 ]]; then
+            local _attempt_now
+            _attempt_now=$(date +%s)
+            if ! _attempt_timeout=$(octopus_sync_attempt_timeout \
+                "$_sync_timeout_deadline" "$_attempt_now" "$_sync_retry_count"); then
+                exit_code=124
+                break
+            fi
+        fi
+
+        if printf '%s' "$enhanced_prompt" | run_with_timeout "$_attempt_timeout" "${cmd_array[@]}" 2>"$temp_err" >"$temp_out"; then
+            exit_code=0
+        else
+            exit_code=$?
+        fi
+
+        if [[ "$exit_code" -ge 128 && "$exit_code" -le 192 ]]; then
+            local _signal_attempt=$((_sync_retry_count + 1))
+            _sync_signal_artifact="${RESULTS_DIR}/sync-failure-${_progress_unique}-attempt-${_signal_attempt}.stderr.log"
+            if (umask 077; cp "$temp_err" "$_sync_signal_artifact") 2>/dev/null; then
+                chmod 600 "$_sync_signal_artifact" 2>/dev/null || true
+            else
+                _sync_signal_artifact=""
+            fi
+        fi
+
+        if [[ "$exit_code" -eq 139 && "$_sync_retry_count" -lt "$_sync_sigsegv_retries" ]]; then
+            _sync_retry_count=$((_sync_retry_count + 1))
+            log WARN "Agent $agent_type exited 139 (SIGSEGV); retrying once within the original ${timeout_secs}s budget (stderr: ${_sync_signal_artifact:-unavailable})"
+            : > "$temp_err"
+            : > "$temp_out"
+            continue
+        fi
+        [[ "$exit_code" -eq 0 && "$_sync_retry_count" -gt 0 ]] && _sync_recovered_sigsegv=true
+        break
+    done
     output=$(cat "$temp_out")
 
     stop_quota_watcher "$_quota_watcher_pid"
@@ -494,8 +562,8 @@ ${provider_ctx}"
         fi
         type update_agent_status >/dev/null 2>&1 && update_agent_status \
             "$agent_type" "$_sync_status" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
-            "$_progress_task_id" "${phase:-unknown}" "" || true
-        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "" "$role" || true
+            "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
         rm -f "$temp_err" "$temp_out"
         return $exit_code
     fi
@@ -513,8 +581,8 @@ ${provider_ctx}"
                 log WARN "Agent $agent_type prompt rejected as oversized — skipping provider (reduce session context or lower OCTOPUS_CONTEXT_BUDGET)"
                 type update_agent_status >/dev/null 2>&1 && update_agent_status \
                     "$agent_type" "skipped" "$_elapsed_ms" 0 "$timeout_secs" \
-                    "$_progress_task_id" "${phase:-unknown}" "" || true
-                type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "skipped" "$tokens_in" 0 "Prompt rejected by provider (oversize)" "$_elapsed_ms" "" "$role" || true
+                    "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
+                type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "skipped" "$tokens_in" 0 "Prompt rejected by provider (oversize)" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
                 rm -f "$temp_err" "$temp_out"
                 echo ""
                 return 0
@@ -522,23 +590,42 @@ ${provider_ctx}"
             log ERROR "Agent $agent_type returned unusable output: $_sync_reason"
             type update_agent_status >/dev/null 2>&1 && update_agent_status \
                 "$agent_type" "failed" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
-                "$_progress_task_id" "${phase:-unknown}" "" || true
-            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "" "$role" || true
+                "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
+            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
             rm -f "$temp_err" "$temp_out"
             return 1
         fi
+        if [[ "$_sync_recovered_sigsegv" == "true" ]]; then
+            _sync_status="degraded"
+            if [[ -n "$_sync_reason" ]]; then
+                _sync_reason="Recovered after AGY exit 139; ${_sync_reason}"
+            else
+                _sync_reason="Recovered after AGY exit 139"
+            fi
+        fi
         if [[ "$_sync_output_truncated" == "true" ]]; then
             _sync_status="degraded"
-            _sync_reason="Output truncated"
+            if [[ -n "$_sync_reason" ]]; then
+                _sync_reason="${_sync_reason}; output truncated"
+            else
+                _sync_reason="Output truncated"
+            fi
         fi
-        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "" "$role" || true
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
         type update_agent_status >/dev/null 2>&1 && update_agent_status \
             "$agent_type" "$_sync_status" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
-            "$_progress_task_id" "${phase:-unknown}" "" || true
+            "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
     else
+        local _unclassified_status="completed"
+        local _unclassified_reason=""
+        if [[ "$_sync_recovered_sigsegv" == "true" ]]; then
+            _unclassified_status="degraded"
+            _unclassified_reason="Recovered after AGY exit 139"
+        fi
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_unclassified_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_unclassified_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
         type update_agent_status >/dev/null 2>&1 && update_agent_status \
-            "$agent_type" "completed" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
-            "$_progress_task_id" "${phase:-unknown}" "" || true
+            "$agent_type" "$_unclassified_status" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
+            "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
     fi
 
     # v8.7.0: Wrap external CLI output with trust markers
