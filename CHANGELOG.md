@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Synchronous Antigravity seats now retry once after an intermittent exit 139
+  (SIGSEGV) without extending the original timeout budget. Signal-terminated
+  seats retain private stderr artifacts linked from run status, including when
+  the retry succeeds, so orchestration failures remain diagnosable.
+
 ## [9.66.1] - 2026-08-21
 
 ### Changed
