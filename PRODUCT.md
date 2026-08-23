@@ -4,6 +4,8 @@ last_reviewed: 2026-08-21
 
 # PRODUCT.md
 
+> Claude Octopus is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic.
+
 ## Mission
 
 Make up to 10 external AI integrations available for explicit escalation, so blind spots surface on the work that warrants multi-model scrutiny without taxing every ordinary task.

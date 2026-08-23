@@ -6,6 +6,8 @@
 
 **Claude-native first, Octopus for escalation.** Use Claude-native `/init`, `/review`, and `/security-review` when Claude is enough. Use Octopus when you want multiple model opinions, adversarial review, or stricter multi-LLM workflows.
 
+> Claude Octopus is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic.
+
 ## What Changes
 
 Without Octopus, you ask one model and trust the answer. With it:
