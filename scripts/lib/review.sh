@@ -845,6 +845,24 @@ review_local_synthesis_json() {
     fi
 }
 
+# review_collect_working_tree_diff: collects tracked and untracked working-tree changes.
+review_collect_working_tree_diff() {
+    local diff_content=""
+    local path=""
+    local file_diff=""
+    diff_content=$(git diff 2>/dev/null || true)
+
+    while IFS= read -r -d '' path; do
+        file_diff=$(git diff --no-index -- /dev/null "$path" 2>/dev/null || true)
+        if [[ -n "$file_diff" ]]; then
+            [[ -n "$diff_content" ]] && diff_content+=$'\n'
+            diff_content+="$file_diff"
+        fi
+    done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
+
+    printf '%s' "$diff_content"
+}
+
 # review_collect_diff: resolves a review target to unified diff content.
 # Targets can be built-in scopes (staged, working-tree), a PR number, a git
 # pathspec, or an already-generated .diff/.patch file.
@@ -854,7 +872,7 @@ review_collect_diff() {
 
     case "$target" in
         staged)       diff_content=$(git diff --cached 2>/dev/null || true) ;;
-        working-tree) diff_content=$(git diff 2>/dev/null || true) ;;
+        working-tree) diff_content=$(review_collect_working_tree_diff) ;;
         [0-9]*)       diff_content=$(gh pr diff "$target" 2>/dev/null || true) ;;
         *)
             if [[ -f "$target" ]] && [[ -r "$target" ]] && head -n 20 "$target" 2>/dev/null | grep -Ec "^(diff --git|--- |\+\+\+ |@@ )" >/dev/null; then

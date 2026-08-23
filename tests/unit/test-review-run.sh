@@ -211,6 +211,36 @@ else
   pass "review_run: non-OpenAI-compatible Empty output is not retried by adapter policy"
 fi
 
+# ── working-tree diff includes untracked files ───────────────────────────────
+
+WORKTREE_REPO="$TMPDIR_TEST/review-working-tree"
+mkdir -p "$WORKTREE_REPO"
+(
+  cd "$WORKTREE_REPO"
+  git init -q
+  git config user.email test@example.com
+  git config user.name "Octopus Test"
+  printf 'old\n' > tracked.txt
+  printf '*.ignored\n' > .gitignore
+  git add tracked.txt .gitignore
+  git commit -q -m init
+  printf 'changed\n' > tracked.txt
+  printf 'new\n' > 'new file.txt'
+  printf 'ignore me\n' > noise.ignored
+  review_collect_diff working-tree > "$TMPDIR_TEST/working-tree.diff"
+)
+
+assert_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
+  "tracked.txt" "review_collect_diff: working-tree includes tracked modifications"
+assert_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
+  "new file.txt" "review_collect_diff: working-tree includes untracked files"
+assert_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
+  "\+changed" "review_collect_diff: working-tree includes tracked content"
+assert_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
+  "\+new" "review_collect_diff: working-tree includes untracked content"
+assert_not_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
+  "noise.ignored" "review_collect_diff: working-tree excludes ignored untracked files"
+
 # ── MCP schema ───────────────────────────────────────────────────────────────
 
 MCP_INDEX="$PROJECT_ROOT/mcp-server/src/index.ts"
