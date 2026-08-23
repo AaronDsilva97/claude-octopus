@@ -104,7 +104,7 @@ test_case "AGY exit 139 retries once and records the recovered crash artifact"
 agy_output="$(run_sync_fixture agy 1)" && agy_rc=0 || agy_rc=$?
 agy_root="$TEST_TMP_DIR/agy-1"
 agy_artifact="$(find "$agy_root/results" -maxdepth 1 -name 'sync-failure-*.stderr.log' -print -quit)"
-agy_mode="$(stat -f '%Lp' "$agy_artifact" 2>/dev/null || stat -c '%a' "$agy_artifact" 2>/dev/null || true)"
+agy_mode="$(stat -c '%a' "$agy_artifact" 2>/dev/null || stat -f '%Lp' "$agy_artifact" 2>/dev/null || true)"
 first_timeout="$(sed -n '1p' "$agy_root/timeouts")"
 retry_timeout="$(sed -n '2p' "$agy_root/timeouts")"
 if [[ "$agy_rc" -eq 0 ]] && [[ "$(cat "$agy_root/attempts")" == "2" ]] && \
