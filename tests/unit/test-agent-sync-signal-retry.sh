@@ -13,6 +13,9 @@ test_suite "synchronous provider signal retry"
 
 # shellcheck source=/dev/null
 source "$PROJECT_ROOT/scripts/lib/agent-sync.sh"
+# shellcheck source=/dev/null
+source "$PROJECT_ROOT/scripts/lib/heartbeat.sh"
+eval "$(declare -f run_with_timeout | sed '1s/^run_with_timeout/octopus_test_real_run_with_timeout/')"
 
 test_case "retry attempts use a conservative remainder of the original timeout"
 if declare -F octopus_sync_attempt_timeout >/dev/null 2>&1 && \
@@ -29,6 +32,7 @@ run_sync_fixture() (
     local provider="$1"
     local fail_count="$2"
     local scenario="${3:-${provider}-${fail_count}}"
+    local sync_timeout="${4:-30}"
     local fixture_root="$TEST_TMP_DIR/$scenario"
     local fake_provider="$fixture_root/provider.sh"
 
@@ -44,6 +48,9 @@ attempt=0
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" > "$ATTEMPT_FILE"
 if [[ "$attempt" -le "$FAIL_COUNT" ]]; then
+    if [[ "${OVERLONG_FIRST_ATTEMPT:-false}" == "true" ]] && [[ "$attempt" -eq 1 ]]; then
+        sleep "${OVERLONG_SLEEP:-3}"
+    fi
     printf 'synthetic provider crash attempt %s\n' "$attempt" >&2
     exit 139
 fi
@@ -66,6 +73,10 @@ EOF
     build_provider_env() { PROVIDER_ENV_ARRAY=(); }
     run_with_timeout() {
         printf '%s\n' "$1" >> "$fixture_root/timeouts"
+        if [[ "${ENFORCE_TIMEOUT:-false}" == "true" ]]; then
+            octopus_test_real_run_with_timeout "$@"
+            return $?
+        fi
         shift
         "$@"
     }
@@ -78,8 +89,15 @@ EOF
         printf '%s|%s|%s|%s\n' "$1" "$2" "$5" "$7" >> "$fixture_root/statuses"
     }
 
+    if [[ "${CALLER_ERREXIT:-on}" == "off" ]]; then
+        set +e
+    fi
+
     OCTOPUS_PERSISTENCE_AVAILABLE=true \
-        run_agent_sync "$provider" 'review this change' 30 reviewer council
+        run_agent_sync "$provider" 'review this change' "$sync_timeout" reviewer council
+    local sync_rc=$?
+    printf '%s\n' "$-" > "$fixture_root/caller-options-after"
+    return "$sync_rc"
 )
 
 test_case "AGY exit 139 retries once and records the recovered crash artifact"
@@ -152,6 +170,31 @@ if grep -Fq "agy|degraded|Recovered after AGY exit 139; Partial output|$degraded
     test_pass
 else
     test_fail "recovery status overwrote the classifier's degraded reason"
+fi
+
+test_case "successful sync dispatch preserves a caller with errexit disabled"
+CALLER_ERREXIT=off run_sync_fixture agy 0 caller-errexit-off >/dev/null
+caller_options="$(cat "$TEST_TMP_DIR/caller-errexit-off/caller-options-after")"
+if [[ "$caller_options" != *e* ]]; then
+    test_pass
+else
+    test_fail "run_agent_sync enabled errexit in a caller that had it disabled (options=$caller_options)"
+fi
+
+test_case "an overlong attempt is interrupted before an AGY retry can exceed the deadline"
+overlong_start=$SECONDS
+set +e
+ENFORCE_TIMEOUT=true OVERLONG_FIRST_ATTEMPT=true OVERLONG_SLEEP=4 \
+    run_sync_fixture agy 1 overlong-deadline 2 >/dev/null 2>&1
+overlong_rc=$?
+set -e
+overlong_elapsed=$((SECONDS - overlong_start))
+overlong_root="$TEST_TMP_DIR/overlong-deadline"
+if [[ "$overlong_rc" -eq 124 ]] && [[ "$(cat "$overlong_root/attempts")" == "1" ]] && \
+   [[ "$(cat "$overlong_root/timeouts")" == "2" ]] && [[ "$overlong_elapsed" -lt 4 ]]; then
+    test_pass
+else
+    test_fail "overlong attempt escaped its deadline (rc=$overlong_rc attempts=$(cat "$overlong_root/attempts" 2>/dev/null || echo 0) elapsed=${overlong_elapsed}s)"
 fi
 
 test_summary

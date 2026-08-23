@@ -458,10 +458,11 @@ ${provider_ctx}"
             fi
         fi
 
-        set +e
-        printf '%s' "$enhanced_prompt" | run_with_timeout "$_attempt_timeout" "${cmd_array[@]}" 2>"$temp_err" >"$temp_out"
-        exit_code=$?
-        set -e
+        if printf '%s' "$enhanced_prompt" | run_with_timeout "$_attempt_timeout" "${cmd_array[@]}" 2>"$temp_err" >"$temp_out"; then
+            exit_code=0
+        else
+            exit_code=$?
+        fi
 
         if [[ "$exit_code" -ge 128 && "$exit_code" -le 192 ]]; then
             local _signal_attempt=$((_sync_retry_count + 1))
