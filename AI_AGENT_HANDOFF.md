@@ -1,18 +1,16 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-23
-Status: PR #959 has been reconciled with current `main` in an isolated
-worktree. Its two reproduced blockers and an additional fail-open dependency
-path are fixed locally; publication and exact-head hosted validation remain.
-PRs #956, #957, #958, #960, and #962 are resolved; PR #940 was closed without
-merge. Issue #943 is fixed by PR #962 and closed with that squash merge.
-Branch: `repair/pr959-current-main` at `c5a31997` (not yet pushed)
+Status: The live GitHub queue audit is complete. PR #959 was reconciled,
+validated, and squash-merged as `2f521742`; PRs #956, #957, #958, #960, and
+#962 are also resolved. PR #940 was closed without merge, and issue #943 was
+fixed by PR #962 and closed with that squash merge.
+Branch: `main` at `2f5217421fa21b68f8e736687a5eaa69da838d61`
 Current release: [v9.66.1](https://github.com/nyldn/claude-octopus/releases/tag/v9.66.1)
 Tracking: Beads `oco-c0v` (discovered from `oco-j08`); PR #959
-Next action: Confirm the contributor head has not advanced, push
-`repair/pr959-current-main` normally to `Jhacarreiro:feat/model-aware-seats`,
-then require a fresh exact-head hosted matrix, current approval, mergeability,
-and zero unresolved non-outdated review threads before squash-merging.
+Next action: Recheck the live GitHub PR and issue queues before selecting new
+work. Do not cut another release solely for PR #959; release only through the
+normal `RELEASING.md` flow when a release scope is intentionally chosen.
 
 ## GitHub Queue Audit (2026-08-23)
 
@@ -48,9 +46,12 @@ and zero unresolved non-outdated review threads before squash-merging.
   integration suites passing; the Council suite's one documented macOS PTY
   case remains skipped. `make sync` is current, `git diff --check` is clean,
   and the branch has no unintended executable-mode changes. Spec-compliance
-  and code-quality review found no remaining blocker. Hosted exact-head checks,
-  current approval, mergeability, and review-thread state remain unverified
-  until the repaired branch is published.
+  and code-quality review found no remaining blocker. Repaired head `d19d8945`
+  was pushed as a normal fast-forward of the contributor branch. Exact-head
+  Test Suite run `32680579792` passed portability, macOS and Ubuntu smoke/unit
+  suites, symlink-path, full integration, and Test Summary. GitHub reported the
+  PR mergeable and approved with all 17 review threads resolved or outdated;
+  it squash-merged to protected `main` as `2f5217421fa21b68f8e736687a5eaa69da838d61`.
 - PR #940 was closed without merge: the chart break was real, but ownership and
   security of the unaffiliated replacement endpoint were not established.
   PR #961 was independently observed after its owner merge; its disclaimer was
