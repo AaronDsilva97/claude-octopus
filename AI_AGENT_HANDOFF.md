@@ -3,7 +3,7 @@
 Last updated: 2026-08-23
 Status: The live GitHub queue audit is complete. PR #959 was reconciled,
 validated, and squash-merged as `2f521742`; PRs #956, #957, #958, #960, and
-#962 are also resolved. PR #940 was closed without merge, and issue #943 was
+PR #962 is also resolved. PR #940 was closed without merge, and issue #943 was
 fixed by PR #962 and closed with that squash merge.
 Branch: `main` at `2f5217421fa21b68f8e736687a5eaa69da838d61`
 Current release: [v9.66.1](https://github.com/nyldn/claude-octopus/releases/tag/v9.66.1)
