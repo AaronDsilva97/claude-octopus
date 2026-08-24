@@ -1,16 +1,18 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-23
-Status: The live GitHub queue audit is complete after PR #962 reaches `main`.
+Status: PR #959 has been reconciled with current `main` in an isolated
+worktree. Its two reproduced blockers and an additional fail-open dependency
+path are fixed locally; publication and exact-head hosted validation remain.
 PRs #956, #957, #958, #960, and #962 are resolved; PR #940 was closed without
-merge; PR #959 remains open and blocked on two reproduced defects. Issue #943
-is fixed by PR #962 and closes with that squash merge.
-Branch: `main` (this state is delivered through PR #962)
+merge. Issue #943 is fixed by PR #962 and closed with that squash merge.
+Branch: `repair/pr959-current-main` at `c5a31997` (not yet pushed)
 Current release: [v9.66.1](https://github.com/nyldn/claude-octopus/releases/tag/v9.66.1)
-Tracking: Beads `oco-j08`; PRs #940, #956 through #962; issue #943
-Next action: Do not merge PR #959 until its history append propagates failure
-and it preserves the newline/CR sanitization already on `main`; then require a
-fresh exact-head full matrix, approval, and zero unresolved review threads.
+Tracking: Beads `oco-c0v` (discovered from `oco-j08`); PR #959
+Next action: Confirm the contributor head has not advanced, push
+`repair/pr959-current-main` normally to `Jhacarreiro:feat/model-aware-seats`,
+then require a fresh exact-head hosted matrix, current approval, mergeability,
+and zero unresolved non-outdated review threads before squash-merging.
 
 ## GitHub Queue Audit (2026-08-23)
 
@@ -34,11 +36,21 @@ fresh exact-head full matrix, approval, and zero unresolved review threads.
   caller-`errexit` and non-enforcing fixture gaps. Each finding was reproduced
   before editing. The focused signal suite passes 8/8 and timeout-budget suite
   passes 7/7 after the response.
-- PR #959 remains held. `provider_history_append` reports success when its
-  append fails because it captures the status of `!`, and the branch restores
-  raw fleet record emission, undoing merged multiline/CR sanitization. Both
-  defects were reproduced against its exact head and posted through the safe
-  GitHub text helper.
+- PR #959 was reconciled from contributor head `21ca124e` with current `main`
+  `849ec887` without rewriting contributor history. The merge keeps `main`'s
+  newline/CR fleet-record sanitization and AGY retry contracts while preserving
+  model-aware seat routing. `provider_history_append` now propagates append
+  failures instead of capturing the status of `!`; provider-history helpers
+  fail closed with status 127 when `agent-spec.sh` cannot load; and design
+  recovery uses the namespaced design roles rather than legacy generic roles.
+  RED/GREEN regressions cover each path. A full fail-closed `make ci-changed`
+  run at local head `c5a31997` exited 0 with 282/282 unit suites and 7/7
+  integration suites passing; the Council suite's one documented macOS PTY
+  case remains skipped. `make sync` is current, `git diff --check` is clean,
+  and the branch has no unintended executable-mode changes. Spec-compliance
+  and code-quality review found no remaining blocker. Hosted exact-head checks,
+  current approval, mergeability, and review-thread state remain unverified
+  until the repaired branch is published.
 - PR #940 was closed without merge: the chart break was real, but ownership and
   security of the unaffiliated replacement endpoint were not established.
   PR #961 was independently observed after its owner merge; its disclaimer was

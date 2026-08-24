@@ -213,6 +213,7 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 octo_provider_identity_from_agent_type() {
     local agent_type="$1"
+    agent_type="${agent_type%%:*}"
     case "$agent_type" in
         openai-compatible|openai-tools|openai-compatible-agent) echo "openai-compatible" ;;
         atlascloud-agent|atlascloud) echo "atlascloud" ;;

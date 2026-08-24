@@ -23,6 +23,7 @@ source "${SCRIPT_DIR}/../lib/cursor-agent.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" 2>/dev/null || true
 source "${SCRIPT_DIR}/../lib/provider-registry.sh"
 source "${SCRIPT_DIR}/../lib/provider-policy.sh"
+source "${SCRIPT_DIR}/../lib/agent-spec.sh"
 
 WORKFLOW="${1:-research}"
 INTENSITY="${2:-standard}"
@@ -36,27 +37,8 @@ log() {
 
 # ── Provider → Model Family Mapping ──────────────────────────────────────────
 get_family() {
-    case "$1" in
-        codex|codex-*)       echo "openai" ;;
-        gemini|gemini-*|agy|agy-*|antigravity) echo "google-antigravity" ;;
-        claude-sdk|claude-sdk-*) echo "anthropic" ;;
-        claude-sonnet|claude-opus|claude|claude-*) echo "anthropic" ;;
-        perplexity|perplexity-*) echo "perplexity" ;;
-        copilot|copilot-*)   echo "microsoft" ;;
-        qwen|qwen-*)         echo "alibaba" ;;
-        opencode|opencode-*) echo "multi" ;;
-        ollama|ollama-*)     echo "local" ;;
-        cursor-agent|cursor-agent-*) echo "xai" ;;
-        grok|grok-*)         echo "xai" ;;   # grok-provider (xAI Grok CLI)
-        openrouter|openrouter-*) echo "multi" ;;
-        commandcode|commandcode-*) echo "multi" ;;
-        openai-compatible|openai-compatible-*) echo "multi" ;;
-        atlascloud|atlascloud-*) echo "multi" ;;
-        vibe|vibe-*)         echo "mistral" ;;
-        *)                   echo "unknown" ;;
-    esac
+    octo_model_family "$1"
 }
-
 # ── Provider Detection ────────────────────────────────────────────────────────
 # check-providers.sh is the single admission gate for both the activation banner
 # and fleet construction. Do not duplicate binary/auth probes here: that was the
@@ -102,6 +84,7 @@ _contains() { [[ " $1 " == *" $2 "* ]]; }
 # Check if provider is available
 is_available() {
     local p="$1"
+    p="${p%%:*}"
     _contains "${AVAILABLE_CLI[*]:-}" "$p"
 }
 
@@ -292,16 +275,21 @@ build_council_order() {
     # preferred providers are unavailable or denied.
     preferred="$(octo_council_default_providers)" || return $?
     for provider in $(printf '%s' "$preferred" | tr ',' ' '); do
-        canonical="$(octo_provider_canonical "$provider" 2>/dev/null || true)"
+        local requested_model="" requested_provider="$provider"
+        if [[ "$requested_provider" == *:* ]]; then
+            requested_model="${requested_provider#*:}"
+            requested_provider="${requested_provider%%:*}"
+        fi
+        canonical="$(octo_provider_canonical "$requested_provider" 2>/dev/null || true)"
         [[ -n "$canonical" ]] || continue
         octo_provider_has_capability "$canonical" council || continue
         if [[ "$canonical" == "claude" ]]; then
             octo_provider_allowed claude-sonnet || continue
-            provider="claude-sonnet"
+            provider="claude-sonnet${requested_model:+:$requested_model}"
         else
             is_available "$canonical" || continue
             octo_provider_allowed "$canonical" || continue
-            provider="$canonical"
+            provider="$canonical${requested_model:+:$requested_model}"
         fi
         _contains "$candidates" "$provider" || candidates="${candidates}${candidates:+ }${provider}"
     done
@@ -353,6 +341,15 @@ build_review_fleet() {
         emit "$provider" "${labels[$i]}" "${prompts[$i]}"
     done
     return 0
+}
+
+build_review_order() {
+    local order
+    order="$(build_council_order)" || return $?
+    local provider
+    for provider in $order; do
+        printf '%s\n' "$provider"
+    done
 }
 
 # ── Debate Fleet ──────────────────────────────────────────────────────────────
@@ -425,6 +422,7 @@ build_architecture_fleet() {
 case "$WORKFLOW" in
     research|discover)     build_research_fleet ;;
     review|security)       build_review_fleet ;;
+    review-order)          build_review_order ;;
     debate)                build_debate_fleet ;;
     architecture)          build_architecture_fleet ;;
     *)                     build_research_fleet ;;

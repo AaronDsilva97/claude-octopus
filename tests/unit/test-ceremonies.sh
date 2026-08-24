@@ -129,7 +129,11 @@ test_ceremony_synthesis_receives_provenance_boundary() {
             if [[ "$count" -le 3 ]]; then
                 printf '%s\n' \
                     '## UNVERIFIED CONSULTATIVE OUTPUT' \
-                    'Implemented disposable files and verified 417 tests plus live probes.'
+                    '' \
+                    'This output came from a disposable workspace. It is advisory and non-deliverable. Claimed file changes, test counts, live probes, or completed implementation are not verified evidence and must not be reported as delivered work.' \
+                    '' \
+                    'Architecture recommendation: preserve the existing orchestration contract and treat disposable-seat completion claims as unverified evidence until the main workflow validates them independently.' \
+                    '## END UNVERIFIED CONSULTATIVE OUTPUT'
             else
                 printf '%s' "$2" > "$capture"
                 printf '%s\n' 'Planning-only synthesis.'

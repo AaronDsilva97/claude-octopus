@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+_provider_lockout_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_provider_lockout_agent_spec_ready=false
+if source "${_provider_lockout_dir}/agent-spec.sh" 2>/dev/null \
+    && declare -F octo_agent_spec_provider >/dev/null 2>&1 \
+    && declare -F octo_agent_spec_slug >/dev/null 2>&1; then
+    _provider_lockout_agent_spec_ready=true
+fi
 # ═══════════════════════════════════════════════════════════════════════════════
 # lib/provider-lockout.sh — single owner of the provider lockout + history protocol
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -91,6 +98,31 @@ reset_provider_lockouts() {
     LOCKED_PROVIDERS=""
 }
 
+provider_history_file_key() {
+    local provider key
+    [[ "${_provider_lockout_agent_spec_ready:-false}" == true ]] || return 127
+    provider="$(octo_agent_spec_provider "${1:-unknown}")" || return $?
+    key="$(octo_agent_spec_slug "$provider")" || return $?
+    case "$key" in
+        ""|.|..) key="unknown" ;;
+    esac
+    printf '%s\n' "$key"
+}
+
+provider_history_lock() {
+    local history_file="$1" lock_dir="${1}.lock" tries=0
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        tries=$((tries + 1))
+        [[ "$tries" -ge 50 ]] && return 1
+        sleep 0.02 2>/dev/null || return 1
+    done
+    return 0
+}
+
+provider_history_unlock() {
+    rmdir "${1}.lock" 2>/dev/null || true
+}
+
 # v8.18.0 Feature: Per-Provider History Files
 # Each provider accumulates project-specific knowledge in .octo/providers/{name}-history.md
 
@@ -99,37 +131,65 @@ append_provider_history() {
         off|false|0|no) return 0 ;;
     esac
 
-    local provider="$1"
+    local provider history_key
+    [[ "${_provider_lockout_agent_spec_ready:-false}" == true ]] || return 127
+    provider="$(octo_agent_spec_provider "$1")" || return $?
+    history_key="$(provider_history_file_key "$provider")" || return $?
     local phase="$2"
     local task_brief="$3"
     local learned="$4"
 
     local history_dir="${WORKSPACE_DIR}/.octo/providers"
-    local history_file="$history_dir/${provider}-history.md"
+    local history_file="$history_dir/${history_key}-history.md"
     mkdir -p "$history_dir"
 
     local timestamp
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # Append structured entry
-    cat >> "$history_file" << HISTEOF
+    # Model-qualified seats for one provider share this file. Serialize the full
+    # append+trim transaction so one seat's trim cannot clobber another's append.
+    # History is best-effort: if the lock cannot be acquired promptly, skip the
+    # diagnostic write rather than falling back to an unsafe concurrent update.
+    if ! provider_history_lock "$history_file"; then
+        log WARN "Provider history lock busy for $provider; skipping history append"
+        return 0
+    fi
+
+    local history_rc=0 tmp_file=""
+    if cat >> "$history_file" << HISTEOF
 ### ${phase} | ${timestamp}
 **Task:** ${task_brief:0:100}
 **Learned:** ${learned:0:200}
 ---
 HISTEOF
+    then
+        :
+    else
+        history_rc=$?
+    fi
 
-    # Cap at 50 entries: count entries and trim oldest if exceeded
-    local entry_count
-    entry_count=$(grep -c "^### " "$history_file" 2>/dev/null) || entry_count=0
-    if [[ "$entry_count" -gt 50 ]]; then
-        local excess=$((entry_count - 50))
-        # Remove oldest entries (from top of file)
-        local trim_line
-        trim_line=$(grep -n "^### " "$history_file" | sed -n "$((excess + 1))p" | cut -d: -f1)
-        if [[ -n "$trim_line" && "$trim_line" -gt 1 ]]; then
-            tail -n "+$trim_line" "$history_file" > "$history_file.tmp" && mv "$history_file.tmp" "$history_file"
+    if [[ "$history_rc" -eq 0 ]]; then
+        # Cap at 50 entries: count entries and trim oldest if exceeded.
+        local entry_count
+        entry_count=$(grep -c "^### " "$history_file" 2>/dev/null) || entry_count=0
+        if [[ "$entry_count" -gt 50 ]]; then
+            local excess=$((entry_count - 50)) trim_line
+            trim_line=$(grep -n "^### " "$history_file" | sed -n "$((excess + 1))p" | cut -d: -f1)
+            if [[ -n "$trim_line" && "$trim_line" -gt 1 ]]; then
+                tmp_file=$(mktemp "${history_file}.tmp.XXXXXX") || history_rc=1
+                if [[ "$history_rc" -eq 0 ]]; then
+                    tail -n "+$trim_line" "$history_file" > "$tmp_file" && mv "$tmp_file" "$history_file" || history_rc=1
+                fi
+            fi
         fi
+    fi
+
+    [[ -z "$tmp_file" || ! -e "$tmp_file" ]] || rm -f "$tmp_file" 2>/dev/null || true
+    provider_history_unlock "$history_file"
+
+    if [[ "$history_rc" -ne 0 ]]; then
+        log WARN "Provider history update failed for $provider"
+        return "$history_rc"
     fi
 
     log DEBUG "Appended provider history for $provider (phase: $phase)"
@@ -140,8 +200,11 @@ read_provider_history() {
         off|false|0|no) return 0 ;;
     esac
 
-    local provider="$1"
-    local history_file="${WORKSPACE_DIR}/.octo/providers/${provider}-history.md"
+    local provider history_key
+    [[ "${_provider_lockout_agent_spec_ready:-false}" == true ]] || return 127
+    provider="$(octo_agent_spec_provider "$1")" || return $?
+    history_key="$(provider_history_file_key "$provider")" || return $?
+    local history_file="${WORKSPACE_DIR}/.octo/providers/${history_key}-history.md"
 
     if [[ -f "$history_file" ]]; then
         cat "$history_file"
@@ -150,7 +213,9 @@ read_provider_history() {
 
 build_provider_context() {
     local agent_type="$1"
-    local base_provider="${agent_type%%-*}"  # codex-fast -> codex
+    local base_provider
+    [[ "${_provider_lockout_agent_spec_ready:-false}" == true ]] || return 127
+    base_provider="$(octo_agent_spec_provider "$agent_type")" || return $?  # codex-fast -> codex; provider:model -> provider
     local history
     history=$(read_provider_history "$base_provider")
 

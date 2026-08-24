@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_agent_spec_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_agent_spec_lib_dir}/agent-spec.sh" 2>/dev/null || true
 # lib/auto-route.sh — Auto-routing and routing rule matching
 # Extracted from orchestrate.sh
 
@@ -475,7 +477,8 @@ Focus on:
                 local domain_file="$audit_dir/$domain.md"
                 local agent_type="agy"
                 local task_id="audit-${domain}-${audit_group}"
-                local agent_result_file="${RESULTS_DIR}/${agent_type}-${task_id}.md"
+                local agent_result_file
+                agent_result_file="${RESULTS_DIR}/$(octo_agent_spec_slug "$agent_type")-${task_id}.md"
                 domain_files+=("$domain_file")
                 agent_result_files+=("$agent_result_file")
 
@@ -515,7 +518,8 @@ Output a structured report with findings and recommendations." ;;
                 # Quota fast-fail: skip this provider if marked dead this session.
                 # The quota watcher marks the bare provider, so normalize any
                 # agent suffix before checking the session-level dead set.
-                local _bare_provider="${agent_type%%-*}"
+                local _bare_provider
+                _bare_provider="$(octo_agent_spec_provider "$agent_type")"
                 if declare -f octo_quota_is_dead >/dev/null 2>&1 && octo_quota_is_dead "$_bare_provider"; then
                     echo -e "    ├─ skipping ${domain} (${agent_type}): quota/auth dead this session"
                     pids+=("")

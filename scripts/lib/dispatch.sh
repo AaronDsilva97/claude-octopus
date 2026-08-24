@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 _profile_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_profile_lib_dir}/agent-spec.sh" 2>/dev/null || true
 if ! declare -f octopus_resolve_reasoning_level >/dev/null 2>&1; then
     source "${_profile_lib_dir}/execution-profile.sh" 2>/dev/null || true
 fi
@@ -137,6 +138,8 @@ get_agent_command() {
     local phase="${2:-}"
     local role="${3:-}"
     local model=""
+    local agent_executor
+    agent_executor="$(octo_agent_spec_executor "$agent_type")"
     # Allow swapping the claude binary (e.g. clarp = subscription-billed drop-in
     # for `claude -p`, instead of metered API). Default unchanged. May include
     # args (word-split downstream by read -ra), e.g. "clarp --strict-mcp-config".
@@ -180,7 +183,7 @@ get_agent_command() {
             ;;
     esac
 
-    case "$agent_type" in
+    case "$agent_executor" in
         # v8.9.0: Spark, reasoning, and large-context variants share the
         # same command shape; only model resolution differs by agent type.
         codex|codex-standard|codex-max|codex-mini|codex-general|codex-spark|codex-reasoning|codex-large-context)
@@ -505,10 +508,12 @@ get_role_budget_proportion() {
 # opt in without inflating smaller providers.
 get_provider_context_limit() {
     local agent_type="${1:-}"
-    local provider="${agent_type%%-*}"
+    local provider executor
+    provider="$(octo_agent_spec_provider "$agent_type")"
+    executor="$(octo_agent_spec_executor "$agent_type")"
     local default_budget="${OCTOPUS_CONTEXT_BUDGET:-12000}"
 
-    case "$agent_type" in
+    case "$executor" in
         codex-large-context) echo "${OCTOPUS_CODEX_LARGE_CONTEXT_BUDGET:-${default_budget}}" ; return 0 ;;
         claude-sdk*) echo "${OCTOPUS_CLAUDE_SDK_CONTEXT_BUDGET:-1000000}" ; return 0 ;;  # v9.50.0: Agent SDK 1M window
         claude-opus*|claude-sonnet|claude) echo "${OCTOPUS_CLAUDE_CONTEXT_BUDGET:-${default_budget}}" ; return 0 ;;
@@ -687,6 +692,8 @@ get_agent_model() {
     local agent_type="$1"
     local phase="${2:-}"
     local role="${3:-}"
+    local agent_executor
+    agent_executor="$(octo_agent_spec_executor "$agent_type")"
     
     # Auto-migrate stale model names on first call when the routing helper is
     # part of the current harness. dispatch.sh is also sourced independently by
@@ -697,7 +704,7 @@ get_agent_model() {
 
     # Determine base provider type
     local provider=""
-    case "$agent_type" in
+    case "$agent_executor" in
         codex*)      provider="codex" ;;
         gemini*)     provider="agy" ;;  # legacy Google-seat IDs migrate to AGY
         agy*|antigravity) provider="agy" ;;
@@ -719,7 +726,16 @@ get_agent_model() {
     esac
 
     local resolved_model
-    if ! resolved_model=$(resolve_octopus_model "$provider" "$agent_type" "$phase" "$role"); then
+    # A model-qualified agent spec (provider:model) is an explicit seat identity.
+    # Preserve the literal model instead of collapsing back to the provider default.
+    if [[ "$agent_type" == *:* ]]; then
+        resolved_model="${agent_type#*:}"
+        [[ -n "$resolved_model" ]] || { log ERROR "Empty model in agent spec: $agent_type"; return 1; }
+        if ! validate_model_name_for_provider "$provider" "$resolved_model"; then
+            log ERROR "Invalid explicit model '$resolved_model' for provider '$provider'"
+            return 1
+        fi
+    elif ! resolved_model=$(resolve_octopus_model "$provider" "$agent_type" "$phase" "$role"); then
         return 1
     fi
 

@@ -51,4 +51,14 @@ status=$(get_circuit_breaker_status)
 rm -f "$_PROVIDER_STATE_DIR/agy.cooldown"
 if [[ "$status" == *"agy: OPEN"* || "$status" == *"agy: half-open"* ]] && [[ -n "$(octo_provider_ids dispatch)" ]]; then test_pass; else test_fail "runtime circuit breaker omitted Antigravity: $status"; fi
 
+
+test_case "spawn provider metrics aggregate by canonical provider prefix"
+spawn_file="$PROJECT_ROOT/scripts/lib/spawn.sh"
+if grep -Fq 'local provider_name="$provider_prefix"' "$spawn_file" && \
+   ! grep -Fq '*) provider_name="$agent_type" ;;' "$spawn_file"; then
+    test_pass
+else
+    test_fail "spawn provider metrics can still split model-qualified specs"
+fi
+
 test_summary

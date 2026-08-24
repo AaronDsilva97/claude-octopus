@@ -377,6 +377,257 @@ EOF
     done
 }
 
+design_review_candidate_agents() {
+    local prompt="${1:-design review}"
+    local plugin_root="${PLUGIN_DIR:-}"
+    local helper
+    if [[ -z "$plugin_root" ]]; then
+        plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+    fi
+    helper="$plugin_root/scripts/helpers/build-fleet.sh"
+    [[ -x "$helper" ]] || return 1
+    bash "$helper" review-order standard "$prompt" 2>/dev/null
+}
+
+design_review_unwrap_consultative_output() {
+    local payload="${1:-}"
+    local first_line="${payload%%$'\n'*}"
+    first_line="${first_line%$'\r'}"
+    if [[ "$first_line" == '## UNVERIFIED CONSULTATIVE OUTPUT' ]]; then
+        printf '%s\n' "$payload" | awk '
+            /^## UNVERIFIED CONSULTATIVE OUTPUT$/ { inside=1; blank_count=0; next }
+            /^## END UNVERIFIED CONSULTATIVE OUTPUT$/ { exit }
+            inside {
+                if (blank_count < 2) {
+                    if ($0 == "") blank_count++
+                    next
+                }
+                print
+            }
+        '
+    else
+        printf '%s\n' "$payload"
+    fi
+}
+
+design_review_validation_reason() {
+    local payload compact compact_lc chars words
+    payload="$(design_review_unwrap_consultative_output "${1:-}")"
+    compact="$(printf '%s' "$payload" | tr '\r\n\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    compact_lc="$(printf '%s' "$compact" | tr '[:upper:]' '[:lower:]')"
+    if [[ -z "$compact" ]]; then
+        echo empty
+        return 0
+    fi
+    if [[ "$compact_lc" =~ ^[[:space:]]*[a-z0-9_\ -]*(path|file|dir|root)[a-z0-9_\ -]*:[[:space:]]*(/|\./|\.\./|[a-z]:[\/]|file://).*$ ]]; then
+        echo metadata_path_only
+        return 0
+    fi
+    chars=${#compact}
+    words="$(printf '%s\n' "$compact" | awk '{print NF}')"
+    if [[ "$chars" -lt 80 ]]; then
+        echo too_short_chars
+        return 0
+    fi
+    if [[ "$words" -lt 12 ]]; then
+        echo too_few_words
+        return 0
+    fi
+    echo valid
+}
+
+design_review_synthesis_validation_reason() {
+    local payload compact chars words base_reason
+    base_reason="$(design_review_validation_reason "${1:-}")"
+    [[ "$base_reason" == valid ]] || { echo "$base_reason"; return 0; }
+    payload="$(design_review_unwrap_consultative_output "${1:-}")"
+    compact="$(printf '%s' "$payload" | tr '\r\n\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    chars=${#compact}
+    words="$(printf '%s\n' "$compact" | awk '{print NF}')"
+    if [[ "$chars" -lt 120 ]]; then
+        echo synthesis_too_short_chars
+        return 0
+    fi
+    if [[ "$words" -lt 18 ]]; then
+        echo synthesis_too_few_words
+        return 0
+    fi
+    echo valid
+}
+
+design_review_write_invalid_diagnostic() {
+    local kind="$1" role="$2" agent_spec="$3" attempt="$4" rc="$5" reason="$6" output="${7:-}"
+    local base_dir diag_dir safe_role safe_agent stamp file excerpt limit=16384
+    base_dir="${RESULTS_DIR:-${HOME:-/tmp}/.claude-octopus/results}"
+    diag_dir="$base_dir/design-review-diagnostics"
+    mkdir -p "$diag_dir" 2>/dev/null || return 0
+    safe_role="$(printf '%s' "$role" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+    if declare -f octo_agent_spec_slug >/dev/null 2>&1; then
+        safe_agent="$(octo_agent_spec_slug "$agent_spec")"
+    else
+        safe_agent="$(printf '%s' "$agent_spec" | sed -E 's/[^A-Za-z0-9._-]+/_/g')"
+    fi
+    stamp="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || date +%s)"
+    file="$diag_dir/${kind}-${safe_role}-${safe_agent}-attempt-${attempt}-${stamp}-$$.json"
+    excerpt="${output:0:16384}"
+    jq -n \
+        --arg kind "$kind" \
+        --arg role "$role" \
+        --arg agent_spec "$agent_spec" \
+        --arg attempt "$attempt" \
+        --arg rc "$rc" \
+        --arg reason "$reason" \
+        --arg bytes "${#output}" \
+        --arg excerpt "$excerpt" \
+        --argjson truncated "$([[ ${#output} -gt $limit ]] && echo true || echo false)" \
+        --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)" \
+        '{kind:$kind, role:$role, agent_spec:$agent_spec, attempt:($attempt|tonumber? // $attempt), rc:($rc|tonumber? // $rc), validation_failure:$reason, bytes:($bytes|tonumber? // $bytes), raw_excerpt:$excerpt, raw_truncated:$truncated, timestamp:$timestamp}' \
+        > "$file" 2>/dev/null || { rm -f "$file" 2>/dev/null || true; return 0; }
+    log DEBUG "Design review invalid-output diagnostic: $file"
+}
+
+design_review_approach_valid() {
+    [[ "$(design_review_validation_reason "${1:-}")" == valid ]]
+}
+
+design_review_synthesis_valid() {
+    [[ "$(design_review_synthesis_validation_reason "${1:-}")" == valid ]]
+}
+design_review_run_seat_with_recovery() {
+    local initial_agent="$1" role="$2" ceremony_prompt="$3" timeout="$4"
+    local reserved="$5" approach_var="$6" agent_var="$7"
+    local approach="" candidate="" attempt rc=0 candidates="" tried=" $initial_agent " pass
+
+    # First recover the same seat/model. One retry after the initial attempt keeps
+    # transient/provider anomalies from silently reducing a three-seat ceremony.
+    for attempt in 1 2; do
+        approach="$(
+            (
+                export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+                run_agent_sync_consultative "$initial_agent" "$ceremony_prompt" "$timeout" "$role" "ceremony"
+            ) 2>/dev/null
+        )" || rc=$?
+        if design_review_approach_valid "$approach"; then
+            printf -v "$approach_var" '%s' "$approach"
+            printf -v "$agent_var" '%s' "$initial_agent"
+            [[ "$attempt" -gt 1 ]] && log INFO "Design review seat '$role' recovered on retry with $initial_agent"
+            return 0
+        fi
+        local invalid_reason
+        invalid_reason="$(design_review_validation_reason "$approach")"
+        design_review_write_invalid_diagnostic "seat" "$role" "$initial_agent" "$attempt" "$rc" "$invalid_reason" "$approach"
+        log WARN "Design review seat '$role' returned invalid output from $initial_agent (attempt $attempt/2, rc=$rc, bytes=${#approach}, reason=$invalid_reason)"
+        rc=0
+    done
+
+    candidates="$(design_review_candidate_agents "$ceremony_prompt" 2>/dev/null || true)"
+    # Prefer an unused seat identity first; if the pool has no unused candidate,
+    # reuse another admitted candidate rather than giving up without trying.
+    for pass in unique reuse; do
+        while IFS= read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            [[ " $tried " == *" $candidate "* ]] && continue
+            if [[ "$pass" == "unique" && " $reserved " == *" $candidate "* ]]; then
+                continue
+            fi
+            if [[ "$pass" == "reuse" && " $reserved " != *" $candidate "* ]]; then
+                continue
+            fi
+            tried="${tried}${candidate} "
+            log WARN "Design review seat '$role' falling back from $initial_agent to $candidate"
+            approach="$(
+                (
+                    export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+                    run_agent_sync_consultative "$candidate" "$ceremony_prompt" "$timeout" "$role" "ceremony"
+                ) 2>/dev/null
+            )" || rc=$?
+            if design_review_approach_valid "$approach"; then
+                printf -v "$approach_var" '%s' "$approach"
+                printf -v "$agent_var" '%s' "$candidate"
+                log INFO "Design review seat '$role' recovered with fallback $candidate"
+                return 0
+            fi
+            local fallback_reason
+            fallback_reason="$(design_review_validation_reason "$approach")"
+            design_review_write_invalid_diagnostic "seat-fallback" "$role" "$candidate" "fallback" "$rc" "$fallback_reason" "$approach"
+            log WARN "Design review fallback '$candidate' for seat '$role' returned invalid output (rc=$rc, bytes=${#approach}, reason=$fallback_reason)"
+            rc=0
+        done <<EOF
+$candidates
+EOF
+    done
+
+    # Best effort is deliberate: preserve the useful seats and make degradation
+    # explicit rather than failing the whole implementation workflow.
+    printf -v "$approach_var" '%s' ""
+    printf -v "$agent_var" '%s' "$initial_agent"
+    log WARN "Design review seat '$role' exhausted the admitted review pool; ceremony will continue DEGRADED"
+    return 0
+}
+
+design_review_run_synthesis_with_recovery() {
+    local initial_agent="$1" synthesis_prompt="$2" timeout="$3" reserved="$4" synthesis_var="$5" agent_var="$6"
+    local output="" candidate="" attempt rc=0 candidates="" tried=" $initial_agent " pass reason
+
+    for attempt in 1 2; do
+        output="$(
+            (
+                export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+                run_agent_sync_consultative "$initial_agent" "$synthesis_prompt" "$timeout" "design-synthesizer" "ceremony"
+            ) 2>/dev/null
+        )" || rc=$?
+        if design_review_synthesis_valid "$output"; then
+            printf -v "$synthesis_var" '%s' "$output"
+            printf -v "$agent_var" '%s' "$initial_agent"
+            [[ "$attempt" -gt 1 ]] && log INFO "Design review synthesis recovered on retry with $initial_agent"
+            return 0
+        fi
+        reason="$(design_review_synthesis_validation_reason "$output")"
+        design_review_write_invalid_diagnostic "synthesis" "design-synthesizer" "$initial_agent" "$attempt" "$rc" "$reason" "$output"
+        log WARN "Design review synthesis returned invalid output from $initial_agent (attempt $attempt/2, rc=$rc, bytes=${#output}, reason=$reason)"
+        rc=0
+    done
+
+    candidates="$(design_review_candidate_agents "$synthesis_prompt" 2>/dev/null || true)"
+    for pass in unique reuse; do
+        while IFS= read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            [[ " $tried " == *" $candidate "* ]] && continue
+            if [[ "$pass" == "unique" && " $reserved " == *" $candidate "* ]]; then
+                continue
+            fi
+            if [[ "$pass" == "reuse" && " $reserved " != *" $candidate "* ]]; then
+                continue
+            fi
+            tried="${tried}${candidate} "
+            log WARN "Design review synthesis falling back from $initial_agent to $candidate"
+            output="$(
+                (
+                    export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
+                    run_agent_sync_consultative "$candidate" "$synthesis_prompt" "$timeout" "design-synthesizer" "ceremony"
+                ) 2>/dev/null
+            )" || rc=$?
+            if design_review_synthesis_valid "$output"; then
+                printf -v "$synthesis_var" '%s' "$output"
+                printf -v "$agent_var" '%s' "$candidate"
+                log INFO "Design review synthesis recovered with fallback $candidate"
+                return 0
+            fi
+            reason="$(design_review_synthesis_validation_reason "$output")"
+            design_review_write_invalid_diagnostic "synthesis-fallback" "design-synthesizer" "$candidate" "fallback" "$rc" "$reason" "$output"
+            log WARN "Design review synthesis fallback '$candidate' returned invalid output (rc=$rc, bytes=${#output}, reason=$reason)"
+            rc=0
+        done <<EOF
+$candidates
+EOF
+    done
+
+    printf -v "$synthesis_var" '%s' ""
+    printf -v "$agent_var" '%s' "$initial_agent"
+    log WARN "Design review synthesis exhausted the admitted review pool; ceremony will continue DEGRADED without synthesis"
+    return 0
+}
+
 design_review_ceremony() {
     local prompt="$1"
     local context="${2:-}"
@@ -463,24 +714,22 @@ Be concise and specific. This is a planning exercise, not implementation."
     log INFO "Design review: gathering role approaches..."
     log INFO "Design review seats: seat_1=${seat_1_label}, seat_2=${seat_2_label}, seat_3=${seat_3_label}, synthesis=${synthesis_label}, timeout=${_design_timeout_label}, synth_timeout=${_synth_timeout_label}"
 
-    seat_1_approach="$(
-        (
-            export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_implementer_agent" "$ceremony_prompt" "$design_timeout" "design-feasibility-reviewer" "ceremony"
-        ) 2>/dev/null
-    )" || true
-    seat_2_approach="$(
-        (
-            export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_researcher_agent" "$ceremony_prompt" "$design_timeout" "design-research-reviewer" "ceremony"
-        ) 2>/dev/null
-    )" || true
-    seat_3_approach="$(
-        (
-            export "OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED=design-review-ceremony"
-            run_agent_sync_consultative "$design_code_reviewer_agent" "$ceremony_prompt" "$design_timeout" "design-code-reviewer" "ceremony"
-        ) 2>/dev/null
-    )" || true
+    local design_reserved
+    design_reserved="$design_implementer_agent $design_researcher_agent $design_code_reviewer_agent $design_synthesizer_agent"
+    design_review_run_seat_with_recovery "$design_implementer_agent" "design-feasibility-reviewer" "$ceremony_prompt" "$design_timeout" \
+        "$design_reserved" seat_1_approach design_implementer_agent
+    design_reserved="$design_implementer_agent $design_researcher_agent $design_code_reviewer_agent $design_synthesizer_agent"
+    design_review_run_seat_with_recovery "$design_researcher_agent" "design-research-reviewer" "$ceremony_prompt" "$design_timeout" \
+        "$design_reserved" seat_2_approach design_researcher_agent
+    design_reserved="$design_implementer_agent $design_researcher_agent $design_code_reviewer_agent $design_synthesizer_agent"
+    design_review_run_seat_with_recovery "$design_code_reviewer_agent" "design-code-reviewer" "$ceremony_prompt" "$design_timeout" \
+        "$design_reserved" seat_3_approach design_code_reviewer_agent
+
+    # Labels must reflect the effective seat after any recovery/fallback.
+    seat_1_label="$(octo_provider_identity_label "$design_implementer_agent" "design-feasibility-reviewer")"
+    seat_2_label="$(octo_provider_identity_label "$design_researcher_agent" "design-research-reviewer")"
+    seat_3_label="$(octo_provider_identity_label "$design_code_reviewer_agent" "design-code-reviewer")"
+    log INFO "Design review effective seats: seat_1=${seat_1_label}, seat_2=${seat_2_label}, seat_3=${seat_3_label}"
 
     # Synthesize conflicts and resolution.
     # synthesis.start/end bracket the call so the event stream shows how long the
@@ -497,8 +746,8 @@ Be concise and specific. This is a planning exercise, not implementation."
             runtime_provider="unknown" runtime_model="unknown" role="design-synthesizer" inputs="3" || true
     fi
 
-    local synthesis
-    synthesis=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="design-review-ceremony" run_agent_sync_consultative "$design_synthesizer_agent" "You are synthesizing a design review ceremony.
+    local synthesis="" synthesis_prompt
+    synthesis_prompt="You are synthesizing a design review ceremony.
 
 Three review seats stated their approach to this task. The headings below reflect configured runtime identity rather than historical provider slot names:
 
@@ -518,7 +767,11 @@ Identify:
 2. GAPS: What did everyone miss?
 3. RESOLUTION: The recommended unified approach (2-3 sentences)
 
-Be brief and actionable." "$design_synth_timeout" "design-synthesizer" "ceremony" 2>/dev/null) || true
+Be brief and actionable."
+    design_reserved="$design_implementer_agent $design_researcher_agent $design_code_reviewer_agent $design_synthesizer_agent"
+    design_review_run_synthesis_with_recovery "$design_synthesizer_agent" "$synthesis_prompt" "$design_synth_timeout" \
+        "$design_reserved" synthesis design_synthesizer_agent
+    synthesis_label="$(octo_provider_identity_label "$design_synthesizer_agent" "design-synthesizer")"
 
     if declare -f octo_event_emit >/dev/null 2>&1; then
         local _synth_now _synth_elapsed="unknown"
@@ -531,7 +784,7 @@ Be brief and actionable." "$design_synth_timeout" "design-synthesizer" "ceremony
             configured_provider="$(octo_provider_identity_from_agent_type "$design_synthesizer_agent")" \
             configured_model="$(get_agent_model "$design_synthesizer_agent" "ceremony" "design-synthesizer" 2>/dev/null || echo unresolved)" \
             runtime_provider="unknown" runtime_model="unknown" role="design-synthesizer" \
-            status="$([[ -n "$synthesis" ]] && echo produced || echo empty)" \
+            status="$([[ -n "$synthesis" ]] && echo produced || echo degraded)" \
             bytes="${#synthesis}" elapsed_s="$_synth_elapsed" || true
     fi
 

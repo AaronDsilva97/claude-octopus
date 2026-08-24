@@ -14,6 +14,7 @@ COUNCIL_WORKTREE=""
 COUNCIL_BENCHMARK=""
 COUNCIL_PROVIDERS=""
 _council_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_council_registry_dir}/agent-spec.sh" 2>/dev/null || true
 source "${_council_registry_dir}/provider-registry.sh" 2>/dev/null || true
 source "${_council_registry_dir}/provider-policy.sh" 2>/dev/null || true
 COUNCIL_PROVIDER_POLICY_VALID="true"
@@ -533,11 +534,19 @@ council_check_cost_cap() {
 }
 
 council_provider_command() {
-    octo_provider_command "$1" 2>/dev/null || echo "$1"
+    local provider
+    provider="$(octo_agent_spec_provider "$1")"
+    octo_provider_command "$provider" 2>/dev/null || echo "$provider"
 }
 
 council_provider_org() {
-    octo_provider_org "$1" 2>/dev/null || echo "$1"
+    local provider
+    provider="$(octo_agent_spec_provider "$1")"
+    octo_provider_org "$provider" 2>/dev/null || echo "$provider"
+}
+
+council_model_family() {
+    octo_model_family "$1" "${2:-}"
 }
 
 council_agent_config_value() {
@@ -806,19 +815,38 @@ council_roster_has_provider_org() {
     jq -e --arg org "$provider_org" 'any(.[]; .provider_org == $org)' <<< "$COUNCIL_ROSTER_JSON" >/dev/null
 }
 
+council_roster_has_model_family() {
+    local model_family="$1" member explicit_family spec model
+    if jq -e --arg family "$model_family" 'any(.[]; (.model_family // "") == $family)' <<< "$COUNCIL_ROSTER_JSON" >/dev/null; then
+        return 0
+    fi
+    while IFS= read -r member; do
+        [[ -n "$member" ]] || continue
+        explicit_family="$(jq -r '.model_family // ""' <<< "$member")"
+        [[ -n "$explicit_family" ]] && continue
+        spec="$(jq -r '.agent_spec // .provider // ""' <<< "$member")"
+        model="$(jq -r '.model // ""' <<< "$member")"
+        [[ "$(council_model_family "$spec" "$model")" == "$model_family" ]] && return 0
+    done < <(jq -c '.[]' <<< "$COUNCIL_ROSTER_JSON")
+    return 1
+}
+
 council_score_roster_entry() {
     local persona="$1"
     local provider="$2"
     local provider_org="$3"
     local model="$4"
     local seat="$5"
+    local provider_spec="${6:-$2}"
 
     local role_fit availability diversity cost_budget benchmark preference
     role_fit="$(council_role_fit_signal "$persona" "$seat")"
     availability="0.00"
     council_provider_is_available "$provider" && availability="1.00"
     diversity="1.00"
-    council_roster_has_provider_org "$provider_org" && diversity="0.40"
+    local model_family
+    model_family="$(council_model_family "$provider_spec" "$model")"
+    council_roster_has_model_family "$model_family" && diversity="0.40"
     cost_budget="1.00"
     benchmark="$(council_benchmark_signal "$provider_org" "$model")"
     preference="0.50"
@@ -866,7 +894,8 @@ council_persona_seat() {
 }
 
 council_provider_is_available() {
-    local provider="$1"
+    local provider
+    provider="$(octo_agent_spec_provider "$1")"
     local status
     status="$(jq -r --arg provider "$provider" '.[$provider] // "missing"' <<< "$COUNCIL_PROVIDER_STATUS_JSON")"
     [[ "$status" == "available" || "$status" == "host-native" ]]
@@ -874,7 +903,7 @@ council_provider_is_available() {
 
 council_pick_provider() {
     local preferred="$1"
-    if council_provider_is_available "$preferred" && ! council_roster_has_provider_org "$(council_provider_org "$preferred")"; then
+    if council_provider_is_available "$preferred" && ! council_roster_has_model_family "$(council_model_family "$preferred")"; then
         echo "$preferred"
         return 0
     fi
@@ -884,7 +913,7 @@ council_pick_provider() {
     IFS=',' read -r -a provider_list <<< "$providers"
     for provider in "${provider_list[@]}"; do
         provider="${provider// /}"
-        if council_provider_is_available "$provider" && ! council_roster_has_provider_org "$(council_provider_org "$provider")"; then
+        if council_provider_is_available "$provider" && ! council_roster_has_model_family "$(council_model_family "$provider")"; then
             echo "$provider"
             return 0
         fi
@@ -908,17 +937,22 @@ council_roster_contains() {
 
 council_roster_entry_json() {
     local persona="$1"
-    local provider="${2:-}"
-    local preferred_provider provider_org model seat benchmark_signal score permission_mode family dispatch_model
+    local provider_spec="${2:-}" provider=""
+    local preferred_provider provider_org model model_family seat benchmark_signal score permission_mode family dispatch_model explicit_model
 
     preferred_provider="$(council_persona_default_provider "$persona")"
-    [[ -n "$provider" ]] || provider="$(council_pick_provider "$preferred_provider")"
+    [[ -n "$provider_spec" ]] || provider_spec="$(council_pick_provider "$preferred_provider")"
+    provider="$(octo_agent_spec_provider "$provider_spec")"
+    explicit_model="$(octo_agent_spec_explicit_model "$provider_spec" 2>/dev/null || true)"
     provider_org="$(council_provider_org "$provider")"
     model="$(council_persona_model "$persona")"
+    [[ -n "$explicit_model" ]] && model="$explicit_model"
     # agy ignores the per-persona model (agy-exec runs `--model default`), so record
     # the model agy will ACTUALLY use — resolved from its own settings — instead of
     # the placeholder, so the seat's cross-lab lineage is verifiable from the artifact.
-    if [[ "$provider" == "agy" ]] && declare -f agy_current_model >/dev/null 2>&1; then
+    if [[ -n "$explicit_model" ]]; then
+        : # model is pinned by agent_spec
+    elif [[ "$provider" == "agy" ]] && declare -f agy_current_model >/dev/null 2>&1; then
         model="$(agy_current_model)"
     elif declare -f get_agent_model >/dev/null 2>&1; then
         # The same lineage principle applies to every other provider: the council
@@ -937,19 +971,22 @@ council_roster_entry_json() {
             model="$dispatch_model"
         fi
     fi
+    model_family="$(council_model_family "$provider" "$model")"
     seat="$(council_persona_seat "$persona")"
     family="$(council_persona_family "$persona")"
     permission_mode="$(council_agent_config_value "$persona" "permissionMode" | tr -d '"')"
     [[ -n "$permission_mode" ]] || permission_mode="plan"
     benchmark_signal="$(council_benchmark_signal "$provider_org" "$model")"
-    score="$(council_score_roster_entry "$persona" "$provider" "$provider_org" "$model" "$seat")"
+    score="$(council_score_roster_entry "$persona" "$provider" "$provider_org" "$model" "$seat" "$provider_spec")"
 
     jq -nc \
         --arg seat "$seat" \
         --arg persona "$persona" \
+        --arg agent_spec "$provider_spec" \
         --arg provider "$provider" \
         --arg model "$model" \
         --arg provider_org "$provider_org" \
+        --arg model_family "$model_family" \
         --arg permission_mode "$permission_mode" \
         --arg family "$family" \
         --arg score "$score" \
@@ -957,9 +994,11 @@ council_roster_entry_json() {
         '{
             seat: $seat,
             persona: $persona,
+            agent_spec: $agent_spec,
             provider: $provider,
             model: $model,
             provider_org: $provider_org,
+            model_family: $model_family,
             permission_mode: $permission_mode,
             family: $family,
             score: ($score | tonumber),
@@ -1032,6 +1071,48 @@ council_provider_for_org() {
     return 1
 }
 
+council_available_model_families_json() {
+    local providers="$COUNCIL_PROVIDERS"
+    [[ "$providers" == "auto" ]] && providers="$COUNCIL_DEFAULT_PROVIDERS"
+    local json='[]' provider family
+    IFS=',' read -r -a provider_list <<< "$providers"
+    for provider in "${provider_list[@]}"; do
+        provider="${provider// /}"
+        council_provider_is_available "$provider" || continue
+        family="$(council_model_family "$provider")"
+        json="$(jq -c --arg family "$family" 'if index($family) then . else . + [$family] end' <<< "$json")"
+    done
+    echo "$json"
+}
+
+council_provider_for_model_family() {
+    local wanted_family="$1"
+    local providers="$COUNCIL_PROVIDERS" provider
+    [[ "$providers" == "auto" ]] && providers="$COUNCIL_DEFAULT_PROVIDERS"
+    IFS=',' read -r -a provider_list <<< "$providers"
+    for provider in "${provider_list[@]}"; do
+        provider="${provider// /}"
+        if council_provider_is_available "$provider" && [[ "$(council_model_family "$provider")" == "$wanted_family" ]]; then
+            echo "$provider"
+            return 0
+        fi
+    done
+    return 1
+}
+
+council_candidate_for_model_family() {
+    local wanted_family="$1" provider candidate
+    provider="$(council_provider_for_model_family "$wanted_family")" || return 1
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        council_roster_contains "$candidate" && continue
+        council_persona_is_pinned "$candidate" && continue
+        echo "$candidate|$provider"
+        return 0
+    done < <(council_candidate_personas)
+    return 1
+}
+
 council_candidate_for_provider_org() {
     local wanted_org="$1"
     local provider candidate preferred org
@@ -1052,33 +1133,33 @@ council_candidate_for_provider_org() {
 }
 
 council_enforce_provider_diversity() {
-    # Represent every AVAILABLE provider org on the council (the requested provider
+    # Represent every AVAILABLE model family on the council (the requested provider
     # list, or the auto list, filtered by availability), bounded by the number of
     # non-chair seats. The previous implementation only guaranteed >=2 orgs and
     # bailed at quick depth, so a low-scoring-but-available provider (e.g. agy,
     # whose personas score below codex's) could be seated 0 times even when the
     # user explicitly passed `--providers claude,codex,agy` — chair(claude)+codex
-    # already satisfied the 2-org floor. Only duplicate-org seats are replaced
+    # already satisfied the 2-org floor. Only duplicate-family seats are replaced
     # (never displace a seat that is the sole representative of a needed org, so the
     # loop can't thrash when more orgs are available than seats), the chair seat is
     # never touched, and the replaced seat keeps its label.
-    local available_orgs available_count
-    available_orgs="$(council_available_provider_orgs_json)"
-    available_count="$(jq 'length' <<< "$available_orgs")"
+    local available_families available_count
+    available_families="$(council_available_model_families_json)"
+    available_count="$(jq 'length' <<< "$available_families")"
     (( available_count >= 2 )) || return 0
 
     local guard=0
     while (( guard++ < 12 )); do
         local roster_count
-        roster_count="$(jq '[.[].provider_org] | unique | length' <<< "$COUNCIL_ROSTER_JSON")"
+        roster_count="$(jq '[.[].model_family] | unique | length' <<< "$COUNCIL_ROSTER_JSON")"
         (( roster_count >= available_count )) && break
 
-        local missing_org
-        missing_org="$(jq -r --argjson roster "$COUNCIL_ROSTER_JSON" '.[] as $org | select(($roster | map(.provider_org) | index($org)) | not) | $org' <<< "$available_orgs" | head -1)"
-        [[ -z "$missing_org" ]] && break
+        local missing_family
+        missing_family="$(jq -r --argjson roster "$COUNCIL_ROSTER_JSON" '.[] as $family | select(($roster | map(.model_family) | index($family)) | not) | $family' <<< "$available_families" | head -1)"
+        [[ -z "$missing_family" ]] && break
 
         local replacement
-        replacement="$(council_candidate_for_provider_org "$missing_org" || true)"
+        replacement="$(council_candidate_for_model_family "$missing_family" || true)"
         if [[ -z "$replacement" ]]; then
             COUNCIL_DIVERSITY_WARNING="available provider diversity could not be represented by configured personas"
             break
@@ -1088,11 +1169,11 @@ council_enforce_provider_diversity() {
 
         # Replace the lowest-scoring non-chair seat whose org is duplicated (safe to
         # drop without losing coverage). If none exists, stop — never displace a
-        # unique-org seat.
+        # unique-family seat.
         local replace_index
         replace_index="$(jq -r '
-            ([.[].provider_org] | group_by(.) | map(select(length>1)[0])) as $dups
-            | [ to_entries[] | select(.value.seat != "chair") | select(.value.provider_org as $o | $dups | index($o)) ]
+            ([.[].model_family] | group_by(.) | map(select(length>1)[0])) as $dups
+            | [ to_entries[] | select(.value.seat != "chair") | select(.value.model_family as $f | $dups | index($f)) ]
             | if length == 0 then empty else (min_by(.value.score) | .key) end
         ' <<< "$COUNCIL_ROSTER_JSON")"
         [[ -z "$replace_index" ]] && break
@@ -1155,18 +1236,18 @@ council_build_roster() {
 }
 
 council_dedup_vendor_seats() {
-    # OPT-IN (default off): keep at most one non-chair VOTING seat per provider org.
+    # OPT-IN (default off): keep at most one non-chair VOTING seat per model family.
     #
-    # With Gemini sunset, a 2-vendor standard council can seat agy + codex + codex,
-    # which (a) weights the panel 2:1 toward one lab and (b) forces that lab to clear
-    # BOTH of its seats to count as an approver — so an internal split (one seat
+    # A standard council can seat multiple execution providers backed by the same model family,
+    # which (a) overweights one model family and (b) forces that family to clear
+    # all of its seats to count as an approver — so an internal split (one seat
     # APPROVE, one REVISE) can deadlock an otherwise-decidable gate. The
-    # distinct-approving-vendor quorum already guards correctness (a split vendor
+    # distinct-approving-model-family quorum already guards correctness (a split family
     # can't pass on one seat); this addresses the panel *weighting*, which the quorum
     # layer does not. It is a seating-policy preference, so it stays off unless
     # explicitly enabled with OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1.
     #
-    # When enabled: keep the highest-scoring non-chair seat per org; chair
+    # When enabled: keep the highest-scoring non-chair seat per model family; chair
     # (synthesis) seats are never touched. Default (unset/anything but 1) preserves
     # today's roster exactly.
     [[ "${OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR:-}" == "1" ]] || return 0
@@ -1174,7 +1255,7 @@ council_dedup_vendor_seats() {
         [ to_entries[] ] as $e
         | ( [ $e[] | select(.value.seat == "chair") ] ) as $chairs
         | ( [ $e[] | select(.value.seat != "chair") ]
-            | group_by(.value.provider_org)
+            | group_by(.value.model_family)
             | map( max_by( .value.score | tonumber? // 0 ) ) ) as $voters
         | ( $chairs + $voters ) | sort_by(.key) | map(.value)
     ' <<< "$COUNCIL_ROSTER_JSON")"
@@ -1499,6 +1580,8 @@ council_live_response() {
     local persona="$2"
     local prompt="$3"
     local dispatch_phase="${4:-}"
+    local status_provider
+    status_provider="$(octo_agent_spec_provider "$provider")"
 
     # v9.43: Host-native path — provider IS the active host runtime (e.g. Codex CLI
     # running council from within Codex). Spawning an external subprocess of the same
@@ -1509,7 +1592,7 @@ council_live_response() {
     # falls through to its built-in fallback — a placeholder note is not shaped like
     # a valid synthesis and would break downstream gates.
     local _provider_status
-    _provider_status="$(jq -r --arg p "$provider" '.[$p] // "missing"' <<< "$COUNCIL_PROVIDER_STATUS_JSON")"
+    _provider_status="$(jq -r --arg p "$status_provider" '.[$p] // "missing"' <<< "$COUNCIL_PROVIDER_STATUS_JSON")"
     if [[ "$_provider_status" == "host-native" ]]; then
         if [[ "$dispatch_phase" == "chair-synthesis" ]]; then
             return 1
@@ -1530,7 +1613,7 @@ EOF
         return 0
     fi
 
-    if ! council_provider_is_available "$provider"; then
+    if ! council_provider_is_available "$status_provider"; then
         return 1
     fi
 
@@ -1556,7 +1639,7 @@ council_dispatch_member() {
     local persona provider prompt
 
     persona="$(jq -r '.persona' <<< "$member_json")"
-    provider="$(jq -r '.provider' <<< "$member_json")"
+    provider="$(jq -r '.agent_spec // .provider' <<< "$member_json")"
     prompt="$(council_prompt_for_member "$persona" "$phase")"
 
     if council_persona_should_fail "$persona"; then
@@ -1863,7 +1946,8 @@ council_seat_timeout() {
     #   2. COUNCIL_SEAT_TIMEOUT                 (the --seat-timeout flag, run-wide)
     #   3. OCTOPUS_COUNCIL_AGENT_TIMEOUT        (legacy global env)
     #   4. built-in default
-    local provider="$1" pvar candidate
+    local provider pvar candidate
+    provider="$(octo_agent_spec_provider "$1")"
     pvar="OCTOPUS_COUNCIL_TIMEOUT_$(printf '%s' "$provider" | tr '[:lower:]-' '[:upper:]_')"
     candidate="${!pvar:-}"
     if [[ "$candidate" =~ ^[1-9][0-9]*$ ]]; then printf '%s' "$candidate"; return 0; fi
@@ -1948,18 +2032,22 @@ council_run_advice_phase() {
     COUNCIL_CHAIR_RESPONSE_RECEIVED="false"
     COUNCIL_CHAIR_HOST_NATIVE="false"
     COUNCIL_RESPONDING_PROVIDERS=""
+    COUNCIL_RESPONDING_MODEL_FAMILIES=""
     COUNCIL_SEAT_RECORDS_JSON="[]"
     COUNCIL_TIMEOUT_WARNINGS=""
-    local dissenting_providers=""
+    local dissenting_providers="" dissenting_model_families=""
 
-    local index=0 member persona slug output_path seat mprovider verdict
-    local seat_org seat_model resp_bytes seat_status seat_rec dispatch_timeout_provenance
+    local index=0 member persona slug output_path seat mprovider mprovider_spec verdict
+    local seat_org seat_model seat_model_family resp_bytes seat_status seat_rec dispatch_timeout_provenance
     while IFS= read -r member; do
         persona="$(jq -r '.persona' <<< "$member")"
         seat="$(jq -r '.seat' <<< "$member")"
-        mprovider="$(jq -r '.provider' <<< "$member")"
+        mprovider_spec="$(jq -r '.agent_spec // .provider' <<< "$member")"
+        mprovider="$(octo_agent_spec_provider "$mprovider_spec")"
         seat_org="$(jq -r '.provider_org // ""' <<< "$member")"
         seat_model="$(jq -r '.model // ""' <<< "$member")"
+        seat_model_family="$(jq -r '.model_family // ""' <<< "$member")"
+        [[ -n "$seat_model_family" ]] || seat_model_family="$(council_model_family "$mprovider" "$seat_model")"
         slug="$(council_slug "$persona")"
         output_path="${COUNCIL_RUN_DIR}/responses/$(printf '%02d' "$index")-${slug}.md"
         verdict=""; seat_status="no-response"; resp_bytes=0
@@ -1998,8 +2086,10 @@ council_run_advice_phase() {
             seat_status="responded"
             if [[ "$seat" != "chair" ]]; then
                 COUNCIL_RESPONDING_PROVIDERS="${COUNCIL_RESPONDING_PROVIDERS} ${mprovider}"
+                COUNCIL_RESPONDING_MODEL_FAMILIES="${COUNCIL_RESPONDING_MODEL_FAMILIES} ${seat_model_family}"
                 if [[ "$verdict" != "APPROVE" ]]; then
                     dissenting_providers="${dissenting_providers} ${mprovider}"
+                    dissenting_model_families="${dissenting_model_families} ${seat_model_family}"
                 fi
             fi
         elif council_response_nonempty "$output_path"; then
@@ -2034,11 +2124,11 @@ council_run_advice_phase() {
         # vendor). payload_kind is "full" here; #2 (agy chunking) populates delta/chunk,
         # and #2/#3 extend `status` with degraded/timed_out. RATIONALE: sail-cruisey #2077.
         seat_rec="$(jq -cn --argjson idx "$index" --arg persona "$persona" --arg seat "$seat" \
-            --arg provider "$mprovider" --arg org "$seat_org" --arg model "$seat_model" \
+            --arg agent_spec "$mprovider_spec" --arg provider "$mprovider" --arg org "$seat_org" --arg model "$seat_model" --arg model_family "$seat_model_family" \
             --argjson bytes "${resp_bytes:-0}" --arg verdict "$verdict" --arg status "$seat_status" \
             --arg timeout_provenance "$dispatch_timeout_provenance" \
-            '{index:$idx, persona:$persona, seat:$seat, provider:$provider, provider_org:$org,
-              model:$model, response_bytes:$bytes, payload_kind:"full",
+            '{index:$idx, persona:$persona, seat:$seat, agent_spec:$agent_spec, provider:$provider, provider_org:$org,
+              model:$model, model_family:$model_family, response_bytes:$bytes, payload_kind:"full",
               verdict:(if $verdict=="" then null else $verdict end),
               status:$status,
               timeout_provenance:(if $timeout_provenance=="" then null else $timeout_provenance end),
@@ -2055,11 +2145,10 @@ council_run_advice_phase() {
     required="$(council_required_non_chair)"
     received_non_chair="$(council_received_non_chair)"
 
-    # Distinct-vendor quorum, in two layers:
-    #   distinct_providers  — vendors that returned a SUBSTANTIVE response.
-    #   approving_providers — vendors ALL of whose substantive seats cleanly
-    #                         APPROVED (any dissent drops the whole vendor).
-    # A cross-lab consensus requires >= `required` DISTINCT APPROVING vendors
+    # Quorum is evaluated by model family, while legacy provider metrics remain
+    # in summary.json for compatibility and runtime diagnostics. Multiple seats
+    # using the same model family do not create independent consensus.
+    # A cross-lab consensus requires >= `required` DISTINCT APPROVING families
     # (2 for standard/deep, 1 for quick). Counting responders alone let a split
     # double-seated vendor pass on its approving seat (#1992/#1994/#1983) and a
     # single vendor stand in for consensus (#1993); gating on approvers closes both.
@@ -2068,21 +2157,27 @@ council_run_advice_phase() {
     COUNCIL_APPROVING_PROVIDERS="$(council_compute_approving_providers "$COUNCIL_RESPONDING_PROVIDERS" "$dissenting_providers")"
     COUNCIL_DISTINCT_APPROVING_PROVIDERS="$(printf '%s' "$COUNCIL_APPROVING_PROVIDERS" | tr ' ' '\n' | sed '/^$/d' | sort -u | wc -l | tr -d '[:space:]')"
     [[ -z "$COUNCIL_DISTINCT_APPROVING_PROVIDERS" ]] && COUNCIL_DISTINCT_APPROVING_PROVIDERS=0
+    COUNCIL_DISTINCT_MODEL_FAMILIES="$(printf '%s' "$COUNCIL_RESPONDING_MODEL_FAMILIES" | tr ' ' '
+' | sed '/^$/d' | sort -u | wc -l | tr -d '[:space:]')"
+    [[ -z "$COUNCIL_DISTINCT_MODEL_FAMILIES" ]] && COUNCIL_DISTINCT_MODEL_FAMILIES=0
+    COUNCIL_APPROVING_MODEL_FAMILIES="$(council_compute_approving_providers "$COUNCIL_RESPONDING_MODEL_FAMILIES" "$dissenting_model_families")"
+    COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES="$(printf '%s' "$COUNCIL_APPROVING_MODEL_FAMILIES" | tr ' ' '
+' | sed '/^$/d' | sort -u | wc -l | tr -d '[:space:]')"
+    [[ -z "$COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES" ]] && COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES=0
 
-    # Flag which seats' providers made the approving set so distinct_approving_providers
-    # is recomputable from the seats array alone: distinct providers among seats where
-    # counted_as_approver == true equals distinct_approving_providers.
-    COUNCIL_SEAT_RECORDS_JSON="$(jq -c --arg approving " ${COUNCIL_APPROVING_PROVIDERS} " '
-        map(.provider as $p
+    # Flag seats whose model family made the approving set, so the family-based
+    # quorum is recomputable directly from the seat records.
+    COUNCIL_SEAT_RECORDS_JSON="$(jq -c --arg approving_families " ${COUNCIL_APPROVING_MODEL_FAMILIES} " '
+        map(.model_family as $f
             | .counted_as_approver = (.seat != "chair"
                 and .status == "responded" and .verdict == "APPROVE"
-                and ($approving | contains(" " + $p + " "))))' <<< "${COUNCIL_SEAT_RECORDS_JSON:-[]}")"
+                and ($approving_families | contains(" " + $f + " "))))' <<< "${COUNCIL_SEAT_RECORDS_JSON:-[]}")"
 
     # Chair presence: a dispatched chair response OR a host-native chair (which
     # synthesizes in-context and cannot self-dispatch). Gating met on the response
     # file alone falsely fails a run whose chair IS the host — the reported
-    # quorum.met=false with distinct_approving_providers=2. met now reflects vendor
-    # approvals plus a present (synthesis-capable) chair, not chair receipt.
+    # quorum.met=false despite sufficient independent model families. met now
+    # reflects family approvals plus a present synthesis-capable chair.
     COUNCIL_CHAIR_HOST_NATIVE="false"
     if [[ "$COUNCIL_CHAIR_RESPONSE_RECEIVED" != "true" ]] && council_chair_is_host_native; then
         COUNCIL_CHAIR_HOST_NATIVE="true"
@@ -2093,15 +2188,15 @@ council_run_advice_phase() {
     fi
 
     if [[ "$chair_present" == "true" ]] && (( received_non_chair >= required )) \
-        && { (( required < 2 )) || (( COUNCIL_DISTINCT_APPROVING_PROVIDERS >= required )); }; then
+        && { (( required < 2 )) || (( COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES >= required )); }; then
         COUNCIL_QUORUM_MET="true"
     else
         COUNCIL_QUORUM_MET="false"
-        if (( required >= 2 )) && (( COUNCIL_DISTINCT_APPROVING_PROVIDERS < required )) && (( received_non_chair >= required )); then
+        if (( required >= 2 )) && (( COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES < required )) && (( received_non_chair >= required )); then
             # council.sh has no log() of its own (it lives in orchestrate.sh); emit
             # via the same stderr convention the rest of this file uses so the guard
             # never crashes when council is sourced standalone.
-            echo "Council warning: Quorum FAILED the distinct-approving-vendor guard: ${received_non_chair} responses, ${COUNCIL_DISTINCT_PROVIDERS} distinct provider(s) (${COUNCIL_RESPONDING_PROVIDERS# }), but only ${COUNCIL_DISTINCT_APPROVING_PROVIDERS} cleanly APPROVED (${COUNCIL_APPROVING_PROVIDERS:-none}). A single approving vendor — or a split double-seated vendor — is not a valid cross-lab consensus. Restore/await a 2nd approving provider (§4) or surface the provider-shortage gate to the human." >&2
+            echo "Council warning: Quorum FAILED the distinct-approving-model-family guard: ${received_non_chair} responses, ${COUNCIL_DISTINCT_MODEL_FAMILIES} distinct model family/families (${COUNCIL_RESPONDING_MODEL_FAMILIES# }), but only ${COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES} cleanly APPROVED (${COUNCIL_APPROVING_MODEL_FAMILIES:-none}). Multiple executors or seats from the same model family do not create independent consensus. Restore/await another approving model family or surface the shortage to the human." >&2
         fi
     fi
 }
@@ -2126,7 +2221,7 @@ council_synthesis_capable_persona() {
 
 council_run_chair_fallback() {
     local persona provider member_json slug output_path index
-    local seat_org seat_model resp_bytes verdict seat_status seat_rec existing_response dispatch_rc
+    local seat_agent_spec seat_org seat_model seat_model_family resp_bytes verdict seat_status seat_rec existing_response dispatch_rc
     local dispatch_timeout_provenance
 
     while IFS= read -r persona; do
@@ -2173,18 +2268,21 @@ council_run_chair_fallback() {
             # roster, so persist it as an additional seat execution record. Without
             # this, summary.json claims to expose every seat while silently omitting
             # the chair response that actually made synthesis possible.
+            seat_agent_spec="$(jq -r '.agent_spec // .provider // ""' <<< "$member_json")"
             seat_org="$(jq -r '.provider_org // ""' <<< "$member_json")"
             seat_model="$(jq -r '.model // ""' <<< "$member_json")"
+            seat_model_family="$(jq -r '.model_family // ""' <<< "$member_json")"
+            [[ -n "$seat_model_family" ]] || seat_model_family="$(council_model_family "$seat_agent_spec" "$seat_model")"
             resp_bytes="$(wc -c < "$output_path" 2>/dev/null | tr -d '[:space:]')"
             [[ -z "$resp_bytes" ]] && resp_bytes=0
             verdict="$(council_response_verdict "$output_path")"
             seat_status="responded"
             seat_rec="$(jq -cn --argjson idx "$index" --arg persona "$persona" \
-                --arg provider "$provider" --arg org "$seat_org" --arg model "$seat_model" \
+                --arg agent_spec "$seat_agent_spec" --arg provider "$(octo_agent_spec_provider "$provider")" --arg org "$seat_org" --arg model "$seat_model" --arg model_family "$seat_model_family" \
                 --argjson bytes "${resp_bytes:-0}" --arg verdict "$verdict" --arg status "$seat_status" \
                 --arg timeout_provenance "$dispatch_timeout_provenance" \
-                '{index:$idx, persona:$persona, seat:"chair", provider:$provider,
-                  provider_org:$org, model:$model, response_bytes:$bytes,
+                '{index:$idx, persona:$persona, seat:"chair", agent_spec:$agent_spec, provider:$provider,
+                  provider_org:$org, model:$model, model_family:$model_family, response_bytes:$bytes,
                   payload_kind:"full",
                   verdict:(if $verdict=="" then null else $verdict end),
                   status:$status,
@@ -2528,29 +2626,32 @@ council_detect_providers() {
     local json='{}'
 
     if [[ -n "${OCTOPUS_COUNCIL_PROVIDER_FIXTURE:-}" ]]; then
-        local entry name status
+        local entry name status status_key
         IFS=',' read -r -a fixture_entries <<< "$OCTOPUS_COUNCIL_PROVIDER_FIXTURE"
         for entry in "${fixture_entries[@]}"; do
-            name="${entry%%:*}"
-            status="${entry#*:}"
+            name="${entry%:*}"
+            status="${entry##*:}"
             [[ -n "$name" && -n "$status" && "$name" != "$status" ]] || continue
-            json="$(jq -c --arg name "$name" --arg status "$status" '. + {($name): $status}' <<< "$json")"
+            status_key="$(octo_agent_spec_provider "$name")"
+            json="$(jq -c --arg name "$status_key" --arg status "$status" '. + {($name): $status}' <<< "$json")"
         done
         COUNCIL_PROVIDER_STATUS_JSON="$json"
         return 0
     fi
 
-    local provider cmd status
+    local provider cmd status status_key host_provider
+    host_provider="$(octo_agent_spec_provider "${OCTOPUS_HOST:-}")"
     IFS=',' read -r -a provider_list <<< "$providers"
     for provider in "${provider_list[@]}"; do
+        status_key="$(octo_agent_spec_provider "$provider")"
         # v9.43: When this provider IS the host runtime, spawning it as a subprocess
         # fails (recursive invocation — e.g. codex-within-codex on Windows/Git Bash).
         # Mark as host-native so council_live_response emits an in-context response
         # instead of a broken subprocess call.
-        if [[ "${OCTOPUS_HOST:-}" == "$provider" ]]; then
+        if [[ -n "${OCTOPUS_HOST:-}" && "$host_provider" == "$status_key" ]]; then
             status="host-native"
         else
-            case "$provider" in
+            case "$status_key" in
                 openai-compatible|openai-tools|openai-compatible-agent)
                     if declare -f openai_compatible_is_available >/dev/null 2>&1 && openai_compatible_is_available; then
                         status="available"
@@ -2589,7 +2690,7 @@ council_detect_providers() {
                     ;;
             esac
         fi
-        json="$(jq -c --arg name "$provider" --arg status "$status" '. + {($name): $status}' <<< "$json")"
+        json="$(jq -c --arg name "$status_key" --arg status "$status" '. + {($name): $status}' <<< "$json")"
     done
 
     COUNCIL_PROVIDER_STATUS_JSON="$json"
@@ -2858,6 +2959,10 @@ council_write_summary_json() {
         --arg responding_providers "${COUNCIL_RESPONDING_PROVIDERS:+${COUNCIL_RESPONDING_PROVIDERS# }}" \
         --arg distinct_approving_providers "${COUNCIL_DISTINCT_APPROVING_PROVIDERS:-0}" \
         --arg approving_providers "${COUNCIL_APPROVING_PROVIDERS:-}" \
+        --arg distinct_model_families "${COUNCIL_DISTINCT_MODEL_FAMILIES:-0}" \
+        --arg responding_model_families "${COUNCIL_RESPONDING_MODEL_FAMILIES:+${COUNCIL_RESPONDING_MODEL_FAMILIES# }}" \
+        --arg distinct_approving_model_families "${COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES:-0}" \
+        --arg approving_model_families "${COUNCIL_APPROVING_MODEL_FAMILIES:-}" \
         --arg chair_received "$COUNCIL_CHAIR_RESPONSE_RECEIVED" \
         --arg chair_host_native "${COUNCIL_CHAIR_HOST_NATIVE:-false}" \
         --arg chair_fallback_used "$COUNCIL_CHAIR_FALLBACK_USED" \
@@ -2903,6 +3008,10 @@ council_write_summary_json() {
             responding_providers: $responding_providers,
             distinct_approving_providers: ($distinct_approving_providers | tonumber),
             approving_providers: $approving_providers,
+            distinct_model_families: ($distinct_model_families | tonumber),
+            responding_model_families: $responding_model_families,
+            distinct_approving_model_families: ($distinct_approving_model_families | tonumber),
+            approving_model_families: $approving_model_families,
             met: ($quorum_met == "true")
           },
           providers: $providers,

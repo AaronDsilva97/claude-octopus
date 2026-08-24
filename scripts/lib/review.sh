@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_agent_spec_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_agent_spec_lib_dir}/agent-spec.sh" 2>/dev/null || true
 # Claude Octopus — Code Review Pipeline
 # Extracted from orchestrate.sh
 # Source-safe: no main execution block.
@@ -1316,8 +1318,9 @@ CRITICAL OUTPUT FORMAT: Return ONLY a valid JSON object. No markdown, no prose, 
     while IFS=: read -r agent_type role specialty; do
         [[ -z "$agent_type" ]] && continue
         local task_id="review-r1-${role}-${timestamp}"
-        # Use spawn_agent's actual output path convention: ${RESULTS_DIR}/${agent_type}-${task_id}.md
-        local result_file="${RESULTS_DIR}/${agent_type}-${task_id}.md"
+        # Use spawn_agent's actual output path convention: ${RESULTS_DIR}/$(octo_agent_spec_slug "$agent_type")-${task_id}.md
+        local result_file
+        result_file="${RESULTS_DIR}/$(octo_agent_spec_slug "$agent_type")-${task_id}.md"
         round1_files+=("$result_file")
         round1_agent_types+=("$agent_type")
         round1_roles+=("$role")
@@ -1371,7 +1374,7 @@ ${agent_prompt_base}"
                 reconnect_count=${reconnect_count%%$'\n'*}
                 retry_role="${round1_roles[$retry_idx]}"
                 retry_task_id="${round1_task_ids[$retry_idx]}-retry1"
-                retry_result_file="${RESULTS_DIR}/${retry_agent_type}-${retry_task_id}.md"
+                retry_result_file="${RESULTS_DIR}/$(octo_agent_spec_slug "$retry_agent_type")-${retry_task_id}.md"
                 archived_file="${retry_file}.attempt1"
                 mv "$retry_file" "$archived_file" 2>/dev/null || true
                 log WARN "review_run: ${retry_agent_type}/${retry_role} ended Empty output after ${reconnect_count} reconnect(s); retrying once after ${openai_compat_empty_retry_backoff}s (artifact=$(basename "$archived_file"))"

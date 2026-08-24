@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_provider_policy_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_provider_policy_dir}/agent-spec.sh" 2>/dev/null || true
 # Shared provider-selection policy defaults.
 # Identity and capabilities live in provider-registry.sh; these ordered lists
 # are workflow policy and remain independently configurable.
@@ -13,7 +15,7 @@ OCTOPUS_SMOKE_ROUTING_PROVIDERS_DEFAULT="codex agy claude opencode openrouter or
 
 octo_validate_provider_policy_list() {
     local raw="$1" capability="$2" label="$3"
-    local provider canonical seen=""
+    local provider canonical seat model seen=""
     [[ -n "$raw" ]] || {
         echo "$label must not be empty" >&2
         return 2
@@ -28,6 +30,12 @@ octo_validate_provider_policy_list() {
     esac
 
     for provider in $(printf '%s' "$raw" | tr ',' ' '); do
+        model=""
+        if [[ "$provider" == *:* ]]; then
+            model="${provider#*:}"
+            provider="${provider%%:*}"
+            [[ -n "$model" ]] || { echo "$label contains empty model for provider '$provider'" >&2; return 2; }
+        fi
         canonical="$(octo_provider_canonical "$provider" 2>/dev/null || true)"
         [[ -n "$canonical" ]] || {
             echo "$label references unknown provider '$provider'" >&2
@@ -38,13 +46,14 @@ octo_validate_provider_policy_list() {
             echo "$label provider '$canonical' does not support '$capability'${reason:+ ($reason)}" >&2
             return 2
         }
+        seat="$canonical${model:+:$model}"
         case " $seen " in
-            *" $canonical "*)
-                echo "$label contains duplicate provider '$canonical'" >&2
+            *" $seat "*)
+                echo "$label contains duplicate seat '$seat'" >&2
                 return 2
                 ;;
         esac
-        seen="${seen}${seen:+ }${canonical}"
+        seen="${seen}${seen:+ }${seat}"
     done
     return 0
 }

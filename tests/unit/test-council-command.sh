@@ -1003,8 +1003,8 @@ test_council_chair_fallback_preserves_quorum() {
              | $fallback.index == (.council | length)
              and $fallback.persona == .warnings.chair_fallback_persona
              and $fallback.seat == "chair"
-             and ([$fallback.provider, $fallback.provider_org, $fallback.model,
-                   $fallback.payload_kind, $fallback.status]
+             and ([$fallback.agent_spec, $fallback.provider, $fallback.provider_org, $fallback.model,
+                   $fallback.model_family, $fallback.payload_kind, $fallback.status]
                   | all(type == "string" and length > 0))
              and $fallback.response_bytes > 0
              and $fallback.verdict == "APPROVE"
@@ -1620,24 +1620,24 @@ test_council_quorum_met_with_host_native_chair() {
 }
 
 test_council_one_vote_per_vendor_opt_in() {
-    test_case "OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1 keeps one voting seat per vendor; default leaves the roster intact"
+    test_case "OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1 keeps one voting seat per model family; default leaves the roster intact"
     load_council_lib || return 1
     local roster='[
-      {"persona":"strategy-analyst","seat":"chair","provider":"claude","provider_org":"anthropic","score":"0.9"},
-      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","score":"0.8"},
-      {"persona":"security-auditor","seat":"member","provider":"codex","provider_org":"openai","score":"0.6"},
-      {"persona":"research-synthesizer","seat":"member","provider":"agy","provider_org":"google","score":"0.7"}
+      {"persona":"strategy-analyst","seat":"chair","provider":"claude","provider_org":"anthropic","model_family":"anthropic","score":"0.9"},
+      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","model_family":"openai","score":"0.8"},
+      {"persona":"security-auditor","seat":"member","provider":"codex","provider_org":"openai","model_family":"openai","score":"0.6"},
+      {"persona":"research-synthesizer","seat":"member","provider":"agy","provider_org":"google","model_family":"google","score":"0.7"}
     ]'
 
     # Compare the WHOLE roster (normalized), not just seat counts, so a regression
     # that swaps a seat or replaces the chair can't slip through.
     local roster_norm; roster_norm="$(jq -Sc . <<< "$roster")"
-    # Enabled result: the lower-scored openai seat (security-auditor) is dropped;
-    # chair + higher-scored openai (backend-architect) + agy remain, order preserved.
+    # Enabled result: the lower-scored OpenAI-family seat (security-auditor) is dropped;
+    # chair + higher-scored OpenAI-family seat (backend-architect) + agy remain.
     local expected_on; expected_on="$(jq -Sc . <<< '[
-      {"persona":"strategy-analyst","seat":"chair","provider":"claude","provider_org":"anthropic","score":"0.9"},
-      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","score":"0.8"},
-      {"persona":"research-synthesizer","seat":"member","provider":"agy","provider_org":"google","score":"0.7"}
+      {"persona":"strategy-analyst","seat":"chair","provider":"claude","provider_org":"anthropic","model_family":"anthropic","score":"0.9"},
+      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","model_family":"openai","score":"0.8"},
+      {"persona":"research-synthesizer","seat":"member","provider":"agy","provider_org":"google","model_family":"google","score":"0.7"}
     ]')"
 
     # Default (flag unset): opt-in feature is off, roster is byte-for-byte untouched.
@@ -1655,7 +1655,7 @@ test_council_one_vote_per_vendor_opt_in() {
     OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=0 council_dedup_vendor_seats
     off_norm="$(jq -Sc . <<< "$COUNCIL_ROSTER_JSON")"
 
-    # Enabled: roster reduced to exactly the expected one-vote-per-vendor set.
+    # Enabled: roster reduced to exactly the expected one-vote-per-model-family set.
     local on_norm
     COUNCIL_ROSTER_JSON="$roster"
     OCTOPUS_COUNCIL_ONE_VOTE_PER_VENDOR=1 council_dedup_vendor_seats

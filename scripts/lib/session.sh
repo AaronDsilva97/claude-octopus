@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_agent_spec_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_agent_spec_lib_dir}/agent-spec.sh" 2>/dev/null || true
 # session.sh — Session management and progress tracking
 # Contains: init_progress_tracking, display_progress_summary, cleanup_old_progress_files,
 #           display_rich_progress, generate_session_name, init_session,
@@ -245,7 +247,8 @@ display_rich_progress() {
             local task_id="probe-${task_group}-${i}"
             local agent_type="${agent_types[$i]}"
             local agent_name="${agent_names[$i]}"
-            local result_file="${RESULTS_DIR}/${agent_type}-${task_id}.md"
+            local result_file
+            result_file="${RESULTS_DIR}/$(octo_agent_spec_slug "$agent_type")-${task_id}.md"
             local pid="${pids[$i]}"
 
             # Check if agent is still running

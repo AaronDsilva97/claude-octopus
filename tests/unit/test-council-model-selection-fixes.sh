@@ -114,15 +114,15 @@ pick_provider() {
     ' _ "$roster_json" "$preferred"
 }
 
-test_case "preferred provider passed over when its org already holds a seat"
+test_case "preferred provider passed over when its model family already holds a seat"
 out=$(pick_provider '[{"persona":"strategy-analyst","provider":"claude","provider_org":"anthropic"}]' claude)
 if [[ "$out" == "opencode" ]]; then
     test_pass
 else
-    test_fail "expected opencode (anthropic already seated), got '$out'"
+    test_fail "expected opencode (anthropic model family already seated), got '$out'"
 fi
 
-test_case "preferred provider kept when its org is not yet seated"
+test_case "preferred provider kept when its model family is not yet seated"
 out=$(pick_provider '[]' claude)
 if [[ "$out" == "claude" ]]; then
     test_pass
@@ -130,7 +130,7 @@ else
     test_fail "expected claude on empty roster, got '$out'"
 fi
 
-test_case "falls back to preferred when every org is already seated"
+test_case "falls back to an available provider when every model family is already seated"
 out=$(bash -c '
     log() { :; }
     source "'"$PROJECT_ROOT"'/scripts/lib/council.sh" 2>/dev/null

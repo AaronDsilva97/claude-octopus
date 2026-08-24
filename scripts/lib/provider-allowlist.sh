@@ -90,8 +90,10 @@ octo_provider_allowlist_value() {
 }
 
 octo_provider_allowed() {
-    local provider requested_canonical
-    provider="$(octo_normalize_provider_name "${1:-}")"
+    local provider requested_canonical raw_provider
+    raw_provider="${1:-}"
+    raw_provider="${raw_provider%%:*}"
+    provider="$(octo_normalize_provider_name "$raw_provider")"
     [[ -n "$provider" ]] || return 1
     requested_canonical="$(octo_provider_canonical "$provider" 2>/dev/null || printf '%s' "$provider")"
 

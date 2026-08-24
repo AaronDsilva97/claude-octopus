@@ -50,6 +50,7 @@ else
     {
         echo '#!/usr/bin/env bash'
         echo 'set -eo pipefail'  # mirrors orchestrate.sh exactly
+        printf 'source %q\n' "$PROJECT_ROOT/scripts/lib/agent-spec.sh"
         echo 'RESULTS_DIR="'"$TEST_TMP_DIR"'"'
         echo 'timestamp="ts1"'
         echo 'fleet="codex:reviewer1:logic

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+_agent_sync_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_agent_sync_lib_dir}/agent-spec.sh" 2>/dev/null || true
 # ═══════════════════════════════════════════════════════════════════════════════
 # agent-sync.sh — Agent synchronous dispatch & Agent Teams routing
 # Extracted from orchestrate.sh (v9.7.4)
@@ -342,7 +344,8 @@ ${provider_ctx}"
     else
         _progress_unique="$(date +%s)-$$-${RANDOM:-0}"
     fi
-    local _progress_task_id="sync-${phase:-unknown}-${agent_type}-${_progress_unique}"
+    local _progress_task_id
+    _progress_task_id="sync-${phase:-unknown}-$(octo_agent_spec_slug "$agent_type")-${_progress_unique}"
     local _estimated_cost="0.000000"
     if type estimate_agent_call_cost >/dev/null 2>&1; then
         _estimated_cost=$(estimate_agent_call_cost "$agent_type" "$model" "$enhanced_prompt")
