@@ -11,6 +11,7 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _model_resolver_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_model_resolver_lib_dir}/provider-registry.sh" || { echo "model-resolver: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
 if ! declare -f octo_model_cache_file >/dev/null 2>&1; then
     source "${_model_resolver_lib_dir}/model-cache-path.sh" 2>/dev/null || true
 fi
@@ -229,6 +230,19 @@ _octo_effective_cost_mode() {
     esac
 }
 
+_octo_eval_model_for_class() {
+    local provider="${1:-}" task_class="${2:-}"
+    case "$provider:$task_class" in
+        codex:mechanical) printf '%s\n' "gpt-5.6-luna" ;;
+        codex:balanced) printf '%s\n' "gpt-5.6-terra" ;;
+        codex:premium|codex:review|codex:security) printf '%s\n' "gpt-5.6-sol" ;;
+        claude:mechanical) printf '%s\n' "claude-haiku-4.5" ;;
+        claude:balanced) printf '%s\n' "claude-sonnet-5" ;;
+        claude:premium|claude:review|claude:security) printf '%s\n' "claude-opus-5" ;;
+        *) return 1 ;;
+    esac
+}
+
 # resolve_octopus_model <provider> <agent_type> <phase> <role>
 resolve_octopus_model() {
     local provider="$1"
@@ -237,8 +251,13 @@ resolve_octopus_model() {
     local role="${4:-}"
     local config_file="${HOME}/.claude-octopus/config/providers.json"
     local resolved_model=""
-    local cost_mode
+    local cost_mode routing_policy
     cost_mode="$(_octo_effective_cost_mode "$config_file")"
+    if declare -f octo_routing_policy >/dev/null 2>&1; then
+        routing_policy="$(octo_routing_policy 2>/dev/null || printf '%s' off)"
+    else
+        routing_policy="${OCTOPUS_ROUTING_POLICY:-off}"
+    fi
 
     # Env overrides must bypass caches. A prior default resolution can be cached
     # for the same provider/agent/phase tuple, but explicit user overrides are
@@ -248,7 +267,12 @@ resolve_octopus_model() {
         antigravity|agy-research|gemini|gemini-*) canonical_provider="agy" ;;
     esac
     provider="$canonical_provider"
-    local env_var="OCTOPUS_$(echo "$canonical_provider" | tr '[:lower:]' '[:upper:]' | tr '-' '_')_MODEL"
+    local env_var
+    if declare -f octo_provider_model_env >/dev/null 2>&1; then
+        env_var="$(octo_provider_model_env "$canonical_provider")" || return 1
+    else
+        env_var="OCTOPUS_$(echo "$canonical_provider" | tr '[:lower:]' '[:upper:]' | tr '-' '_')_MODEL"
+    fi
     if [[ -n "${!env_var:-}" ]]; then
         if ! validate_model_name_for_provider "$canonical_provider" "${!env_var}"; then
             log ERROR "Invalid model name in $env_var"
@@ -273,12 +297,16 @@ resolve_octopus_model() {
     local safe_ph="${phase//[^a-zA-Z0-9]/_}"
     local safe_r="${role//[^a-zA-Z0-9]/_}"
     local safe_cm="${cost_mode//[^a-zA-Z0-9]/_}"
+    local safe_rp="$routing_policy"
+    local safe_tc="${OCTOPUS_TASK_CLASS:-none}"
+    safe_rp="${safe_rp//[^a-zA-Z0-9]/_}"
+    safe_tc="${safe_tc//[^a-zA-Z0-9]/_}"
     local safe_cfg="no_config"
     if [[ -f "$config_file" ]]; then
         safe_cfg="$(cksum < "$config_file" 2>/dev/null | awk '{print $1 "_" $2}')"
         safe_cfg="${safe_cfg//[^a-zA-Z0-9_]/_}"
     fi
-    cache_key="MC_${safe_p}_A_${safe_a}_P_${safe_ph}_R_${safe_r}_M_${safe_cm}_C_${safe_cfg}"
+    cache_key="MC_${safe_p}_A_${safe_a}_P_${safe_ph}_R_${safe_r}_M_${safe_cm}_RP_${safe_rp}_TC_${safe_tc}_C_${safe_cfg}"
     local cached_val
     eval "cached_val=\"\${_OCTO_MODEL_CACHE_${cache_key}:-}\""
     if [[ -n "$cached_val" ]]; then
@@ -333,7 +361,9 @@ resolve_octopus_model() {
     fi
 
     # Config file lookups
+    local config_lookups_applied=false
     if [[ -z "$resolved_model" && -f "$config_file" ]] && command -v jq &> /dev/null; then
+        config_lookups_applied=true
         # Load config once for this resolution tree
         local config_data
         config_data=$(<"$config_file")
@@ -482,6 +512,15 @@ resolve_octopus_model() {
             fi
         fi
 
+        # An explicitly enabled eval policy is more specific than generic
+        # capability, cost-tier, and provider defaults. It remains below every
+        # environment, session, role/phase, and provider-role route.
+        if [[ ( -z "$resolved_model" || "$resolved_model" == "null" ) &&
+              "$routing_policy" == "eval" && -n "${OCTOPUS_TASK_CLASS:-}" ]]; then
+            resolved_model="$(_octo_eval_model_for_class "$canonical_provider" "$OCTOPUS_TASK_CLASS" 2>/dev/null || true)"
+            [[ -n "$_trace" && -n "$resolved_model" ]] && echo "[model-trace] Tier 3b (eval ${OCTOPUS_TASK_CLASS}): $resolved_model ← SELECTED" >&2
+        fi
+
         # 3. Capability Mapping (providers.codex.spark, etc)
         if [[ -z "$resolved_model" || "$resolved_model" == "null" ]]; then
             local capability=""
@@ -525,6 +564,16 @@ resolve_octopus_model() {
                 [[ -n "$_trace" ]] && echo "[model-trace] Tier 6 (config default): —" >&2
             fi
         fi
+    fi
+
+    # With no readable project config there are no project routes/defaults to
+    # traverse, but an explicitly enabled session eval policy still precedes
+    # release defaults.
+    if [[ "$config_lookups_applied" != true &&
+          ( -z "$resolved_model" || "$resolved_model" == "null" ) &&
+          "$routing_policy" == "eval" && -n "${OCTOPUS_TASK_CLASS:-}" ]]; then
+        resolved_model="$(_octo_eval_model_for_class "$canonical_provider" "$OCTOPUS_TASK_CLASS" 2>/dev/null || true)"
+        [[ -n "$_trace" && -n "$resolved_model" ]] && echo "[model-trace] Tier 3b (eval ${OCTOPUS_TASK_CLASS}): $resolved_model ← SELECTED" >&2
     fi
 
     # Fallback to hard-coded defaults (Priority 7)

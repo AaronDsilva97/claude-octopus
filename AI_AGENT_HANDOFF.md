@@ -1,16 +1,100 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-23
-Status: The live GitHub queue audit is complete. PR #959 was reconciled,
-validated, and squash-merged as `2f521742`; PRs #956, #957, #958, #960, and
-PR #962 is also resolved. PR #940 was closed without merge, and issue #943 was
-fixed by PR #962 and closed with that squash merge.
-Branch: `main` at `2f5217421fa21b68f8e736687a5eaa69da838d61`
+Last updated: 2026-08-26
+Status: The v10.0.0 reliability release candidate implements the six approved
+modernization additions plus hermetic end-to-end failure injection. The final
+review-response tree passes the complete local CI, plugin assembly, strict
+plugin validation, ShellCheck, and staged-review gates. Commit/push, protected
+PR verification, merge, tag, publication, and installed-release checks remain.
+Branch: `release/v10.0.0`; protected release PR #965 is under review.
 Current release: [v9.66.1](https://github.com/nyldn/claude-octopus/releases/tag/v9.66.1)
-Tracking: Beads `oco-c0v` (discovered from `oco-j08`); PR #959
-Next action: Recheck the live GitHub PR and issue queues before selecting new
-work. Do not cut another release solely for PR #959; release only through the
-normal `RELEASING.md` flow when a release scope is intentionally chosen.
+Tracking: Beads epic `oco-de9`; children `oco-de9.1` through `oco-de9.8`
+Next action: commit and push the verified third-round PR #965 review response,
+reply to and resolve its one remaining inline thread, then wait for exact-head
+approval and hosted CI. Tag only the squash-merge commit on `main`, then rerun
+`bash scripts/validate-release.sh` against v10.
+
+## V10 Reliability Release Candidate
+
+- Additions 1-6 are implemented: truthful seat execution, Setup and Doctor 2.0,
+  Provider Registry 2.0, cache-write truth, cancellation/recovery with durable
+  observability, and eval-backed Claude/Codex/Fable routing.
+- The failure-injection integration suite drives the real `orchestrate.sh spawn
+  agy` entrypoint with hermetic providers and no credentials. Its 14 scenarios
+  plus hermeticity check passed 15/15 with zero skips.
+- `CI=true GITHUB_ACTIONS=true make ci-changed` failed closed to `make ci-local`
+  and passed all 16 smoke suites, 289/289 unit suites, and 8/8 integration
+  suites on the final review-response tree. The v10 failure-injection suite
+  passed all 15 assertions with zero skips. Plugin assembly, strict Claude
+  plugin validation, sync checks, packaging checks, and CI-only verifications
+  also passed.
+- The final review response verified every CodeRabbit finding against the
+  current code. Valid fixes include auth-aware Setup/Doctor flow, stale lock
+  recovery, bounded output artifacts and CLI probes, atomic contract snapshots,
+  byte-correct routing, fail-closed cancellation cleanup, semantic sidecar
+  cleanup, exact release-version parity, and an actionable synchronous
+  persistence refusal. The timeout-artifact suggestion was rejected because
+  v10 intentionally permits only contributed or degraded usable artifacts into
+  synthesis; terminal timeouts retain `contribution=none`.
+- CodeRabbit's second review round added six verified fixes. Plan and Setup now
+  reuse one provider-status/root source, Setup reruns Doctor before its final
+  summary, the low-cost review plan fails closed on dispatch/auth failure, and
+  provider-registry test environment arguments are safely quoted. Most
+  importantly, a failed ledger rollback now preserves an atomic recovery marker
+  and intact same-directory backup; eligibility fails closed while recovery is
+  pending, and the next locked operation retries restoration before proceeding.
+  RED/GREEN coverage proves failed restoration, blocked eligibility, and
+  successful retry. The final full matrix remains 16 smoke, 289 unit, and 8
+  integration suites with zero failures.
+- CodeRabbit's third review round correctly identified a commit-boundary gap:
+  failure to remove the recovery marker after both snapshots were published
+  could make the next operation restore the pre-transition ledger. Recovery
+  now recognizes a committed generation only when `run.json`, `seats.json`,
+  and the latest-run symlink all agree with the ledger; it then treats the
+  marker as cleanup debt. A staged self-review also exposed the complementary
+  partial-publication case, where `run.json` could advance before `seats.json`
+  failed. Recovery now rebuilds both compatibility snapshots and the latest
+  pointer from the restored ledger before clearing the marker. The run-contract
+  suite passes 54/54, including both failure modes.
+- The prior exact-head hosted run exposed a portability defect in the timeout
+  regression, not in the timeout implementation: GNU timeout legitimately
+  reports 137 when its SIGKILL backstop fires, while the in-process fallback
+  reports 124. The regression now accepts those two proven timeout statuses,
+  still requires the spawned PID to be dead, and uses a 30-second loaded-CI
+  bound. Its focused suite passes 18/18.
+- Exact-head Test Suite run `32957574121` then proved the production deadline
+  behavior on Ubuntu but exposed an overly exact retry-test oracle: the attempt
+  correctly returned 124 after one attempt in two seconds, while the test
+  required the whole-second remainder to be exactly two. A second-boundary
+  rollover can conservatively reduce that attempt budget to one. The oracle now
+  accepts only the valid one-to-two-second range while preserving the timeout
+  status, single-attempt, and elapsed-deadline assertions; five consecutive
+  focused runs pass 8/8.
+- Focused evidence after the final response includes synchronous contract
+  19/19, persistence degradation 6/6, semantic cache alignment 36/36, output
+  cap 14/14, agent summary 11/11, version consistency 20/20 and 30/30, and
+  failure injection 15/15. Repository ShellCheck at warning severity and
+  `git diff --check` pass.
+- `bash scripts/validate-release.sh` is intentionally deferred until after the
+  v10 tag: before the version bump it correctly rejects candidate HEAD because
+  the existing `v9.66.1` tag points to the prior production merge rather than
+  this branch.
+- Earlier independent staged review identified four real defects: the v10 latest-run
+  pointer collided with the legacy status symlink, Fable received character
+  counts instead of UTF-8 byte counts, post-routing model identity was not
+  persisted, and model-resolution failures could leave planned seats
+  non-terminal. Commit `37b14f07` fixes all four with RED/GREEN coverage. The
+  five focused contract suites pass with zero failures.
+- The final independent AGY code-quality review returned `NO FINDINGS`. A
+  low-cost Codex Luna review lane was stopped after ten minutes without a
+  verdict or findings and is recorded as degraded review capacity, not approval.
+- Cancellation suite latency reported inside the reviewer's sandbox was not
+  reproducible locally. The test now bounds its own teardown and passes 4/4 in
+  about three seconds, so future failure cannot wait for the synthetic
+  300-second child.
+- Original checkout `/Users/chris/git/claude-octopus-dev` remains untouched;
+  preserve its unrelated dirty state. Do not treat `.octo-continue.md` as
+  authoritative.
 
 ## GitHub Queue Audit (2026-08-23)
 

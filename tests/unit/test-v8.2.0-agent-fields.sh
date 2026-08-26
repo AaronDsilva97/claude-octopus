@@ -194,22 +194,30 @@ echo ""
 echo -e "${BLUE}Test Group 3: spawn_agent Skills Injection${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# Extract the complete spawn_agent body. Contract and observability setup made
+# the function longer than the historical fixed-line grep window.
+SPAWN_AGENT_BODY="$(awk '
+    /^spawn_agent\(\)/ { in_spawn=1 }
+    in_spawn && /^[[:alnum:]_]+\(\)/ && $0 !~ /^spawn_agent\(\)/ { exit }
+    in_spawn { print }
+' "$ALL_SRC")"
+
 # 3.1: spawn_agent references build_skill_context
-if grep -A 130 '^spawn_agent()' "$ALL_SRC" | grep 'build_skill_context' >/dev/null; then
+if grep 'build_skill_context' <<< "$SPAWN_AGENT_BODY" >/dev/null; then
     assert_pass "3.1 spawn_agent references build_skill_context"
 else
     assert_fail "3.1 spawn_agent references build_skill_context"
 fi
 
 # 3.2: spawn_agent references select_curated_agent for skill lookup
-if grep -A 150 '^spawn_agent()' "$ALL_SRC" | grep 'select_curated_agent.*prompt.*phase' >/dev/null; then
+if grep 'select_curated_agent.*prompt.*phase' <<< "$SPAWN_AGENT_BODY" >/dev/null; then
     assert_pass "3.2 spawn_agent references select_curated_agent for skill lookup"
 else
     assert_fail "3.2 spawn_agent references select_curated_agent for skill lookup"
 fi
 
 # 3.3: Skills injection gated behind SUPPORTS_AGENT_TYPE_ROUTING
-if grep -A 150 '^spawn_agent()' "$ALL_SRC" | grep 'SUPPORTS_AGENT_TYPE_ROUTING.*true' >/dev/null; then
+if grep 'SUPPORTS_AGENT_TYPE_ROUTING.*true' <<< "$SPAWN_AGENT_BODY" >/dev/null; then
     assert_pass "3.3 Skills injection gated behind SUPPORTS_AGENT_TYPE_ROUTING"
 else
     assert_fail "3.3 Skills injection gated behind SUPPORTS_AGENT_TYPE_ROUTING"
@@ -230,7 +238,7 @@ else
 fi
 
 # 3.6: Skill content appended after persona+prompt (v8.16 cache optimization)
-if grep -A 140 '^spawn_agent()' "$ALL_SRC" | grep 'Agent Skill Context' >/dev/null; then
+if grep 'Agent Skill Context' <<< "$SPAWN_AGENT_BODY" >/dev/null; then
     assert_pass "3.6 Skill content appended after persona+prompt (cache-optimized)"
 else
     assert_fail "3.6 Skill content appended after persona+prompt (cache-optimized)"
@@ -244,23 +252,23 @@ echo ""
 echo -e "${BLUE}Test Group 4: Version Consistency${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# 4.1: package.json version is 8.x/9.x
+# 4.1: package.json version is semantic
 pkg_version=$(grep '"version"' "$PACKAGE_JSON" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-if [[ "$pkg_version" =~ ^(8|9)\. ]]; then
-    assert_pass "4.1 package.json version is 8.x/9.x ($pkg_version)"
+if [[ "$pkg_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    assert_pass "4.1 package.json version is semantic ($pkg_version)"
 else
-    assert_fail "4.1 package.json version is 8.x/9.x" "Got: $pkg_version"
+    assert_fail "4.1 package.json version is semantic" "Got: $pkg_version"
 fi
 
-# 4.2: plugin.json version is 8.x/9.x
+# 4.2: plugin.json version is semantic
 pj_version=$(grep '"version"' "$PLUGIN_JSON" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-if [[ "$pj_version" =~ ^(8|9)\. ]]; then
-    assert_pass "4.2 plugin.json version is 8.x/9.x ($pj_version)"
+if [[ "$pj_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    assert_pass "4.2 plugin.json version is semantic ($pj_version)"
 else
-    assert_fail "4.2 plugin.json version is 8.x/9.x" "Got: $pj_version"
+    assert_fail "4.2 plugin.json version is semantic" "Got: $pj_version"
 fi
 
-# 4.3: marketplace.json version is 8.x/9.x for the octo plugin entry
+# 4.3: marketplace.json version is semantic for the octo plugin entry
 mj_version=$(python3 - "$MARKETPLACE_JSON" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -270,24 +278,31 @@ for plugin in data.get("plugins", []):
         break
 PY
 )
-if [[ "$mj_version" =~ ^(8|9)\. ]]; then
-    assert_pass "4.3 marketplace.json version is 8.x/9.x ($mj_version)"
+if [[ "$mj_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    assert_pass "4.3 marketplace.json version is semantic ($mj_version)"
 else
-    assert_fail "4.3 marketplace.json version is 8.x/9.x" "Got: $mj_version"
+    assert_fail "4.3 marketplace.json version is semantic" "Got: $mj_version"
 fi
 
-# 4.4: CHANGELOG exists with version entries (v8.37.0 trimmed pre-8.22.0 history)
-if [[ -f "$CHANGELOG_MD" ]] && grep -qE '\[(8|9)\.' "$CHANGELOG_MD"; then
-    assert_pass "4.4 CHANGELOG.md has version entries"
+# 4.4: CHANGELOG contains the plugin source-of-truth version
+if [[ -f "$CHANGELOG_MD" ]] && grep -F "[${pj_version}]" "$CHANGELOG_MD" >/dev/null; then
+    assert_pass "4.4 CHANGELOG.md contains current version ($pj_version)"
 else
-    assert_fail "4.4 CHANGELOG.md has version entries"
+    assert_fail "4.4 CHANGELOG.md contains current version" "Expected: [$pj_version]"
 fi
 
-# 4.5: README badge shows 8.x/9.x
-if grep -qE 'Version-(8|9)\.' "$README_MD"; then
-    assert_pass "4.5 README.md badge shows 8.x/9.x"
+# 4.5: all public release versions match plugin.json
+readme_version=$(python3 - "$README_MD" <<'PY'
+import re, sys
+match = re.search(r"Version-(\d+\.\d+\.\d+)-blue", open(sys.argv[1], encoding="utf-8").read())
+print(match.group(1) if match else "")
+PY
+)
+if [[ "$pkg_version" == "$pj_version" && "$mj_version" == "$pj_version" && "$readme_version" == "$pj_version" ]]; then
+    assert_pass "4.5 release versions agree with plugin.json ($pj_version)"
 else
-    assert_fail "4.5 README.md badge shows 8.x/9.x"
+    assert_fail "4.5 release versions agree with plugin.json" \
+        "package=$pkg_version marketplace=$mj_version README=$readme_version plugin=$pj_version"
 fi
 
 # 4.6: plugin.json description mentions version or key capabilities
@@ -297,11 +312,11 @@ else
     assert_fail "4.6 plugin.json description has key metadata"
 fi
 
-# 4.7: CHANGELOG exists with version entries (v8.37.0 trimmed pre-8.22.0 history)
-if [[ -f "$CHANGELOG_MD" ]] && grep -qE '\[(8|9)\.' "$CHANGELOG_MD"; then
-    assert_pass "4.7 CHANGELOG has version entries"
+# 4.7: CHANGELOG exact-version guard remains explicit
+if [[ -f "$CHANGELOG_MD" ]] && grep -F "[${pj_version}]" "$CHANGELOG_MD" >/dev/null; then
+    assert_pass "4.7 CHANGELOG has current release entry"
 else
-    assert_fail "4.7 CHANGELOG has version entries"
+    assert_fail "4.7 CHANGELOG has current release entry"
 fi
 
 # 4.8: CHANGELOG has recent entries

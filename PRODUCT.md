@@ -1,5 +1,5 @@
 ---
-last_reviewed: 2026-08-21
+last_reviewed: 2026-08-26
 ---
 
 # PRODUCT.md
@@ -77,11 +77,11 @@ Frontier AI models will remain individually overconfident for the foreseeable fu
 
 ## Evidence
 
-**Traction (as of 2026-08-21):**
+**Traction (as of 2026-08-26):**
 - GitHub stars: 3,889
 - GitHub forks: 365
 - Local CI parity: `make ci-local` runs the same smoke, unit, and integration suites as CI
-- Version: 9.66.1 (active release cadence)
+- Version: 10.0.0 (active release cadence)
 - Runtimes supported: Claude Code, Codex CLI, Command Code CLI, Cursor (MCP), Antigravity CLI
 
 **Measured Impact:**
@@ -92,6 +92,17 @@ Frontier AI models will remain individually overconfident for the foreseeable fu
 ## Claude Code 2026 Compatibility Layer (v9.50.0)
 
 The plugin tracks Claude Code's native capability surface instead of competing with it. That means: a routine manifest so octopus workflows run on Claude Code's saved automations (schedules and GitHub events); a SubagentStop gate that scores, attributes, and cost-logs every subagent summary before the lead sees it; `/octo:usage` reporting in Claude Code's `/usage` schema; an opt-out mirror of the `worktree.bgIsolation` session flag; a Claude Agent SDK seat (`CLAUDE_SDK_API_KEY`) that gives workflows Opus 5 and the 1M context window; a four-skill starter pack matching the opinionated-skills-pack trend; and a `/plugin browse` manifest that discloses projected context cost up front. Native-first remains the rule: Octopus adds multi-provider disagreement on top of Claude Code, never a replacement for it.
+
+## Reliability Contract (v10)
+
+V10 moves the product from process-level success reporting to durable execution
+truth. Every provider seat has a reconstructable lifecycle, only validated
+output can contribute, and interrupted work retains process, source, worktree,
+and artifact evidence. Doctor 2.0 turns setup readiness into a machine-readable
+contract, Provider Registry 2.0 removes identity-policy drift, and opt-in eval
+routing makes cheaper mechanical seats and premium judgment escalation
+testable. The release is gated by end-to-end failure injection against the real
+orchestration entrypoint without external credentials or billing.
 
 ## Known Product Gaps
 

@@ -18,16 +18,75 @@ offer the command once after installation, but never starts it.
 
 **CRITICAL: This command MUST always run its interactive flow when invoked.** Never silently dismiss the user. Never say "you're already set up" without showing the dashboard and offering choices via AskUserQuestion. Even if everything is configured, the user invoked this command for a reason — show them their status and ask what they want to do.
 
+## v10 Readiness Contract
+
+Setup is a guided configuration flow, not a success-by-binary-presence check.
+Before offering changes, use `/octo:doctor --json` as the authoritative local
+readiness report and keep its stdout even when it exits `1`; that exit means one
+or more checks failed, not that the JSON is unusable. Provider readiness requires
+both usable authentication and a resolvable model. A CLI version command alone
+does not prove either.
+
+Treat every repair as a proposal:
+
+1. Show the exact failing check and the proposed command or file change.
+2. Ask for explicit confirmation before installing, logging in, deleting,
+   replacing, or updating anything.
+3. For configuration files, write a sibling temporary file, validate it, then
+   atomically rename it over the target. Preserve the original if validation or
+   rename fails.
+4. Rerun the affected Doctor category and report its real exit status. Never
+   turn a warning or failed recheck into a success message.
+5. Never print, copy into a manifest, or ask the user to paste a secret into
+   chat. Use each provider's supported login or secure environment path.
+
 ## STEP 1: Detect Current State
 
-Run a SINGLE comprehensive check:
+Run a SINGLE comprehensive check. In addition to the dashboard facts below,
+capture the Doctor 2.0 JSON contract from the resolved plugin root. Because
+failed diagnostics exit `1`, capture the status explicitly instead of using it
+as an errexit boundary:
+
+```bash
+OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+if [[ ! -x "$OCTO_ROOT/scripts/orchestrate.sh" ]]; then
+  OCTO_ROOT="${HOME}/.claude-octopus/plugin"
+fi
+if [[ ! -x "$OCTO_ROOT/scripts/orchestrate.sh" ]]; then
+  helper="${HOME}/.claude-octopus/plugin/scripts/helpers/ensure-plugin-root.sh"
+  if [[ ! -x "$helper" ]]; then
+    helper="$(find "${HOME}/.claude/plugins/cache" "${HOME}/Library/Application Support/Claude" "${LOCALAPPDATA:-/dev/null}/Claude" "${XDG_DATA_HOME:-${HOME}/.local/share}/Claude" -maxdepth 8 -path "*/nyldn-plugins/octo/*/scripts/helpers/ensure-plugin-root.sh" -print -quit 2>/dev/null)"
+  fi
+  [[ -x "$helper" ]] && bash "$helper" >/dev/null 2>&1 || true
+fi
+[[ -x "$OCTO_ROOT/scripts/orchestrate.sh" ]] || {
+  echo "plugin-root:missing"
+  exit 1
+}
+export CLAUDE_PLUGIN_ROOT="$OCTO_ROOT"
+
+set +e
+DOCTOR_JSON="$(bash "${OCTO_ROOT}/scripts/orchestrate.sh" doctor --json 2>/dev/null)"
+DOCTOR_EXIT=$?
+set -e
+if ! jq -e '.schema_version == "10.0" and (.summary.exit_code == 0 or .summary.exit_code == 1)' \
+  <<<"$DOCTOR_JSON" >/dev/null 2>&1; then
+  echo "doctor_contract:invalid"
+else
+  printf 'doctor_exit:%s\n' "$DOCTOR_EXIT"
+  printf 'doctor_failures:%s\n' "$(jq -r '.summary.failures' <<<"$DOCTOR_JSON")"
+  printf 'doctor_warnings:%s\n' "$(jq -r '.summary.warnings' <<<"$DOCTOR_JSON")"
+fi
+```
+
+Then run the existing inventory block:
 
 ```bash
 set -euo pipefail
 
 echo "=== Provider Detection ==="
 printf "codex:%s\n" "$(command -v codex >/dev/null 2>&1 && echo installed || echo missing)"
-printf "codex_auth:%s\n" "$(codex --version >/dev/null 2>&1 && echo ok || echo none)"
+printf "codex_auth:%s\n" "$(jq -r '[.results[] | select(.name == "codex-auth")][0].status // "unknown"' <<<"${DOCTOR_JSON:-{}}" 2>/dev/null || echo unknown)"
 printf "agy:%s\n" "$(command -v agy >/dev/null 2>&1 && echo installed || echo missing)"
 printf "agy_model:%s\n" "${OCTOPUS_AGY_MODEL:-}"
 printf "perplexity:%s\n" "$([ -n "${PERPLEXITY_API_KEY:-}" ] && echo configured || echo missing)"
@@ -471,7 +530,10 @@ Re-run provider detection to confirm everything works:
 **Preflight — Ensure plugin root is resolvable (run via Bash tool FIRST):**
 
 ```bash
-OCTO_ROOT="${HOME}/.claude-octopus/plugin"
+OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+if [[ ! -x "$OCTO_ROOT/scripts/orchestrate.sh" ]]; then
+  OCTO_ROOT="${HOME}/.claude-octopus/plugin"
+fi
 if [[ ! -x "$OCTO_ROOT/scripts/orchestrate.sh" ]]; then
   helper="$OCTO_ROOT/scripts/helpers/ensure-plugin-root.sh"
   if [[ ! -x "$helper" ]]; then
@@ -479,20 +541,41 @@ if [[ ! -x "$OCTO_ROOT/scripts/orchestrate.sh" ]]; then
   fi
   [[ -x "$helper" ]] && bash "$helper" >/dev/null 2>&1 || true
 fi
-test -x "$OCTO_ROOT/scripts/orchestrate.sh" && echo "plugin-root:ok" || echo "plugin-root:missing"
+[[ -x "$OCTO_ROOT/scripts/orchestrate.sh" ]] || {
+  echo "plugin-root:missing"
+  exit 1
+}
+export CLAUDE_PLUGIN_ROOT="$OCTO_ROOT"
+echo "plugin-root:ok"
 ```
 
 If the output is `plugin-root:missing`, stop and ask the user to reinstall `octo@nyldn-plugins`, then retry setup.
 
 
 ```bash
-${HOME}/.claude-octopus/plugin/scripts/orchestrate.sh detect-providers
+"${OCTO_ROOT}/scripts/orchestrate.sh" detect-providers
+
+set +e
+FINAL_DOCTOR_JSON="$(bash "${OCTO_ROOT}/scripts/orchestrate.sh" doctor --json 2>/dev/null)"
+FINAL_DOCTOR_EXIT=$?
+set -e
+if ! jq -e '.schema_version == "10.0" and (.summary.exit_code == 0 or .summary.exit_code == 1)' \
+  <<<"$FINAL_DOCTOR_JSON" >/dev/null 2>&1; then
+  echo "doctor-final:invalid"
+  exit 1
+fi
+FINAL_FAILURES="$(jq -r '.summary.failures' <<<"$FINAL_DOCTOR_JSON")"
+FINAL_WARNINGS="$(jq -r '.summary.warnings' <<<"$FINAL_DOCTOR_JSON")"
+printf 'doctor-final:exit=%s failures=%s warnings=%s\n' \
+  "$FINAL_DOCTOR_EXIT" "$FINAL_FAILURES" "$FINAL_WARNINGS"
 ```
 
-Show final summary:
+Show the final summary only from `FINAL_DOCTOR_JSON`. Use the success heading
+only when `FINAL_DOCTOR_EXIT` is zero; otherwise include `FINAL_FAILURES` and
+`FINAL_WARNINGS` and direct the user to the remaining checks:
 
-```
-✅ Setup Complete!
+```text
+[✅ Setup Complete! / ⚠️ Setup Needs Attention]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Providers: X active (Codex, Antigravity, ...)
 RTK: [Active / Not installed]

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 _agent_sync_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_agent_sync_lib_dir}/agent-spec.sh" 2>/dev/null || true
+source "${_agent_sync_lib_dir}/provider-registry.sh" || { echo "agent-sync: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
 # ═══════════════════════════════════════════════════════════════════════════════
 # agent-sync.sh — Agent synchronous dispatch & Agent Teams routing
 # Extracted from orchestrate.sh (v9.7.4)
@@ -20,6 +21,12 @@ if ! type start_quota_watcher >/dev/null 2>&1; then
 fi
 if ! type is_claude_agent_type >/dev/null 2>&1; then
     source "${_octopus_agent_sync_lib_dir}/routing.sh" 2>/dev/null || true
+fi
+if ! type run_contract_transition >/dev/null 2>&1; then
+    source "${_octopus_agent_sync_lib_dir}/run-contract.sh" 2>/dev/null || true
+fi
+if ! type classify_agent_output >/dev/null 2>&1; then
+    source "${_octopus_agent_sync_lib_dir}/error-tracking.sh" 2>/dev/null || true
 fi
 
 fleet_dispatch_begin() {
@@ -259,6 +266,27 @@ run_agent_sync() {
         role=$(get_role_for_context "$agent_type" "$task_type" "$phase")
     fi
 
+    local _progress_unique
+    if declare -F _octopus_next_spawn_task_id >/dev/null 2>&1; then
+        _progress_unique="$(_octopus_next_spawn_task_id)"
+    else
+        local _sync_unique_dir
+        _sync_unique_dir="$(mktemp -d "${TMPDIR:-/tmp}/octopus-sync-id.XXXXXX")" || return 74
+        _progress_unique="$(basename "$_sync_unique_dir")-$$"
+        rmdir "$_sync_unique_dir" 2>/dev/null || true
+    fi
+    local _sync_seat_id
+    _sync_seat_id="sync-${phase:-unknown}-$(octo_agent_spec_slug "$agent_type")-${_progress_unique}"
+    if [[ "${OCTOPUS_PERSISTENCE_AVAILABLE:-true}" == "false" ]]; then
+        log ERROR "Persistence unavailable; refusing untracked provider dispatch for $agent_type"
+    fi
+    run_contract_transition "$_sync_seat_id" planned \
+        "requested_provider=$agent_type" \
+        "requested_model=${OCTOPUS_REQUESTED_MODEL:-}" \
+        "requested_effort=${OCTOPUS_REQUESTED_EFFORT:-}" \
+        "phase=${phase:-unknown}" "role=${role:-none}" \
+        "attempt_id=${_sync_seat_id}-attempt-1" || return 74
+
     # ═══════════════════════════════════════════════════════════════════════════
     # Cache-aligned prompt structure: stable prefix first, variable suffix last
     # This enables Claude's cached-token discount on repeated prefix content
@@ -329,56 +357,88 @@ ${provider_ctx}"
     enhanced_prompt=$(enforce_context_budget "$enhanced_prompt" "$role" "$agent_type")
     local _budget_rc=$?
     if [[ $_budget_rc -ne 0 ]]; then
-        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" 0 "Prompt exceeded context budget" 0 "" "$role" || true
+        run_contract_transition "$_sync_seat_id" failed \
+            "reason=Prompt exceeded context budget" >/dev/null 2>&1 || true
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" 0 "Prompt exceeded context budget" 0 "" "$role" "$_sync_seat_id" failed none || true
         return "$_budget_rc"
     fi
 
     log DEBUG "run_agent_sync: agent=$agent_type, role=${role:-none}, phase=${phase:-none}"
 
-    # Record usage (get model from agent type)
+    if declare -f octo_routing_policy >/dev/null 2>&1 &&
+       [[ "$(octo_routing_policy 2>/dev/null || printf '%s' off)" == "eval" ]] &&
+       declare -f octo_route_task_class >/dev/null 2>&1; then
+        local OCTOPUS_TASK_CLASS
+        OCTOPUS_TASK_CLASS="$(octo_route_task_class "$enhanced_prompt" "$role" "$phase")"
+        export OCTOPUS_TASK_CLASS
+    fi
+
+    # Resolve the baseline seat before provider preflight so failures retain the
+    # v10 planned → starting lifecycle. Fable's atomic claim happens later,
+    # during command construction, only after health and persistence succeed.
     local model
-    model=$(get_agent_model "$agent_type" "$phase" "$role")
-    local _progress_unique
-    if declare -F _octopus_next_spawn_task_id >/dev/null 2>&1; then
-        _progress_unique="$(_octopus_next_spawn_task_id)"
-    else
-        _progress_unique="$(date +%s)-$$-${RANDOM:-0}"
+    if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
+        run_contract_transition "$_sync_seat_id" failed \
+            "reason=Model resolution failed" >/dev/null 2>&1 || true
+        return 1
     fi
     local _progress_task_id
-    _progress_task_id="sync-${phase:-unknown}-$(octo_agent_spec_slug "$agent_type")-${_progress_unique}"
+    _progress_task_id="$_sync_seat_id"
     local _estimated_cost="0.000000"
     if type estimate_agent_call_cost >/dev/null 2>&1; then
         _estimated_cost=$(estimate_agent_call_cost "$agent_type" "$model" "$enhanced_prompt")
     fi
+    run_contract_transition "$_sync_seat_id" starting \
+        "resolved_provider=$agent_type" "resolved_model=$model" \
+        "resolved_effort=${OCTOPUS_RESOLVED_EFFORT:-${OCTOPUS_REQUESTED_EFFORT:-}}" \
+        "estimated_cost_usd=$_estimated_cost" || return 74
 
-    # v8.49.0: Pre-dispatch health check — verify provider is reachable
-    local _provider_for_health=""
-    case "$agent_type" in
-        codex*)      _provider_for_health="codex" ;;
-        gemini*)     _provider_for_health="agy" ;;
-        agy*|antigravity) _provider_for_health="agy" ;;
-        claude*)     _provider_for_health="claude" ;;
-        openrouter*) _provider_for_health="openrouter" ;;
-        perplexity*) _provider_for_health="perplexity" ;;
-        cursor-agent*) _provider_for_health="cursor-agent" ;;
-    esac
+    # v8.49.0: Pre-dispatch health check — verify provider is reachable.
+    local _provider_for_health="" _health_handler="none"
+    _provider_for_health="$(octo_provider_canonical "$(octo_agent_spec_executor "$agent_type")" 2>/dev/null || true)"
     if [[ -n "$_provider_for_health" ]]; then
-        local _health_diag
-        if ! _health_diag=$(check_provider_health "$_provider_for_health" 2>&1); then
+        _health_handler="$(octo_provider_health_handler "$_provider_for_health" 2>/dev/null || printf '%s' none)"
+    fi
+    if [[ "$_health_handler" != "none" ]]; then
+        local _health_diag="" _health_failed=false
+        if ! declare -f "$_health_handler" >/dev/null 2>&1; then
+            _health_diag="registry health handler unavailable: $_health_handler"
+            _health_failed=true
+        elif ! _health_diag=$("$_health_handler" "$_provider_for_health" 2>&1); then
+            _health_failed=true
+        fi
+        if [[ "$_health_failed" == true ]]; then
             log WARN "Provider '$_provider_for_health' health check failed: $_health_diag"
             log WARN "Skipping agent dispatch for $agent_type (provider unavailable)"
-            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" 0 "Provider unavailable: $_health_diag" 0 "" "$role" || true
+            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" 0 "Provider unavailable: $_health_diag" 0 "" "$role" "$_sync_seat_id" failed none || true
+            run_contract_transition "$_sync_seat_id" failed \
+                "reason=Provider unavailable: $_health_diag" >/dev/null 2>&1 || true
             echo "[Provider $_provider_for_health unavailable: $_health_diag]"
             return 1
         fi
     fi
 
+    run_contract_transition "$_sync_seat_id" authenticated || return 74
+
     if [[ "${OCTOPUS_PERSISTENCE_AVAILABLE:-true}" == "false" ]]; then
-        local degraded_cmd
-        degraded_cmd=$(get_agent_command "$agent_type" "$phase" "$role") || return 1
-        octopus_run_provider_without_persistence \
-            "$agent_type" "$enhanced_prompt" "$timeout_secs" "$degraded_cmd"
-        return $?
+        run_contract_transition "$_sync_seat_id" failed \
+            "reason=Persistence unavailable" >/dev/null 2>&1 || true
+        return 74
+    fi
+
+    local cmd _prompt_bytes
+    if ! _prompt_bytes=$(octo_prompt_byte_length "$enhanced_prompt"); then
+        run_contract_transition "$_sync_seat_id" failed \
+            "reason=Prompt byte measurement failed" >/dev/null 2>&1 || true
+        return 1
+    fi
+    if ! cmd=$(get_agent_command "$agent_type" "$phase" "$role" "$_prompt_bytes"); then
+        run_contract_transition "$_sync_seat_id" failed \
+            "reason=Provider command unavailable" >/dev/null 2>&1 || true
+        return 1
+    fi
+    if declare -f octo_dispatch_command_model >/dev/null 2>&1; then
+        model="$(octo_dispatch_command_model "$cmd" "$model")"
     fi
 
     record_agent_call "$agent_type" "$model" "$enhanced_prompt" "${phase:-unknown}" "${role:-none}" "0"
@@ -388,9 +448,6 @@ ${provider_ctx}"
     if command -v record_agent_start &> /dev/null; then
         metrics_id=$(record_agent_start "$agent_type" "$model" "$enhanced_prompt" "${phase:-unknown}") || true
     fi
-
-    local cmd
-    cmd=$(get_agent_command "$agent_type" "$phase" "$role") || return 1
 
     # SECURITY: Use array-based execution to prevent word-splitting vulnerabilities
     local -a cmd_array
@@ -436,6 +493,8 @@ ${provider_ctx}"
     type update_agent_status >/dev/null 2>&1 && update_agent_status \
         "$agent_type" "running" 0 "$_estimated_cost" "$timeout_secs" \
         "$_progress_task_id" "${phase:-unknown}" "" || true
+    run_contract_transition "$_sync_seat_id" running \
+        "resolved_model=$model" || return 74
 
     # AGY has an intermittent native SIGSEGV under heterogeneous orchestration
     # (#943). Retry that provider exactly once, while keeping both attempts
@@ -461,7 +520,8 @@ ${provider_ctx}"
             fi
         fi
 
-        if printf '%s' "$enhanced_prompt" | run_with_timeout "$_attempt_timeout" "${cmd_array[@]}" 2>"$temp_err" >"$temp_out"; then
+        if printf '%s' "$enhanced_prompt" | OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP="true" \
+            run_with_timeout "$_attempt_timeout" "${cmd_array[@]}" 2>"$temp_err" >"$temp_out"; then
             exit_code=0
         else
             exit_code=$?
@@ -487,35 +547,8 @@ ${provider_ctx}"
         [[ "$exit_code" -eq 0 && "$_sync_retry_count" -gt 0 ]] && _sync_recovered_sigsegv=true
         break
     done
-    output=$(cat "$temp_out")
-
     stop_quota_watcher "$_quota_watcher_pid"
-
-    # Tail-bias: the deliverable summary lives at the end of codex-style output.
-    local _max_bytes="${OCTOPUS_AGENT_MAX_OUTPUT_BYTES:-262144}"
     local _sync_output_truncated=false
-    if [[ -n "$output" && $_max_bytes -gt 0 && ${#output} -gt $_max_bytes ]]; then
-        local _orig_bytes=${#output}
-        # Build the banner first so we can measure it exactly and budget the
-        # head+tail slices against a real number instead of a guess. This keeps
-        # the final `${#output}` <= _max_bytes for any cap, including tiny ones.
-        local _banner=$'\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚠️  OUTPUT TRUNCATED — '"${_orig_bytes}"$' bytes captured\n   (override with OCTOPUS_AGENT_MAX_OUTPUT_BYTES=<bytes>; 0 disables cap)\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-        local _banner_bytes=${#_banner}
-        local _budget=$((_max_bytes - _banner_bytes))
-        if [[ $_budget -le 0 ]]; then
-            output="$_banner"
-        else
-            local _head_bytes=$(( _budget / 8 ))     # ~12% head, 88% tail
-            [[ $_head_bytes -gt 4096 ]] && _head_bytes=4096
-            local _tail_bytes=$(( _budget - _head_bytes ))
-            # Positive offset (`${v:s:n}`) keeps bash 3.x compat; `${v: -n}` is 4.2+.
-            local _tail_start=$(( _orig_bytes - _tail_bytes ))
-            [[ $_tail_start -lt 0 ]] && _tail_start=0
-            output="${output:0:$_head_bytes}${_banner}${output:$_tail_start:$_tail_bytes}"
-        fi
-        log WARN "Agent $agent_type output truncated: ${_orig_bytes}B → ${#output}B (cap=${_max_bytes}B)"
-        _sync_output_truncated=true
-    fi
 
     local _elapsed_ms
     _elapsed_ms=$(( ($(date +%s) - _dispatch_start) * 1000 ))
@@ -563,10 +596,13 @@ ${provider_ctx}"
             _sync_status="timeout"
             _sync_reason="Timed out before completion"
         fi
+        run_contract_transition "$_sync_seat_id" "$_sync_status" \
+            "reason=$_sync_reason" "stderr_file=$_sync_signal_artifact" \
+            "duration_ms=$_elapsed_ms" >/dev/null 2>&1 || true
         type update_agent_status >/dev/null 2>&1 && update_agent_status \
             "$agent_type" "$_sync_status" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
             "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
-        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" "$_sync_seat_id" "$_sync_status" none || true
         rm -f "$temp_err" "$temp_out"
         return $exit_code
     fi
@@ -585,7 +621,10 @@ ${provider_ctx}"
                 type update_agent_status >/dev/null 2>&1 && update_agent_status \
                     "$agent_type" "skipped" "$_elapsed_ms" 0 "$timeout_secs" \
                     "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
-                type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "skipped" "$tokens_in" 0 "Prompt rejected by provider (oversize)" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
+                type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "skipped" "$tokens_in" 0 "Prompt rejected by provider (oversize)" "$_elapsed_ms" "$_sync_signal_artifact" "$role" "$_sync_seat_id" skipped none || true
+                run_contract_transition "$_sync_seat_id" skipped \
+                    "reason=Prompt rejected by provider (oversize)" \
+                    "duration_ms=$_elapsed_ms" >/dev/null 2>&1 || true
                 rm -f "$temp_err" "$temp_out"
                 echo ""
                 return 0
@@ -594,7 +633,10 @@ ${provider_ctx}"
             type update_agent_status >/dev/null 2>&1 && update_agent_status \
                 "$agent_type" "failed" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
                 "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true
-            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
+            type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" "$_sync_seat_id" failed none || true
+            run_contract_transition "$_sync_seat_id" failed \
+                "reason=$_sync_reason" "stderr_file=$_sync_signal_artifact" \
+                "duration_ms=$_elapsed_ms" >/dev/null 2>&1 || true
             rm -f "$temp_err" "$temp_out"
             return 1
         fi
@@ -606,6 +648,38 @@ ${provider_ctx}"
                 _sync_reason="Recovered after AGY exit 139"
             fi
         fi
+        local _sync_artifact_source="$temp_out"
+        if ! _octo_run_output_usable_file "$_sync_artifact_source" && \
+           [[ "$_sync_status" == degraded ]] && \
+           octo_file_has_codex_recoverable_stderr "$temp_err"; then
+            _sync_artifact_source="$temp_err"
+        fi
+
+        # Apply the byte cap after selecting stdout or recoverable stderr so
+        # both the returned text and durable artifact obey the same contract.
+        local _max_bytes="${OCTOPUS_AGENT_MAX_OUTPUT_BYTES:-262144}"
+        local _orig_bytes _banner _banner_bytes _budget _head_bytes _tail_bytes
+        local _head_chunk="" _tail_chunk=""
+        _orig_bytes="$(wc -c < "$_sync_artifact_source" 2>/dev/null | tr -d ' ')"
+        [[ "$_orig_bytes" =~ ^[0-9]+$ ]] || _orig_bytes=0
+        output="$(cat "$_sync_artifact_source")"
+        if [[ "$_max_bytes" =~ ^[0-9]+$ && "$_max_bytes" -gt 0 && "$_orig_bytes" -gt "$_max_bytes" ]]; then
+            _banner=$'\n\n--- OUTPUT TRUNCATED: '"${_orig_bytes}"$' bytes captured ---\n(override with OCTOPUS_AGENT_MAX_OUTPUT_BYTES=<bytes>; 0 disables cap)\n\n'
+            _banner_bytes="$(printf '%s' "$_banner" | wc -c | tr -d ' ')"
+            _budget=$((_max_bytes - _banner_bytes))
+            if [[ "$_budget" -le 0 ]]; then
+                output="${_banner:0:$_max_bytes}"
+            else
+                _head_bytes=$((_budget / 8))
+                [[ "$_head_bytes" -gt 4096 ]] && _head_bytes=4096
+                _tail_bytes=$((_budget - _head_bytes))
+                _head_chunk="$(head -c "$_head_bytes" "$_sync_artifact_source" 2>/dev/null)"
+                _tail_chunk="$(tail -c "$_tail_bytes" "$_sync_artifact_source" 2>/dev/null)"
+                output="${_head_chunk}${_banner}${_tail_chunk}"
+            fi
+            log WARN "Agent $agent_type output truncated: ${_orig_bytes}B (cap=${_max_bytes}B)"
+            _sync_output_truncated=true
+        fi
         if [[ "$_sync_output_truncated" == "true" ]]; then
             _sync_status="degraded"
             if [[ -n "$_sync_reason" ]]; then
@@ -614,7 +688,88 @@ ${provider_ctx}"
                 _sync_reason="Output truncated"
             fi
         fi
-        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$temp_out" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_signal_artifact" "$role" || true
+        local _sync_result_artifact="${RESULTS_DIR}/sync-result-${_progress_unique}.md"
+        local _sync_result_tmp
+        _sync_result_tmp="$(mktemp "${_sync_result_artifact}.tmp.XXXXXX")" || {
+            run_contract_transition "$_sync_seat_id" failed \
+                "reason=Unable to allocate durable result artifact" >/dev/null 2>&1 || true
+            rm -f "$temp_err" "$temp_out"
+            return 1
+        }
+        local _sync_result_write_rc=0
+        if [[ "$_sync_output_truncated" == true ]]; then
+            (umask 077; printf '%s' "$output" > "$_sync_result_tmp") 2>/dev/null || _sync_result_write_rc=$?
+        else
+            (umask 077; cp "$_sync_artifact_source" "$_sync_result_tmp") 2>/dev/null || _sync_result_write_rc=$?
+        fi
+        if [[ "$_sync_result_write_rc" -ne 0 ]] || \
+           ! mv "$_sync_result_tmp" "$_sync_result_artifact" 2>/dev/null; then
+            rm -f "$_sync_result_tmp" "$temp_err" "$temp_out"
+            run_contract_transition "$_sync_seat_id" failed \
+                "reason=Unable to publish durable result artifact" >/dev/null 2>&1 || true
+            return 1
+        fi
+
+        local _sync_stderr_artifact="$_sync_signal_artifact"
+        if [[ -z "$_sync_stderr_artifact" && -s "$temp_err" ]]; then
+            _sync_stderr_artifact="${RESULTS_DIR}/sync-stderr-${_progress_unique}.log"
+            local _sync_stderr_tmp
+            _sync_stderr_tmp="$(mktemp "${_sync_stderr_artifact}.tmp.XXXXXX")" || {
+                run_contract_transition "$_sync_seat_id" failed \
+                    "reason=Unable to allocate durable stderr artifact" >/dev/null 2>&1 || true
+                rm -f "$temp_err" "$temp_out"
+                return 1
+            }
+            if ! (umask 077; cp "$temp_err" "$_sync_stderr_tmp") 2>/dev/null || \
+               ! mv "$_sync_stderr_tmp" "$_sync_stderr_artifact" 2>/dev/null; then
+                rm -f "$_sync_stderr_tmp" "$temp_err" "$temp_out"
+                run_contract_transition "$_sync_seat_id" failed \
+                    "reason=Unable to publish durable stderr artifact" >/dev/null 2>&1 || true
+                return 1
+            fi
+        fi
+
+        run_contract_transition "$_sync_seat_id" output_received \
+            "output_file=$_sync_result_artifact" "stderr_file=$_sync_stderr_artifact" \
+            "attempt_id=${_sync_seat_id}-attempt-$((_sync_retry_count + 1))" \
+            "tokens_out=$(octo_estimate_tokens_for_file "$_sync_result_artifact" 2>/dev/null || echo 0)" \
+            "duration_ms=$_elapsed_ms" || {
+                run_contract_transition "$_sync_seat_id" failed \
+                    "reason=Unable to record received output" >/dev/null 2>&1 || true
+                rm -f "$temp_err" "$temp_out"
+                return 1
+            }
+        run_contract_transition "$_sync_seat_id" validated \
+            "contribution=eligible" || {
+                run_contract_transition "$_sync_seat_id" failed \
+                    "reason=Unable to validate provider output" >/dev/null 2>&1 || true
+                rm -f "$temp_err" "$temp_out"
+                return 1
+            }
+        if [[ "$_sync_status" == degraded ]]; then
+            run_contract_transition "$_sync_seat_id" degraded \
+                "contribution=eligible-with-warning" "reason=$_sync_reason" || {
+                    run_contract_transition "$_sync_seat_id" failed \
+                        "reason=Unable to record degraded contribution" >/dev/null 2>&1 || true
+                    rm -f "$temp_err" "$temp_out"
+                    return 1
+                }
+        else
+            run_contract_transition "$_sync_seat_id" contributed \
+                "contribution=eligible" || {
+                    run_contract_transition "$_sync_seat_id" failed \
+                        "reason=Unable to record successful contribution" >/dev/null 2>&1 || true
+                    rm -f "$temp_err" "$temp_out"
+                    return 1
+                }
+        fi
+        local _sync_projection_transition=contributed
+        local _sync_projection_contribution=eligible
+        if [[ "$_sync_status" == degraded ]]; then
+            _sync_projection_transition=degraded
+            _sync_projection_contribution=eligible-with-warning
+        fi
+        type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "$_sync_status" "$tokens_in" "$(octo_estimate_tokens_for_file "$_sync_result_artifact" 2>/dev/null || echo 0)" "$_sync_reason" "$_elapsed_ms" "$_sync_result_artifact" "$role" "$_sync_seat_id" "$_sync_projection_transition" "$_sync_projection_contribution" || true
         type update_agent_status >/dev/null 2>&1 && update_agent_status \
             "$agent_type" "$_sync_status" "$_elapsed_ms" "$_estimated_cost" "$timeout_secs" \
             "$_progress_task_id" "${phase:-unknown}" "$_sync_signal_artifact" || true

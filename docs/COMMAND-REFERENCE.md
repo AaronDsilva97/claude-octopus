@@ -19,7 +19,7 @@ All slash commands use the `/octo:` namespace. The smart router command is `/oct
 | Command | Description |
 |---------|-------------|
 | `/octo:setup` | Check setup status and configure providers (aliases: `/octo:configure`, `/octo:config`, `/octo:init`, `/octo:wizard`, `/octo:sys-setup`) |
-| `/octo:doctor` | Environment diagnostics across 9 check categories (includes RTK install + token optimization) |
+| `/octo:doctor` | Fail-closed diagnostics across 14 categories with human or JSON output |
 | `/octo:model-config` | Configure provider model selection per workflow phase |
 | `/octo:km` | Toggle Knowledge Work mode |
 | `/octo:dev` | Switch to Dev Work mode |
@@ -105,6 +105,8 @@ All slash commands use the `/octo:` namespace. The smart router command is `/oct
 | `/octo:resume` | Resume a previous agent by ID — continue an interrupted task |
 | `/octo:discipline` | Toggle discipline mode — auto-invoke verification and review checks |
 | `octopus agent-summary` | Show the current multi-provider run status table |
+| `octopus status --run RUN_ID --json` | Read a schema-versioned v10 run manifest without provider calls |
+| `octopus explain --run RUN_ID` | Explain contribution, degradation, skip, or failure decisions from durable artifacts |
 
 ### Admin
 
@@ -238,7 +240,7 @@ You're all set! Try: /octo:auto research OAuth patterns
 
 ### `/octo:doctor`
 
-Run environment diagnostics across 9 check categories.
+Run fail-closed environment diagnostics across 14 check categories.
 
 **Usage:**
 ```
@@ -248,7 +250,7 @@ Run environment diagnostics across 9 check categories.
 /octo:doctor auth --verbose     # Detailed auth status
 /octo:doctor config             # Plugin install/version plus Claude Code feature flags
 /octo:doctor skills             # Skill loading plus modern plugin capability notes
-/octo:doctor --json             # Machine-readable output
+/octo:doctor --json             # Machine-readable Doctor 2.0 output
 ```
 
 **Check categories:**
@@ -256,14 +258,25 @@ Run environment diagnostics across 9 check categories.
 | Category | What it checks |
 |----------|---------------|
 | `providers` | Claude Code version, Codex CLI, Antigravity CLI, and other configured providers |
+| `companions` | Optional companion-tool installation and readiness |
 | `auth` | Authentication status for each provider |
 | `config` | Plugin version, install scope, feature flags |
-| `state` | Project state.json, stale results, workspace writable |
+| `updates` | Loaded, installed, catalog, and cached plugin version drift |
+| `state` | Project state, writable cache, stale run records, and orphan process evidence |
 | `smoke` | Smoke test cache, model configuration |
 | `hooks` | hooks.json validity, hook scripts |
 | `scheduler` | Scheduler daemon, jobs, budget gates, kill switches |
 | `skills` | Skill files loaded and valid |
 | `conflicts` | Conflicting plugin detection |
+| `agents` | Agent definitions and platform projections |
+| `recurrence` | Repeated-failure and recovery evidence |
+| `cache` | Active and stale plugin-cache versions |
+
+Doctor returns `0` for passes and warnings, `1` when one or more checks fail,
+and `2` for invalid options, unknown categories, or multiple category
+arguments. With `--json`, a diagnostic failure still leaves a valid
+`schema_version: "10.0"` report on stdout; capture the exit status separately
+instead of discarding the report under shell `errexit`.
 
 `/octo:doctor providers --live` is opt-in because it sends one small real AGY
 request. It checks the installed version, live `agy models` catalog and keyring
@@ -1370,6 +1383,27 @@ octopus summary
 - Whether synthesis will continue or abort when `OCTOPUS_REQUIRE_ALL=true`
 
 Multi-provider commands call this automatically before synthesis when a run ledger is available.
+
+---
+
+### `octopus status --run` and `octopus explain --run`
+
+Inspect a completed, interrupted, or degraded v10 run without rerunning a
+provider or probing authentication.
+
+```bash
+octopus status --run RUN_ID --json
+octopus status --run latest
+octopus explain --run RUN_ID
+```
+
+Each run writes `~/.claude-octopus/runs/<run-id>/run.json` atomically and updates
+`runs/latest` only after the complete snapshot exists. The manifest contains
+requested and resolved provider/model/effort, source and worktree attribution,
+process cleanup, timing and token metrics, artifact paths, the full seat
+transition timeline, terminal reasons, contribution counts, and phase rollups.
+Unknown or corrupt runs return nonzero. These commands are artifact-only: they
+do not invoke provider CLIs, authentication checks, or repair actions.
 
 ---
 

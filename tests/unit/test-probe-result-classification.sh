@@ -15,6 +15,9 @@ source "$PROJECT_ROOT/scripts/lib/progressive.sh"
 
 RESULT_DIR="$(mktemp -d)"
 trap 'rm -rf "$RESULT_DIR"' EXIT
+export WORKSPACE_DIR="$RESULT_DIR/workspace"
+export OCTOPUS_RUN_ID="probe-classification-contract"
+mkdir -p "$WORKSPACE_DIR"
 
 header_only="$RESULT_DIR/codex-probe-123-0.md"
 cat > "$header_only" <<'EOF'
@@ -76,6 +79,40 @@ else
     test_fail "expected success for status marker, got: ${classification:-<empty>}"
 fi
 
+typed_timeout="$RESULT_DIR/codex-probe-typed-timeout.md"
+cp "$success_body" "$typed_timeout"
+run_contract_transition typed-timeout planned >/dev/null
+run_contract_transition typed-timeout starting >/dev/null
+run_contract_transition typed-timeout authenticated >/dev/null
+run_contract_transition typed-timeout running >/dev/null
+run_contract_transition typed-timeout timeout output_file="$typed_timeout" \
+    reason="Timed out before completion" >/dev/null
+test_case "typed timeout cannot enter synthesis despite a legacy success marker"
+classification="$(probe_result_file_status "$typed_timeout")"
+if [[ "$classification" == "failed:contract-ineligible" ]] && \
+   ! probe_result_file_is_usable "$typed_timeout"; then
+    test_pass
+else
+    test_fail "typed timeout remained synthesis eligible: $classification"
+fi
+
+typed_success="$RESULT_DIR/codex-probe-typed-success.md"
+cp "$success_body" "$typed_success"
+run_contract_transition typed-success planned >/dev/null
+run_contract_transition typed-success starting >/dev/null
+run_contract_transition typed-success authenticated >/dev/null
+run_contract_transition typed-success running >/dev/null
+run_contract_transition typed-success output_received output_file="$typed_success" >/dev/null
+run_contract_transition typed-success validated contribution=eligible >/dev/null
+run_contract_transition typed-success contributed contribution=eligible >/dev/null
+test_case "typed contribution remains synthesis eligible"
+if [[ "$(probe_result_file_status "$typed_success")" == "success:" ]] && \
+   probe_result_file_is_usable "$typed_success"; then
+    test_pass
+else
+    test_fail "typed contributed artifact was rejected"
+fi
+
 test_case "partial synthesis skips header-only artifacts"
 RESULTS_DIR="$RESULT_DIR/progressive"
 mkdir -p "$RESULTS_DIR"
@@ -88,6 +125,21 @@ if [[ "$partial" == *"Partial Synthesis (1/1 results)"* && \
     test_pass
 else
     test_fail "expected partial synthesis to include only usable output, got: ${partial:-<empty>}"
+fi
+
+test_case "contract evaluation errors are distinct and fail closed"
+ledger="$(octo_run_contract_ledger_path)"
+cp "$ledger" "$ledger.before-malformed"
+printf '{malformed\n' > "$ledger"
+classification="$(probe_result_file_status "$typed_success")"
+evaluation_usable=true
+probe_result_file_is_usable "$typed_success" || evaluation_usable=false
+mv "$ledger.before-malformed" "$ledger"
+if [[ "$classification" == "failed:contract-evaluation-error" ]] &&
+   [[ "$evaluation_usable" == false ]]; then
+    test_pass
+else
+    test_fail "expected distinct fail-closed evaluation error, got ${classification:-empty}"
 fi
 
 test_summary
