@@ -5,14 +5,49 @@ Status: v10 reliability modernization is released. PR #965 merged additions
 1-6 and hermetic end-to-end failure injection as `dd4cb943`; PR #966 merged the
 deterministic macOS deadline oracle as `6265807f`. Exact-main Test Suite run
 `32969018355` passed before the annotated `v10.0.0` tag and GitHub release were
-published from that exact commit.
-Branch: `docs/v10-release-handoff`, based on tagged `main` `6265807f`.
-Handoff publication: evidence commit `c714303b` is pushed as PR #967; every
-review-response commit is pushed and checked for local/remote parity before merge.
+published from that exact commit. Amy remote UAT is complete with one open
+command-alias defect recorded as Beads bug `oco-e6p`.
+Branch: `ops/amy-v10-uat-handoff`, based on protected `main` `745b4bca`.
+Handoff publication: PR #967 merged the release evidence as `745b4bca`; every
+review-response commit was checked for local/remote parity before merge.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: Beads epic `oco-de9` and children `oco-de9.1` through `oco-de9.8` are closed.
-Next action: no v10 release action remains. Start from current protected `main`,
-run `bd ready`, and preserve unrelated dirty state in the coordination checkout.
+Next action: resolve `oco-e6p` by reconciling the documented `/octo:doctor`
+entrypoint with the intentionally namespaced runtime and its contradictory
+tests. Preserve unrelated dirty state in the coordination checkout.
+
+## Amy Remote UAT (2026-08-26)
+
+- Amy's Tailscale node key had expired on 2026-08-22. It was renewed through
+  the existing `nyldn.com` tailnet; the node is online at
+  `amy-nyldn-com.tailb878e5.ts.net` / `100.67.208.36` with key expiry
+  2027-02-22. The local `amy` SSH alias now uses MagicDNS and a verified pinned
+  host-key alias; `amy-public` retains the prior public recovery route.
+- Claude Code was unauthenticated and at v2.1.215. OAuth login now reports
+  `loggedIn: true` via `claude.ai`, and the existing user-scoped npm install was
+  updated to stable v2.1.231. A bounded Haiku print-mode request returned the
+  exact expected response in one turn.
+- The marketplace install reports `octo@nyldn-plugins` v10.0.0, enabled at user
+  scope, with its stable symlink resolving to the v10 cache. Strict plugin
+  validation passes. The remote settings now disable Claude's broken `--bare`
+  subprocess path with `OCTOPUS_DISABLE_BARE=1`; the prior settings file is
+  retained as `~/.claude/settings.json.before-oco-jpw`.
+- Codex was authenticated but outdated at v0.114.0 and pinned to unavailable
+  `gpt-4.1`. It is now v0.149.1 with default model `gpt-5.6-sol`; the prior
+  provider config is retained as
+  `~/.claude-octopus/config/providers.json.before-oco-jpw`. The same preflight
+  that initially failed now passes and verifies one live provider.
+- Doctor 2.0 returns exit 0 with 42 passes, 5 warnings, 0 failures, and 53 info
+  checks. The remaining warnings are optional/stale-state advisories: one stale
+  Ollama model, two old result files, no budget gate, deliberate `--bare`
+  disablement, and no background Claude agents. Probe dry-run exits 0 without
+  provider dispatch.
+- End-to-end command loading works for `/octo:preflight`, and the manually
+  invoked `/octo:skill-doctor` skill completes. The published
+  `/octo:doctor --json` spelling does not exist on a fresh v10 runtime and
+  returns `Unknown command`; source tests intentionally forbid
+  `commands/doctor.md` while README and command-reference text require the
+  namespaced command. Beads bug `oco-e6p` owns that release follow-up.
 
 ## V10 Reliability Release
 
