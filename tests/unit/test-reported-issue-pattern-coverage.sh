@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MATRIX="$PROJECT_ROOT/tests/fixtures/reported-issue-patterns.tsv"
 LIVE_SUITE="$PROJECT_ROOT/tests/live/test-installed-package-issue-patterns.sh"
+RUNNER="$PROJECT_ROOT/tests/run-all.sh"
+WORKFLOW="$PROJECT_ROOT/.github/workflows/test.yml"
+MAKEFILE="$PROJECT_ROOT/Makefile"
 
 source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "reported issue pattern coverage"
@@ -29,11 +32,27 @@ fi
 
 test_case "every deterministic suite named by the matrix exists and is CI-reachable"
 missing=""
+ci_suites=""
+while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    category="$(awk -v target="$target" '
+        $0 ~ "^" target ":" {in_target = 1; next}
+        in_target && /^[[:alnum:]_.-]+:/ {exit}
+        in_target && /run-all\.sh/ {print $NF; exit}
+    ' "$MAKEFILE")"
+    [[ -n "$category" ]] || continue
+    ci_suites+="$(bash "$RUNNER" "$category" --list | sed -n 's/^[[:space:]]*- /tests\//p')"$'\n'
+done < <(
+    sed 's/#.*//' "$WORKFLOW" |
+        grep -ohE 'make test-[a-z0-9-]+' |
+        awk '{print $2}' |
+        sort -u
+)
 while IFS= read -r suite; do
     [[ -n "$suite" ]] || continue
     if [[ ! -f "$PROJECT_ROOT/$suite" ]]; then
         missing+=" $suite(missing)"
-    elif [[ "$suite" != tests/smoke/* && "$suite" != tests/unit/* && "$suite" != tests/integration/* ]]; then
+    elif ! grep -Fxq "$suite" <<< "$ci_suites"; then
         missing+=" $suite(not-ci-reachable)"
     fi
 done < <(awk -F '\t' '$1 !~ /^#/ {print $3}' "$MATRIX" | tr ',' '\n' | sort -u)

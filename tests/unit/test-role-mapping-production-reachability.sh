@@ -24,7 +24,7 @@ chmod +x "$tmp_bin/codex"
 resolve_provider() {
     local phase="$1" operation="$2" role="$3" default_provider="$4"
     shift 4
-    env HOME="$tmp_home" PATH="$tmp_bin:$PATH" OCTOPUS_PROVIDERS_CONFIG="$config" "$@" \
+    env "HOME=$tmp_home" "PATH=$tmp_bin:$PATH" "OCTOPUS_PROVIDERS_CONFIG=$config" "$@" \
         bash -c '
             set -euo pipefail
             export PLUGIN_DIR="$1"
@@ -41,6 +41,14 @@ if [[ "$got" == codex ]]; then
     test_pass
 else
     test_fail "expected implementer role to resolve to codex, got '$got'"
+fi
+
+test_case "the legacy role opt-out reaches the production resolver"
+got="$(resolve_provider tangle coding architect claude-sonnet OCTOPUS_LEGACY_ROLES=1)"
+if [[ "$got" == codex ]]; then
+    test_pass
+else
+    test_fail "expected legacy architect mapping to resolve to codex, got '$got'"
 fi
 
 test_case "reviewer consent is reachable through the production resolver"

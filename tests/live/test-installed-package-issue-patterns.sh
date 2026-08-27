@@ -39,6 +39,23 @@ cleanup() {
 trap cleanup EXIT INT TERM
 mkdir -p "$UAT_TMP/project with spaces" "$UAT_TMP/plugin-data" "$UAT_TMP/results"
 
+# Run the repository's canonical provider admission check once, before any
+# orchestrate.sh invocation. Claude Code itself is intentionally absent from
+# this protocol because it is the host runtime; its direct plugin-load check
+# below uses `claude auth status` instead.
+PROVIDER_STATUS="$UAT_TMP/provider-status.txt"
+if ! env \
+    "CLAUDE_PLUGIN_ROOT=$plugin_root" \
+    "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
+    bash "$plugin_root/scripts/helpers/check-providers.sh" > "$PROVIDER_STATUS"; then
+    printf 'ERROR: provider availability check failed\n' >&2
+    exit 2
+fi
+
+provider_available() {
+    grep -Fxq "$1:available" "$PROVIDER_STATUS"
+}
+
 bounded() {
     local seconds="$1"
     shift
@@ -84,8 +101,10 @@ stable_link() {
     [[ "$before" == "$plugin_root" ]] || return 1
     (
         cd "$UAT_TMP/project with spaces" || exit 1
-        CLAUDE_PLUGIN_ROOT="$stable_root" CLAUDE_PLUGIN_DATA="$UAT_TMP/plugin-data" \
-            OCTOPUS_SKIP_PROVIDER_PROBES=true \
+        env \
+            "CLAUDE_PLUGIN_ROOT=$stable_root" \
+            "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
+            "OCTOPUS_SKIP_PROVIDER_PROBES=true" \
             bash "$stable_root/scripts/orchestrate.sh" --help >/dev/null
     ) || return 1
     after="$(cd "$stable_root" && pwd -P)" || return 1
@@ -96,8 +115,10 @@ independent_cwd() {
     (
         cd "$UAT_TMP/project with spaces" || exit 1
         [[ ! -d .git ]] || exit 1
-        CLAUDE_PLUGIN_ROOT="$plugin_root" CLAUDE_PLUGIN_DATA="$UAT_TMP/plugin-data" \
-            OCTOPUS_SKIP_PROVIDER_PROBES=true \
+        env \
+            "CLAUDE_PLUGIN_ROOT=$plugin_root" \
+            "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
+            "OCTOPUS_SKIP_PROVIDER_PROBES=true" \
             bash "$plugin_root/scripts/orchestrate.sh" --help >/dev/null
     )
 }
@@ -106,8 +127,10 @@ doctor_json() {
     local output="$UAT_TMP/doctor.json"
     (
         cd "$UAT_TMP/project with spaces" || exit 1
-        CLAUDE_PLUGIN_ROOT="$plugin_root" CLAUDE_PLUGIN_DATA="$UAT_TMP/plugin-data" \
-            OCTOPUS_SKIP_PROVIDER_PROBES=true \
+        env \
+            "CLAUDE_PLUGIN_ROOT=$plugin_root" \
+            "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
+            "OCTOPUS_SKIP_PROVIDER_PROBES=true" \
             bash "$plugin_root/scripts/orchestrate.sh" doctor skills --json
     ) > "$output" 2> "$UAT_TMP/doctor.err" || true
     jq -e '.schema_version == "10.0" and (.summary.total > 0) and (.results | type == "array")' "$output" >/dev/null
@@ -117,35 +140,44 @@ late_flag_rejection() {
     local output="$UAT_TMP/late-flag.log" rc=0
     (
         cd "$UAT_TMP/project with spaces" || exit 1
-        CLAUDE_PLUGIN_ROOT="$plugin_root" CLAUDE_PLUGIN_DATA="$UAT_TMP/plugin-data" \
-            OCTOPUS_SKIP_PROVIDER_PROBES=true \
+        env \
+            "CLAUDE_PLUGIN_ROOT=$plugin_root" \
+            "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
+            "OCTOPUS_SKIP_PROVIDER_PROBES=true" \
             bash "$plugin_root/scripts/orchestrate.sh" define --timeout 9 OCTOPUS_UAT_PROMPT --dry-run
     ) > "$output" 2>&1 || rc=$?
     [[ "$rc" -ne 0 ]] && grep -Fq "looks like a flag but was read as the prompt" "$output"
 }
 
 claude_plugin_load() {
-    command -v claude >/dev/null 2>&1 || { skip "Claude CLI unavailable"; return 2; }
+    command -v claude >/dev/null 2>&1 || { skip "Claude Code unavailable"; return 2; }
+    claude auth status >/dev/null 2>&1 || { skip "Claude Code unauthenticated"; return 2; }
     local output="$UAT_TMP/claude.jsonl"
     (
         cd "$UAT_TMP/project with spaces" || exit 1
-        CLAUDE_PLUGIN_DATA="$UAT_TMP/plugin-data" bounded 120 \
+        bounded 120 env \
+            "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
             claude --plugin-dir "$plugin_root" --print --output-format stream-json \
             --include-hook-events --verbose --dangerously-skip-permissions \
             "Reply exactly: OCTOPUS_CLAUDE_UAT_OK" </dev/null
     ) > "$output" 2>&1 || return 1
-    ! jq -r 'select(.type == "system" and .subtype == "init") | .plugin_errors[]?' "$output" 2>/dev/null | grep -q . &&
+    jq --slurp -e \
+        '[.[] | select(.type == "system" and .subtype == "init") | .plugin_errors[]?] | length == 0' \
+        "$output" >/dev/null &&
         grep -Fq 'OCTOPUS_CLAUDE_UAT_OK' "$output"
 }
 
 codex_dispatch() {
-    command -v codex >/dev/null 2>&1 || { skip "Codex CLI unavailable"; return 2; }
+    provider_available codex || { skip "Codex unavailable or unauthenticated"; return 2; }
     local task_id="installed-uat-$$" output="$UAT_TMP/codex.log"
     (
         cd "$UAT_TMP/project with spaces" || exit 1
-        CLAUDE_PLUGIN_ROOT="$plugin_root" CLAUDE_PLUGIN_DATA="$UAT_TMP/plugin-data" \
-            OCTOPUS_SKIP_PROVIDER_PROBES=true OCTOPUS_AGENT_TIMEOUT=120 \
-            bounded 150 bash "$plugin_root/scripts/orchestrate.sh" probe-single codex \
+        bounded 150 env \
+            "CLAUDE_PLUGIN_ROOT=$plugin_root" \
+            "CLAUDE_PLUGIN_DATA=$UAT_TMP/plugin-data" \
+            "OCTOPUS_SKIP_PROVIDER_PROBES=true" \
+            "OCTOPUS_AGENT_TIMEOUT=120" \
+            bash "$plugin_root/scripts/orchestrate.sh" probe-single codex \
             "Reply exactly: OCTOPUS_CODEX_UAT_OK" "$task_id" \
             "Installed-package provider contract" --output-dir "$UAT_TMP/results" </dev/null
     ) > "$output" 2>&1 || return 1

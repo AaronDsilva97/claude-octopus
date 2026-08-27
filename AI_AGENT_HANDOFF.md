@@ -2,15 +2,15 @@
 
 Last updated: 2026-08-27
 Status: v10.0.0 is released. Broader issue-pattern regression coverage and
-installed-package UAT are in final validation, with no private environment,
+installed-package UAT are published in PR #971, with no private environment,
 network, authentication, or operational details in the public diff.
 Branch: `codex/issue-pattern-uat`, based on `upstream/main` `23554eff`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for the post-release follow-ups.
-Next action: complete the full local gate, review the public-safe diff, and
-publish it through a pull request. Keep private UAT records out of commits and
-preserve unrelated dirty state in the coordination checkout.
+Next action: monitor PR #971's exact-head checks and resolve its review threads.
+Keep private UAT records out of commits and preserve unrelated dirty state in
+the coordination checkout.
 
 ## Reported-Issue Pattern UAT
 
@@ -25,11 +25,19 @@ preserve unrelated dirty state in the coordination checkout.
 - Issue #970 exposed a real reachability gap: the release role table and its
   consent-gated reviewer flip were tested only in isolation. The canonical
   workflow provider resolver now consults that table after explicit and
-  configured overrides, with production-path precedence coverage.
+  configured overrides, with production-path precedence and legacy opt-out
+  coverage.
+- Review follow-up runs the canonical auth-aware provider admission check
+  before installed-package workflows, keeps Claude Code host authentication
+  distinct from Claude SDK API-key admission, parses the complete plugin JSONL
+  stream in one assertion, and derives suite reachability from the categories
+  that CI actually invokes. Live-test prerequisites and shell environment
+  argument quoting are explicit.
 - Seven focused routing, reviewer, matrix, and reachability suites pass with
-  zero failures. `make sync` is current, and `make ci-local` passes 16 smoke,
-  291 unit, and 8 integration suites. The two documented platform/dry-run skips
-  remain non-failures. The public-safe diff is ready for review and publication.
+  zero failures. The review-response installed-package run passes 11/11 with
+  zero skips. `make sync` is current, and `make ci-changed` fails closed to a
+  full `make ci-local` that passes 16 smoke, 291 unit, and 8 integration suites.
+  The two documented platform/dry-run skips remain non-failures.
 
 ## V10 Post-Release UAT Follow-ups
 

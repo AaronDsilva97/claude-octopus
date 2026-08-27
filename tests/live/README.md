@@ -31,6 +31,7 @@ bash tests/live/test-installed-package-issue-patterns.sh
 
 - Claude Code CLI installed (`claude` command available)
 - Plugin installed locally or via symlink
+- `jq` and either `timeout` or `gtimeout` for the installed-package issue-pattern suite
 - ~2-5 minutes per test (real API calls)
 
 ## Writing Live Tests
