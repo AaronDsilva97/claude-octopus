@@ -56,33 +56,43 @@ else
     PASSED=$((PASSED + 1))
 fi
 
-echo "Testing: Current public guidance does not advertise retired /octo:doctor..."
-PUBLIC_DOCTOR_SURFACES="
-README.md
-docs/README.md
-docs/TROUBLESHOOTING.md
-.claude/skills/skill-copilot-provider/SKILL.md
-scripts/lib/review.sh
-scripts/install-deps.sh
-"
-for relative_path in $PUBLIC_DOCTOR_SURFACES; do
-    if grep -q '/octo:doctor' "$PROJECT_ROOT/$relative_path"; then
-        echo -e "${RED}✗${NC} $relative_path advertises retired /octo:doctor"
-        FAILED=$((FAILED + 1))
+count_doctor_references() {
+    { grep -oF -- '/octo:doctor' "$1" 2>/dev/null || true; } | awk 'END { print NR + 0 }'
+}
+
+PUBLIC_DOCTOR_SURFACES=(
+    "README.md|0"
+    "docs/README.md|0"
+    "docs/TROUBLESHOOTING.md|0"
+    ".claude/skills/skill-copilot-provider/SKILL.md|0"
+    ".claude/skills/skill-doctor/SKILL.md|1"
+    ".cursor-plugin/commands/octo-doctor.md|1"
+    "scripts/lib/review.sh|0"
+    "scripts/install-deps.sh|0"
+    "skills/skill-copilot-provider/SKILL.md|0"
+    "skills/skill-doctor/SKILL.md|1"
+)
+
+for surface in "${PUBLIC_DOCTOR_SURFACES[@]}"; do
+    relative_path="${surface%%|*}"
+    expected_count="${surface##*|}"
+    actual_count=$(count_doctor_references "$PROJECT_ROOT/$relative_path")
+    test_case "$relative_path uses only supported Doctor guidance"
+    if [[ "$actual_count" -eq "$expected_count" ]] &&
+       { [[ "$expected_count" -eq 0 ]] || grep -Fq '`/octo:doctor` was removed in v9.41.0' "$PROJECT_ROOT/$relative_path"; }; then
+        test_pass
     else
-        echo -e "${GREEN}✓${NC} $relative_path uses a supported Doctor entrypoint"
-        PASSED=$((PASSED + 1))
+        test_fail "$relative_path has $actual_count retired /octo:doctor references; expected $expected_count intentional reference(s)"
     fi
 done
 
-doctor_reference_count=$(grep -c '/octo:doctor' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md" 2>/dev/null || true)
+test_case "COMMAND-REFERENCE.md explains the retired Doctor command exactly once"
+doctor_reference_count=$(count_doctor_references "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md")
 if [[ "$doctor_reference_count" -eq 1 ]] &&
-   grep -q 'intentionally leaves `/octo:doctor` unregistered' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"; then
-    echo -e "${GREEN}✓${NC} docs/COMMAND-REFERENCE.md mentions retired /octo:doctor only to explain its absence"
-    PASSED=$((PASSED + 1))
+   grep -Fq 'intentionally leaves `/octo:doctor` unregistered' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"; then
+    test_pass
 else
-    echo -e "${RED}✗${NC} docs/COMMAND-REFERENCE.md must explain retired /octo:doctor exactly once"
-    FAILED=$((FAILED + 1))
+    test_fail "docs/COMMAND-REFERENCE.md must explain retired /octo:doctor exactly once"
 fi
 
 for cmd_file in "$COMMANDS_DIR"/*.md; do

@@ -32,6 +32,10 @@ checkout.
   health-handler path used by synchronous dispatch instead of requiring the
   removed hard-coded call. Release validation reports successful skill
   registration independently of unrelated earlier validation errors.
+- Follow-up review hardened the release checks with pipefail-safe exact
+  membership tests, an ordering assertion for health preflight before dispatch,
+  framework-based Doctor assertions, packaged-skill coverage, and exact
+  occurrence counting for the retired Doctor command.
 - `make sync` and the final non-interactive `make ci-changed` full rule pass:
   16/16 smoke suites, 289/289 unit suites, and 8/8 integration suites. The one
   documented macOS Council PTY case and the optional uninitialized debate
