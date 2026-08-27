@@ -1047,7 +1047,7 @@ print_provider_report() {
     [[ -n "$copilot_detail" ]] && printf "│    → %-38.38s│\n" "$copilot_detail"
     if [[ "$had_fallback" == "true" ]]; then
         echo "│                                             │"
-        echo "│ ⚠ Some providers failed — run /octo:doctor  │"
+        echo "│ ⚠ Some providers failed — run octopus doctor│"
     fi
     echo "└─────────────────────────────────────────────┘"
 
@@ -1061,7 +1061,7 @@ print_provider_report() {
         done < "$status_file"
     fi
 
-    # Persist failures for /octo:doctor
+    # Persist failures for Doctor diagnostics.
     if [[ "$had_fallback" == "true" ]]; then
         mkdir -p "$(dirname "$fallback_log")"
         local ts
@@ -1121,7 +1121,7 @@ review_run() {
     elif command -v codex >/dev/null 2>&1; then
         if ! check_codex_auth_freshness 2>/dev/null; then
             log "WARN" "review_run: Codex auth may be stale — review fleet may fall back to claude-sonnet"
-            log "USER" "⚠ Codex auth check failed. Run 'codex auth' or /octo:doctor to fix. Falling back to claude-sonnet for Codex roles."
+            log "USER" "⚠ Codex auth check failed. Run 'codex auth' or 'octopus doctor' to fix. Falling back to claude-sonnet for Codex roles."
             echo "codex|auth-failed|Run: codex auth" >> "$provider_status_file"
         fi
     else
@@ -1541,7 +1541,7 @@ ${round1_prompts[$retry_idx]}"
     done
     if [[ $_r1_failed -ge $_r1_total ]] && [[ $_r1_total -gt 0 ]]; then
         log ERROR "review_run: ALL Round 1 providers failed ($_r1_failed/$_r1_total). Review output is unreliable."
-        echo "{\"findings\":[],\"warning\":\"All $_r1_total review providers failed. No code was actually reviewed. Run /octo:doctor to diagnose provider issues.\"}" > "$findings_file"
+        echo "{\"findings\":[],\"warning\":\"All $_r1_total review providers failed. No code was actually reviewed. Run octopus doctor to diagnose provider issues.\"}" > "$findings_file"
         if [[ -n "$proof_dir" ]]; then
             octo_proof_artifact "$proof_dir" "review-findings" "$findings_file" "all providers failed"
             octo_proof_claim "$proof_dir" "Code was reviewed by at least one provider" "contradicted" "$findings_file"

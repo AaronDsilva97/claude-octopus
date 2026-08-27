@@ -383,24 +383,27 @@ else
     REGISTERED_SKILLS=$(grep -o '\.claude/skills/[^"]*\.md' "$ROOT_DIR/.claude-plugin/plugin.json" | sed 's|.*\.claude/skills/||' | sort)
 fi
 
+skill_registration_errors=0
 for skill_file in $SKILL_FILES; do
-    if ! echo "$REGISTERED_SKILLS" | grep -q "^${skill_file}$"; then
-        echo -e "  ${RED}ERROR: Skill file '$skill_file' not registered in plugin.json${NC}"
+    if ! grep -Fxc -- "$skill_file" <<< "$REGISTERED_SKILLS" >/dev/null; then
+        log ERROR "Skill file '$skill_file' not registered in plugin.json"
         ((errors++)) || true
+        ((skill_registration_errors++)) || true
     fi
 done
 
 for reg_skill in $REGISTERED_SKILLS; do
-    if ! echo "$SKILL_FILES" | grep -q "^${reg_skill}$"; then
-        echo -e "  ${RED}ERROR: Registered skill '$reg_skill' does not exist${NC}"
+    if ! grep -Fxc -- "$reg_skill" <<< "$SKILL_FILES" >/dev/null; then
+        log ERROR "Registered skill '$reg_skill' does not exist"
         ((errors++)) || true
+        ((skill_registration_errors++)) || true
     fi
 done
 
 skill_count=$(echo "$SKILL_FILES" | wc -l | tr -d ' ')
 reg_skill_count=$(echo "$REGISTERED_SKILLS" | wc -l | tr -d ' ')
 
-if [[ "$skill_count" == "$reg_skill_count" ]] && [[ $errors -eq 0 ]]; then
+if [[ "$skill_count" == "$reg_skill_count" ]] && [[ $skill_registration_errors -eq 0 ]]; then
     echo -e "  ${GREEN}✓ All $skill_count skills properly registered${NC}"
 fi
 

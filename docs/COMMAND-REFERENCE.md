@@ -1,6 +1,6 @@
 # Command and Usage Reference
 
-Complete reference for all 49 Claude Octopus slash commands, CLI tools (`octopus` + `octo-compress`), plus activation rules, provider indicators, and manual-only project-lifecycle skills.
+Complete reference for all 54 Claude Octopus slash commands, CLI tools (`octopus` + `octo-compress`), plus activation rules, provider indicators, and manual-only project-lifecycle skills.
 
 ---
 
@@ -19,7 +19,7 @@ All slash commands use the `/octo:` namespace. The smart router command is `/oct
 | Command | Description |
 |---------|-------------|
 | `/octo:setup` | Check setup status and configure providers (aliases: `/octo:configure`, `/octo:config`, `/octo:init`, `/octo:wizard`, `/octo:sys-setup`) |
-| `/octo:doctor` | Fail-closed diagnostics across 14 categories with human or JSON output |
+| `/octo:skill-doctor` | Manually invoke fail-closed diagnostics without shadowing Claude Code's native `/doctor` |
 | `/octo:model-config` | Configure provider model selection per workflow phase |
 | `/octo:km` | Toggle Knowledge Work mode |
 | `/octo:dev` | Switch to Dev Work mode |
@@ -197,7 +197,7 @@ an `auto_router_mode` value already present in
 
 **Alias and fuzzy matching:**
 - Setup aliases such as `/octo:configure`, `/octo:config`, `/octo:init`, `/octo:install`, `/octo:settings`, and `/octo:wizard` resolve to `/octo:setup`.
-- Common shortcut aliases resolve before routing: `/octo:cost` -> `/octo:costs`, `/octo:usage` -> `/octo:costs`, `/octo:optimize` -> `/octo:auto`, `/octo:sys-update` -> `/octo:doctor`.
+- Common shortcut aliases resolve before routing: `/octo:cost` -> `/octo:costs`, `/octo:usage` -> `/octo:costs`, and `/octo:optimize` -> `/octo:auto`.
 - Mistyped explicit `/octo:*` commands return close matches and write the event to `~/.claude-octopus/alias-log.tsv`.
 
 **Router promotion:** Prompts that name multiple concrete options, such as "Redis or DynamoDB" or "Option A vs Option B", are promoted to `/octo:debate` so the answer gets structured multi-model scoring instead of a single-model response.
@@ -238,19 +238,24 @@ You're all set! Try: /octo:auto research OAuth patterns
 
 ---
 
-### `/octo:doctor`
+### Doctor diagnostics
 
 Run fail-closed environment diagnostics across 14 check categories.
 
+Octopus intentionally leaves `/octo:doctor` unregistered so Claude Code's
+native `/doctor` remains available. Invoke `/octo:skill-doctor` inside Claude
+Code, or use the exact CLI commands below when you need arguments or JSON.
+
 **Usage:**
 ```
-/octo:doctor                    # Run all checks
-/octo:doctor providers          # Check provider installation only
-/octo:doctor providers --live   # Run a bounded live AGY catalog/model/dispatch probe
-/octo:doctor auth --verbose     # Detailed auth status
-/octo:doctor config             # Plugin install/version plus Claude Code feature flags
-/octo:doctor skills             # Skill loading plus modern plugin capability notes
-/octo:doctor --json             # Machine-readable Doctor 2.0 output
+/octo:skill-doctor              # Run all checks inside Claude Code
+octopus doctor                  # Run all checks from a shell
+octopus doctor providers        # Check provider installation only
+octopus doctor providers --live # Run a bounded live AGY catalog/model/dispatch probe
+octopus doctor auth --verbose   # Detailed auth status
+octopus doctor config           # Plugin install/version plus Claude Code feature flags
+octopus doctor skills           # Skill loading plus modern plugin capability notes
+octopus doctor --json           # Machine-readable Doctor 2.0 output
 ```
 
 **Check categories:**
@@ -278,13 +283,13 @@ arguments. With `--json`, a diagnostic failure still leaves a valid
 `schema_version: "10.0"` report on stdout; capture the exit status separately
 instead of discarding the report under shell `errexit`.
 
-`/octo:doctor providers --live` is opt-in because it sends one small real AGY
+`octopus doctor providers --live` is opt-in because it sends one small real AGY
 request. It checks the installed version, live `agy models` catalog and keyring
 authentication, the configured model against that catalog, and a bounded
 print-mode response. Normal doctor and startup checks do not spend provider
 quota or trigger interactive authentication.
 
-**Modern Claude Code checks:** On Claude Code v2.1.126+, `/octo:doctor` reports which newer runtime capabilities Octopus can safely use. Current checks cover gateway model discovery opt-in, reserved MCP server names, experimental manifest key placement, `skillOverrides`, plugin zip archives, `--plugin-url`, stream-json plugin load errors, force-synchronized output, and package-manager auto-update prompts.
+**Modern Claude Code checks:** On Claude Code v2.1.126+, Doctor reports which newer runtime capabilities Octopus can safely use. Current checks cover gateway model discovery opt-in, reserved MCP server names, experimental manifest key placement, `skillOverrides`, plugin zip archives, `--plugin-url`, stream-json plugin load errors, force-synchronized output, and package-manager auto-update prompts.
 
 These are advisory unless they identify a concrete misconfiguration. For example, `gateway-model-discovery` warns only when `ANTHROPIC_BASE_URL` is set without `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, and `mcp-workspace-reserved` warns only when a settings file defines `mcpServers.workspace`.
 

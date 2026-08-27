@@ -523,6 +523,7 @@ EOF
     local -a stale_paths=(
         '.providers.codex.default'
         '.providers.codex.fallback'
+        '.providers.codex.mini'
         '.overrides.codex'
     )
 
@@ -533,6 +534,8 @@ EOF
 
         local replacement=""
         case "$current_val" in
+            gpt-5-codex-mini|gpt-5.1-codex-mini)
+                if [[ "$path" == '.providers.codex.mini' ]]; then replacement="gpt-5.6-luna"; fi ;;
             claude-sonnet-4-5|claude-sonnet-4-5-20250514|claude-3-5-sonnet*|claude-sonnet-4*)
                 if [[ "$path" == *codex* ]]; then replacement="gpt-5.6-sol"; fi ;;
             gpt-4o*|gpt-4-turbo*|gpt-4-*|o1-*|chatgpt-*)

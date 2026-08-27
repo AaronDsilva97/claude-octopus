@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Migrate legacy generated `codex-mini` pins such as `gpt-5-codex-mini` to
+  `gpt-5.6-luna`, preventing quick workflows from selecting a model that is
+  unsupported for ChatGPT-authenticated Codex CLI sessions. Agent help now
+  reports the GPT-5.6 Sol/Terra/Luna tiers used by v10 routing.
+- Correct current documentation and runtime guidance to use
+  `/octo:skill-doctor` in Claude Code or `octopus doctor` in a shell.
+  `/octo:doctor` remains intentionally unregistered so Claude Code's native
+  `/doctor` command is not shadowed.
+
 ## [10.0.0] - 2026-08-26
 
 ### Added

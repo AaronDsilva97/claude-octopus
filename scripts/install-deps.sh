@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Octopus Dependency Installer
 # ═══════════════════════════════════════════════════════════════════════════════
-# Called by /octo:setup and /octo:doctor to detect and install dependencies.
+# Called by /octo:setup and Doctor diagnostics to detect and install dependencies.
 # Usage: install-deps.sh [check|install|install-statusline|install-plugins]
 #   check             — Report missing deps as structured output
 #   install           — Install all missing deps (npm, brew, statusline, plugins)
@@ -120,7 +120,7 @@ check_deps() {
         if declare -f octo_is_windows_git_bash >/dev/null 2>&1 && octo_is_windows_git_bash; then
             warnings+=("rtk:RTK not installed (optional) — saves tokens on bash output. On Windows Git Bash, install RTK and use its CLAUDE.md injection mode instead of rtk init -g.")
         else
-            warnings+=("rtk:RTK not installed (optional) — saves 60-90% tokens on bash output. Install: brew install rtk && rtk init -g. Run /octo:doctor for guided setup.")
+            warnings+=("rtk:RTK not installed (optional) — saves 60-90% tokens on bash output. Install: brew install rtk && rtk init -g. Run octopus doctor for guided setup.")
         fi
     fi
 

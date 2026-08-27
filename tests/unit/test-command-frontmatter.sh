@@ -56,6 +56,56 @@ else
     PASSED=$((PASSED + 1))
 fi
 
+count_doctor_references() {
+    local path="$1"
+    [[ -f "$path" && -r "$path" ]] || return 1
+    { grep -oF -- '/octo:doctor' "$path" || [[ $? -eq 1 ]]; } | awk 'END { print NR + 0 }'
+}
+
+test_case "Doctor reference counter rejects unavailable files"
+if count_doctor_references "$TEST_TMP_DIR/missing-doctor-surface" >/dev/null; then
+    test_fail "missing Doctor guidance surfaces must not count as zero references"
+else
+    test_pass
+fi
+
+PUBLIC_DOCTOR_SURFACES=(
+    "README.md|0"
+    "docs/README.md|0"
+    "docs/TROUBLESHOOTING.md|0"
+    ".claude/skills/skill-copilot-provider/SKILL.md|0"
+    ".claude/skills/skill-doctor/SKILL.md|1"
+    ".cursor-plugin/commands/octo-doctor.md|1"
+    "scripts/lib/review.sh|0"
+    "scripts/install-deps.sh|0"
+    "skills/skill-copilot-provider/SKILL.md|0"
+    "skills/skill-doctor/SKILL.md|1"
+)
+
+for surface in "${PUBLIC_DOCTOR_SURFACES[@]}"; do
+    relative_path="${surface%%|*}"
+    expected_count="${surface##*|}"
+    test_case "$relative_path uses only supported Doctor guidance"
+    if ! actual_count=$(count_doctor_references "$PROJECT_ROOT/$relative_path"); then
+        test_fail "$relative_path is missing or unreadable"
+    elif [[ "$actual_count" -eq "$expected_count" ]] &&
+       { [[ "$expected_count" -eq 0 ]] || grep -Fq '`/octo:doctor` was removed in v9.41.0' "$PROJECT_ROOT/$relative_path"; }; then
+        test_pass
+    else
+        test_fail "$relative_path has $actual_count retired /octo:doctor references; expected $expected_count intentional reference(s)"
+    fi
+done
+
+test_case "COMMAND-REFERENCE.md explains the retired Doctor command exactly once"
+if ! doctor_reference_count=$(count_doctor_references "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"); then
+    test_fail "docs/COMMAND-REFERENCE.md is missing or unreadable"
+elif [[ "$doctor_reference_count" -eq 1 ]] &&
+   grep -Fq 'intentionally leaves `/octo:doctor` unregistered' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"; then
+    test_pass
+else
+    test_fail "docs/COMMAND-REFERENCE.md must explain retired /octo:doctor exactly once"
+fi
+
 for cmd_file in "$COMMANDS_DIR"/*.md; do
     if [ ! -f "$cmd_file" ]; then
         continue

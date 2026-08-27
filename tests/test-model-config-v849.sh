@@ -375,11 +375,19 @@ else
     fail "check_all_providers() function missing"
 fi
 
-# Verify health check is wired into run_agent_sync
-if grep -A 160 'run_agent_sync()' "$_ORCH_ALL_TMP" | grep -q 'check_provider_health'; then
-    pass "run_agent_sync() calls check_provider_health() before dispatch"
+# Verify health check is wired into run_agent_sync through Provider Registry 2.0.
+# The resolved handler is normally check_provider_health, but keeping dispatch
+# indirect prevents this legacy contract from fighting the registry metadata.
+run_agent_sync_body=$(sed -n '/^run_agent_sync()/,/^}/p' "$_ORCH_ALL_TMP")
+health_handler_line=$(awk 'index($0, "\"$_health_handler\" \"$_provider_for_health\"") { print NR; exit }' <<< "$run_agent_sync_body")
+dispatch_line=$(awk 'index($0, "get_agent_command \"$agent_type\"") { print NR; exit }' <<< "$run_agent_sync_body")
+if grep -q 'octo_provider_health_handler' <<< "$run_agent_sync_body" &&
+   [[ "$health_handler_line" =~ ^[0-9]+$ ]] &&
+   [[ "$dispatch_line" =~ ^[0-9]+$ ]] &&
+   (( health_handler_line < dispatch_line )); then
+    pass "run_agent_sync() invokes the registry health handler before dispatch"
 else
-    fail "run_agent_sync() not wired to health check"
+    fail "run_agent_sync() does not invoke the registry health handler before dispatch"
 fi
 
 echo ""
