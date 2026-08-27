@@ -57,8 +57,17 @@ else
 fi
 
 count_doctor_references() {
-    { grep -oF -- '/octo:doctor' "$1" 2>/dev/null || true; } | awk 'END { print NR + 0 }'
+    local path="$1"
+    [[ -f "$path" && -r "$path" ]] || return 1
+    { grep -oF -- '/octo:doctor' "$path" || [[ $? -eq 1 ]]; } | awk 'END { print NR + 0 }'
 }
+
+test_case "Doctor reference counter rejects unavailable files"
+if count_doctor_references "$TEST_TMP_DIR/missing-doctor-surface" >/dev/null; then
+    test_fail "missing Doctor guidance surfaces must not count as zero references"
+else
+    test_pass
+fi
 
 PUBLIC_DOCTOR_SURFACES=(
     "README.md|0"
@@ -76,9 +85,10 @@ PUBLIC_DOCTOR_SURFACES=(
 for surface in "${PUBLIC_DOCTOR_SURFACES[@]}"; do
     relative_path="${surface%%|*}"
     expected_count="${surface##*|}"
-    actual_count=$(count_doctor_references "$PROJECT_ROOT/$relative_path")
     test_case "$relative_path uses only supported Doctor guidance"
-    if [[ "$actual_count" -eq "$expected_count" ]] &&
+    if ! actual_count=$(count_doctor_references "$PROJECT_ROOT/$relative_path"); then
+        test_fail "$relative_path is missing or unreadable"
+    elif [[ "$actual_count" -eq "$expected_count" ]] &&
        { [[ "$expected_count" -eq 0 ]] || grep -Fq '`/octo:doctor` was removed in v9.41.0' "$PROJECT_ROOT/$relative_path"; }; then
         test_pass
     else
@@ -87,8 +97,9 @@ for surface in "${PUBLIC_DOCTOR_SURFACES[@]}"; do
 done
 
 test_case "COMMAND-REFERENCE.md explains the retired Doctor command exactly once"
-doctor_reference_count=$(count_doctor_references "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md")
-if [[ "$doctor_reference_count" -eq 1 ]] &&
+if ! doctor_reference_count=$(count_doctor_references "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"); then
+    test_fail "docs/COMMAND-REFERENCE.md is missing or unreadable"
+elif [[ "$doctor_reference_count" -eq 1 ]] &&
    grep -Fq 'intentionally leaves `/octo:doctor` unregistered' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"; then
     test_pass
 else

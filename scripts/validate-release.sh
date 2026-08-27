@@ -386,7 +386,7 @@ fi
 skill_registration_errors=0
 for skill_file in $SKILL_FILES; do
     if ! grep -Fxc -- "$skill_file" <<< "$REGISTERED_SKILLS" >/dev/null; then
-        echo -e "  ${RED}ERROR: Skill file '$skill_file' not registered in plugin.json${NC}"
+        log ERROR "Skill file '$skill_file' not registered in plugin.json"
         ((errors++)) || true
         ((skill_registration_errors++)) || true
     fi
@@ -394,7 +394,7 @@ done
 
 for reg_skill in $REGISTERED_SKILLS; do
     if ! grep -Fxc -- "$reg_skill" <<< "$SKILL_FILES" >/dev/null; then
-        echo -e "  ${RED}ERROR: Registered skill '$reg_skill' does not exist${NC}"
+        log ERROR "Registered skill '$reg_skill' does not exist"
         ((errors++)) || true
         ((skill_registration_errors++)) || true
     fi
