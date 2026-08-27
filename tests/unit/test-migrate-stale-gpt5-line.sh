@@ -33,7 +33,7 @@ cat > "$CONFIG_FILE" <<'JSON'
       "default": "gpt-5.4",
       "fallback": "gpt-5.4",
       "spark": "gpt-5.4",
-      "mini": "gpt-5.4",
+      "mini": "gpt-5-codex-mini",
       "reasoning": "o1-preview",
       "large_context": "gpt-5.4"
     },
@@ -64,6 +64,10 @@ val="$(jq -r '.providers.codex.default' "$CONFIG_FILE")"
 test_case "stale codex.fallback (gpt-5.4) migrates to the current default"
 val="$(jq -r '.providers.codex.fallback' "$CONFIG_FILE")"
 [[ "$val" == "gpt-5.6-sol" ]] && test_pass || test_fail "expected gpt-5.6-sol, got: $val"
+
+test_case "unsupported codex.mini migrates to the current budget model"
+val="$(jq -r '.providers.codex.mini' "$CONFIG_FILE")"
+[[ "$val" == "gpt-5.6-luna" ]] && test_pass || test_fail "expected gpt-5.6-luna, got: $val"
 
 assert_stale_model_migrates() {
     local stale_model="$1"
@@ -133,12 +137,10 @@ agy_val="$(jq -r '.providers.agy.default' "$CONFIG_FILE")"
     test_fail "expected gemini removal and the AGY default, got gemini=$legacy_val agy=$agy_val"
 
 # Known, deliberately out-of-scope gap this fix does NOT close: stale_paths
-# only lists .providers.codex.{default,fallback} and the gemini equivalents,
-# so codex.spark/mini/reasoning/large_context are never inspected at all —
-# stale or not, they pass through untouched. That's issue #798's second,
-# separate limitation ("no other provider's pins are ever migrated"), left
-# for a follow-up. Documented here so a future stale_paths widening updates
-# this assertion instead of silently leaving it stale itself.
+# still omits codex.spark/reasoning/large_context. Those slots may contain
+# deliberate supported pins, so only the known unsupported generated mini
+# defaults are migrated here. Documented so future widening updates this
+# assertion instead of silently leaving it stale itself.
 test_case "codex.spark is NOT migrated (stale_paths doesn't cover it — known gap, not this fix's scope)"
 val="$(jq -r '.providers.codex.spark' "$CONFIG_FILE")"
 [[ "$val" == "gpt-5.4" ]] && test_pass || test_fail "expected gpt-5.4 (still untouched — if this now migrates, stale_paths grew; update this test), got: $val"

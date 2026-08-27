@@ -1,18 +1,46 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-26
-Status: v10 reliability modernization is released. PR #965 merged additions
-1-6 and hermetic end-to-end failure injection as `dd4cb943`; PR #966 merged the
-deterministic macOS deadline oracle as `6265807f`. Exact-main Test Suite run
-`32969018355` passed before the annotated `v10.0.0` tag and GitHub release were
-published from that exact commit.
-Branch: `docs/v10-release-handoff`, based on tagged `main` `6265807f`.
-Handoff publication: evidence commit `c714303b` is pushed as PR #967; every
-review-response commit is pushed and checked for local/remote parity before merge.
+Last updated: 2026-08-27
+Status: v10.0.0 is released and post-release installed-package UAT is complete.
+The UAT follow-ups are ready for review with no private environment, network,
+authentication, or operational details included in the public diff.
+Branch: `codex/v10-release-audit`, based on `upstream/main` `745b4bca`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
-Tracking: Beads epic `oco-de9` and children `oco-de9.1` through `oco-de9.8` are closed.
-Next action: no v10 release action remains. Start from current protected `main`,
-run `bd ready`, and preserve unrelated dirty state in the coordination checkout.
+Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
+updated for the post-release follow-ups.
+Next action: review and publish the public-safe follow-up branch. Keep private UAT
+records out of commits and preserve unrelated dirty state in the coordination
+checkout.
+
+## V10 Post-Release UAT Follow-ups
+
+- The tagged v10.0.0 checkout passes release validation, and the released
+  marketplace package resolves, installs, enables, authenticates, and loads in
+  an isolated installed-package test. Whats-new, Doctor 2.0, the explicit
+  `skill-doctor` entrypoint, and a real quick Codex dispatch all completed.
+- Installed-package UAT exposed one upgrade-only routing defect: an existing
+  generated schema-v3 `providers.codex.mini` value could retain
+  `gpt-5-codex-mini`, which current ChatGPT-authenticated Codex rejects. The
+  migration now maps only the known legacy generated mini values to
+  `gpt-5.6-luna`; fresh defaults were already correct. Regression coverage
+  passes 15/15.
+- Current public guidance now uses `/octo:skill-doctor` in Claude Code and
+  `octopus doctor` in a shell. The retired `/octo:doctor` remains unregistered
+  so Claude Code's native `/doctor` command is not shadowed. Generated Factory
+  command output and Codex skill packaging are synchronized.
+- The legacy model-config assertion now verifies the Provider Registry 2.0
+  health-handler path used by synchronous dispatch instead of requiring the
+  removed hard-coded call. Release validation reports successful skill
+  registration independently of unrelated earlier validation errors.
+- `make sync` and the final non-interactive `make ci-changed` full rule pass:
+  16/16 smoke suites, 289/289 unit suites, and 8/8 integration suites. The one
+  documented macOS Council PTY case and the optional uninitialized debate
+  submodule case remain skips, not failures. `git diff --check` passes and no
+  executable-mode changes are present.
+- Doctor's only diagnostic failure in the installed-package run was the known
+  `claude --bare` authentication-probe compatibility issue tracked as #288;
+  runtime fallback disables that probe automatically. It did not block direct
+  Claude authentication or the real workflow checks.
 
 ## V10 Reliability Release
 

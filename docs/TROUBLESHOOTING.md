@@ -3,10 +3,13 @@
 The most common failure is a provider that will not authenticate or is silently skipped. Start with the two built-in diagnostics, then use the per-provider table.
 
 ```bash
-/octo:doctor                    # local install, auth signals, versions, and configuration
-/octo:doctor providers --live   # bounded live AGY catalog/model/dispatch check
-octopus <cmd> --verbose   # per-dispatch detail: which provider, which model, why skipped
+octopus doctor                  # local install, auth signals, versions, and configuration
+octopus doctor providers --live # bounded live AGY catalog/model/dispatch check
+octopus <cmd> --verbose         # per-dispatch detail: which provider, which model, why skipped
 ```
+
+Inside Claude Code, invoke the same diagnostics with `/octo:skill-doctor`.
+That namespaced skill preserves Claude Code's native `/doctor` command.
 
 For model-selection questions specifically, `OCTOPUS_TRACE_MODELS=1` prints the resolution tier (env pin, session override, phase route, capability map, default) for every dispatch.
 
@@ -17,7 +20,7 @@ A provider is used only when its CLI is installed AND its auth check passes. If 
 | Provider | Availability check | Fix |
 |----------|-------------------|-----|
 | 🔴 Codex | `codex` on PATH, auth configured | `codex login` (ChatGPT subscription) or set `OPENAI_API_KEY` |
-| 🧭 Antigravity | `agy` on PATH; opt-in live check verifies catalog, model, and dispatch | Launch plain `agy` and finish its browser sign-in, then run `/octo:doctor providers --live`. There is no separate login shell subcommand. On macOS keyring errors, open Keychain Access, find the Antigravity CLI item, and allow `agy` under Access Control. See the official [install/auth](https://antigravity.google/docs/cli/install) and [troubleshooting](https://antigravity.google/docs/cli/troubleshooting) guides. |
+| 🧭 Antigravity | `agy` on PATH; opt-in live check verifies catalog, model, and dispatch | Launch plain `agy` and finish its browser sign-in, then run `octopus doctor providers --live`. There is no separate login shell subcommand. On macOS keyring errors, open Keychain Access, find the Antigravity CLI item, and allow `agy` under Access Control. See the official [install/auth](https://antigravity.google/docs/cli/install) and [troubleshooting](https://antigravity.google/docs/cli/troubleshooting) guides. |
 | 🟢 Copilot | `copilot` on PATH plus one of: `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `~/.copilot/config.json`, or `gh auth status` passing | `gh auth login` is the simplest path |
 | 🟤 Qwen | `qwen` on PATH plus `~/.qwen/oauth_creds.json` or `QWEN_API_KEY` | Free OAuth ended 2026-04-15; set `QWEN_API_KEY` or Coding-Plan auth (`OPENAI_API_KEY` + `OPENAI_BASE_URL`) |
 | ⚫ Ollama | `ollama` on PATH AND server responding at `http://localhost:11434` | `ollama serve`; a missing model is NOT auto-pulled (see below) |
@@ -45,4 +48,4 @@ A provider is used only when its CLI is installed AND its auth check passes. If 
 
 ## Escalation
 
-If `/octo:doctor` is green and a workflow still fails, capture `--verbose` output plus the session log and open an issue: https://github.com/nyldn/claude-octopus/issues
+If `octopus doctor` is green and a workflow still fails, capture `--verbose` output plus the session log and open an issue: https://github.com/nyldn/claude-octopus/issues

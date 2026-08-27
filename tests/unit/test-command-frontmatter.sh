@@ -56,6 +56,35 @@ else
     PASSED=$((PASSED + 1))
 fi
 
+echo "Testing: Current public guidance does not advertise retired /octo:doctor..."
+PUBLIC_DOCTOR_SURFACES="
+README.md
+docs/README.md
+docs/TROUBLESHOOTING.md
+.claude/skills/skill-copilot-provider/SKILL.md
+scripts/lib/review.sh
+scripts/install-deps.sh
+"
+for relative_path in $PUBLIC_DOCTOR_SURFACES; do
+    if grep -q '/octo:doctor' "$PROJECT_ROOT/$relative_path"; then
+        echo -e "${RED}✗${NC} $relative_path advertises retired /octo:doctor"
+        FAILED=$((FAILED + 1))
+    else
+        echo -e "${GREEN}✓${NC} $relative_path uses a supported Doctor entrypoint"
+        PASSED=$((PASSED + 1))
+    fi
+done
+
+doctor_reference_count=$(grep -c '/octo:doctor' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md" 2>/dev/null || true)
+if [[ "$doctor_reference_count" -eq 1 ]] &&
+   grep -q 'intentionally leaves `/octo:doctor` unregistered' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md"; then
+    echo -e "${GREEN}✓${NC} docs/COMMAND-REFERENCE.md mentions retired /octo:doctor only to explain its absence"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} docs/COMMAND-REFERENCE.md must explain retired /octo:doctor exactly once"
+    FAILED=$((FAILED + 1))
+fi
+
 for cmd_file in "$COMMANDS_DIR"/*.md; do
     if [ ! -f "$cmd_file" ]; then
         continue

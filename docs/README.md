@@ -27,4 +27,5 @@ Provider-specific configuration is in `config/providers/`:
 
 ## Quick Start
 
-Run `/octo:setup` in Claude Code for guided setup, or `/octo:doctor` to diagnose issues.
+Run `/octo:setup` in Claude Code for guided setup. For diagnostics, invoke
+`/octo:skill-doctor` in Claude Code or run `octopus doctor` in a shell.

@@ -113,8 +113,8 @@ Code's native manual-invocation gate. Start it with `/octo:*`.
 
 > **Seeing `cannot be used with Skill tool due to disable-model-invocation`?**
 > That is the gate working as intended — the model tried to auto-invoke an
-> Octopus skill. Run the command explicitly instead: type `/octo:doctor` (the
-> command), not a model call to the `skill-doctor` skill. Slash commands are
+> Octopus skill. Invoke it explicitly instead: type `/octo:skill-doctor` (the
+> manually invokable skill), not a model call to the `skill-doctor` skill. Slash skills are
 > user-invoked, so they bypass this invocation gate; the model will not call
 > Octopus skills on its own unless you opt into the router below. Rule of thumb:
 > **invoke Octopus with
@@ -391,7 +391,7 @@ Not sure which command to use? Pick by goal:
 | Write a product spec | `/octo:prd` |
 | Go from spec to shipping code | `/octo:factory` |
 | Debug a tricky issue | `/octo:debug` |
-| Reduce token usage | `/octo:doctor` (includes RTK install + token tips) |
+| Reduce token usage | `/octo:skill-doctor` or `octopus doctor` (includes RTK install + token tips) |
 | Just run something quick | `/octo:quick` |
 
 Or type `/octo:auto <what you want>` and the smart router picks for you. Plain-prompt routing is off until you run `/octo:setup`, which turns on **suggestions** (Octopus names a matching command; it never dispatches a provider on its own). Set `OCTOPUS_AUTO_ROUTER_MODE=off` to silence them, or `invoke` to let a matched route load automatically. 🔍
@@ -681,7 +681,7 @@ The workflow continues with available providers. You'll see the status in the vi
 🐙 *Fun fact: a real octopus has three hearts, blue blood, and 500 million neurons — two-thirds of which live in its eight arms.* Each arm can taste, touch, and act independently. Claude Octopus works the same way: each tentacle (command) operates autonomously with its own squeeze of logic, then ink flows back as the final deliverable. The crossfire review? That's the squeeze — adversarial pressure that untangles everything before it ships.
 
 **How do I debug when something goes wrong?**
-Run commands with the `--verbose` flag to get detailed debugging output. Logs are stored in `~/.claude-octopus/logs/` for inspection. You can also use `/octo:doctor` to run diagnostics and identify potential issues.
+Run commands with the `--verbose` flag to get detailed debugging output. Logs are stored in `~/.claude-octopus/logs/` for inspection. You can also invoke `/octo:skill-doctor` in Claude Code or run `octopus doctor` in a shell to identify potential issues.
 
 ---
 
