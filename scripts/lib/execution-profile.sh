@@ -215,10 +215,11 @@ octopus_explicit_provider_override() {
 
 # Canonical provider resolution for workflow dispatch.
 # Precedence: explicit operation/phase env override > configured role/phase
-# route > historical caller default. Workflows should not duplicate this logic.
+# route > release role mapping > historical caller default. Workflows should
+# not duplicate this logic.
 octopus_execution_profile_provider() {
   local phase="$1" operation="$2" role="$3" default_provider="$4"
-  local explicit_provider configured_provider
+  local explicit_provider configured_provider role_provider="$default_provider"
 
   explicit_provider="$(octopus_explicit_provider_override "$phase" "$operation" 2>/dev/null || true)"
   if [[ -n "$explicit_provider" ]]; then
@@ -226,8 +227,16 @@ octopus_execution_profile_provider() {
     return 0
   fi
 
-  configured_provider="$(octopus_profile_provider "$phase" "$role" "$default_provider" 2>/dev/null || true)"
-  printf '%s\n' "${configured_provider:-$default_provider}"
+  # get_role_agent() owns the release's default role table and consent-gated
+  # reviewer flip. It is defined by agent-utils.sh in the production source
+  # order. Keep this guard so execution-profile.sh remains sourceable alone.
+  if declare -F get_role_agent >/dev/null 2>&1 && [[ -n "$role" ]]; then
+    role_provider="$(get_role_agent "$role" 2>/dev/null || printf '%s\n' "$default_provider")"
+    role_provider="${role_provider:-$default_provider}"
+  fi
+
+  configured_provider="$(octopus_profile_provider "$phase" "$role" "$role_provider" 2>/dev/null || true)"
+  printf '%s\n' "${configured_provider:-$role_provider}"
 }
 
 

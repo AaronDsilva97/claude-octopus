@@ -9,6 +9,7 @@ Some behaviors can't be tested with mocks:
 - Natural language trigger matching
 - Claude's interpretation of instructions
 - Recursive loop detection
+- Installed-package loading, stable-path behavior, and authenticated dispatch
 
 ## Running Live Tests
 
@@ -21,6 +22,9 @@ VERBOSE=true make test-live
 
 # Run specific test
 bash tests/live/test-prd-skill.sh
+
+# Run the installed-package issue-pattern suite against the stable install
+bash tests/live/test-installed-package-issue-patterns.sh
 ```
 
 ## Requirements
@@ -62,6 +66,7 @@ live_test_summary
 |------|-------|
 | `test-prd-skill.sh` | PRD creation without skill loops |
 | `test-skill-loading.sh` | General skill loading efficiency |
+| `test-installed-package-issue-patterns.sh` | Package, path, Doctor, Claude load, and Codex dispatch contracts derived from recurring public issues |
 
 ## Logs
 

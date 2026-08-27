@@ -1,16 +1,35 @@
 # AI Agent Handoff
 
 Last updated: 2026-08-27
-Status: v10.0.0 is released and post-release installed-package UAT is complete.
-The UAT follow-ups are ready for review with no private environment, network,
-authentication, or operational details included in the public diff.
-Branch: `codex/v10-release-audit`, based on `upstream/main` `745b4bca`.
+Status: v10.0.0 is released. Broader issue-pattern regression coverage and
+installed-package UAT are in final validation, with no private environment,
+network, authentication, or operational details in the public diff.
+Branch: `codex/issue-pattern-uat`, based on `upstream/main` `23554eff`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for the post-release follow-ups.
-Next action: review and publish the public-safe follow-up branch. Keep private UAT
-records out of commits and preserve unrelated dirty state in the coordination
-checkout.
+Next action: complete the full local gate, review the public-safe diff, and
+publish it through a pull request. Keep private UAT records out of commits and
+preserve unrelated dirty state in the coordination checkout.
+
+## Reported-Issue Pattern UAT
+
+- A public regression matrix groups more than 80 reported issues into six
+  recurring families: installed-package drift, provider/auth truth, process
+  lifecycle, routing/result integrity, hooks/safety, and release/E2E drift.
+- The installed-package suite exercises version and manifest parity, stable
+  paths, non-Git working directories with spaces, Doctor JSON, late-flag
+  rejection, bounded Claude plugin loading, real Codex dispatch, durable result
+  status, and temporary-artifact cleanup. Its authorized v10.0.0 run passed
+  11/11 with zero skips.
+- Issue #970 exposed a real reachability gap: the release role table and its
+  consent-gated reviewer flip were tested only in isolation. The canonical
+  workflow provider resolver now consults that table after explicit and
+  configured overrides, with production-path precedence coverage.
+- Seven focused routing, reviewer, matrix, and reachability suites pass with
+  zero failures. `make sync` is current, and `make ci-local` passes 16 smoke,
+  291 unit, and 8 integration suites. The two documented platform/dry-run skips
+  remain non-failures. The public-safe diff is ready for review and publication.
 
 ## V10 Post-Release UAT Follow-ups
 
