@@ -1,6 +1,6 @@
 # Command and Usage Reference
 
-Complete reference for all 54 Claude Octopus slash commands, CLI tools (`octopus` + `octo-compress`), plus activation rules, provider indicators, and manual-only project-lifecycle skills.
+Complete reference for all 53 Claude Octopus slash commands, CLI tools (`octopus` + `octo-compress`), plus activation rules, provider indicators, and manual-only project-lifecycle skills.
 
 ---
 
@@ -108,11 +108,10 @@ All slash commands use the `/octo:` namespace. The smart router command is `/oct
 | `octopus status --run RUN_ID --json` | Read a schema-versioned v10 run manifest without provider calls |
 | `octopus explain --run RUN_ID` | Explain contribution, degradation, skip, or failure decisions from durable artifacts |
 
-### Admin
+### Legacy aliases
 
 | Command | Description |
 |---------|-------------|
-| `/octo:claw` | OpenClaw instance admin across macOS, Ubuntu/Debian, Docker, OCI, Proxmox |
 | `/octo:octo` | [Legacy] Redirects to `/octo:auto` |
 
 ### CLI Tools (v9.19.0+)
@@ -1199,44 +1198,6 @@ Manage the Claude Octopus scheduled workflow runner daemon.
 - Kill switch status
 
 **Note:** Add jobs with `/octo:schedule`, not this command. This command manages the daemon process only.
-
----
-
-## Admin
-
-### `/octo:claw`
-
-OpenClaw instance administration across five platforms.
-
-**Usage:**
-```
-/octo:claw                              # Auto-detect platform, run diagnostics
-/octo:claw update openclaw              # Update OpenClaw to latest stable
-/octo:claw harden my server             # Run security hardening checklist
-/octo:claw setup openclaw on proxmox    # Guided installation on Proxmox LXC
-/octo:claw check gateway health         # Gateway and channel diagnostics
-```
-
-**Supported platforms:**
-
-| Platform | What it manages |
-|----------|----------------|
-| macOS | Homebrew, launchd, Application Firewall, APFS, FileVault |
-| Ubuntu/Debian | apt, systemd, ufw, journalctl, unattended-upgrades |
-| Docker | docker compose, container health, volumes, log drivers |
-| Oracle OCI | ARM instances, VCN/NSG networking, block volumes, Tailscale |
-| Proxmox | VMs (qm), LXC containers (pct), ZFS, vzdump, clustering |
-
-**OpenClaw management:**
-- Gateway lifecycle: start, stop, restart, status, health, logs
-- Diagnostics: `openclaw doctor`, `openclaw security audit`
-- Configuration: channels, models, agents, sessions, skills, plugins
-- Updates: channel management (stable/beta/dev), backup, rollback
-
-**Natural language triggers:**
-- `octo manage my openclaw server`
-- `octo harden my server`
-- `octo check server health`
 
 ---
 

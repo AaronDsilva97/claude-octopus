@@ -26,7 +26,7 @@ Every AI model has blind spots. Claude Octopus supports ten external provider in
 
 🔄 **Four-phase methodology, not just tools.** Every task moves through Discover → Define → Develop → Deliver, with quality gates between phases. Other orchestrators give you infrastructure. Octopus gives you the workflows.
 
-🐙 **32 specialized personas** (role-specific AI agents like security-auditor, backend-architect), **54 commands** (slash commands you type), **63 skills** (reusable workflow modules). Explicit workflows select the experts they need; ordinary Claude requests do not activate Octopus.
+🐙 **31 specialized personas** (role-specific AI agents like security-auditor, backend-architect), **53 commands** (slash commands you type), **62 skills** (reusable workflow modules). Explicit workflows select the experts they need; ordinary Claude requests do not activate Octopus.
 
 🐙 **Works with just Claude. Adds up to ten external provider integrations.** Zero external providers are needed to start. Add them one at a time — each becomes available when detected and runs only inside an explicit workflow.
 
@@ -455,13 +455,13 @@ Four structured phases adapted from the UK Design Council's methodology:
 
 Run phases individually or all four with `/octo:embrace`. Configure autonomy: supervised (approve each phase), semi-autonomous (intervene on failures), or autonomous (run all four).
 
-### 32 Specialist Personas
+### 31 Specialist Personas
 
 Specialized agents selected by explicit Octopus workflows. `/octo:security` can select security-auditor and `/octo:design-ui-ux` can select ui-ux-designer; ordinary requests never delegate to these agents merely because keywords match.
 
-Categories: Software Engineering (11), Specialized Development (6), Documentation & Communication (5), Research & Strategy (3), Business & Compliance (3), Creative & Design (4).
+Categories span Software Engineering, Specialized Development, Documentation & Communication, Research & Strategy, Business & Compliance, and Creative & Design.
 
-[Full persona reference](docs/AGENTS.md) | [All 63 skills](docs/COMMAND-REFERENCE.md)
+[Full persona reference](docs/AGENTS.md) | [All 62 skills](docs/COMMAND-REFERENCE.md)
 
 ### Built-in Reaction Engine
 
@@ -524,7 +524,7 @@ Before an expensive run, `/octo:costs` shows a session cost projection; after ru
 
 ### What You Get With Just Claude
 
-Everything except multi-AI features. You get all 32 personas, structured workflows, smart routing, context detection, and every skill. Multi-AI orchestration (parallel analysis, debate, consensus) activates when external providers are configured.
+Everything except multi-AI features. You get all 31 personas, structured workflows, smart routing, context detection, and every skill. Multi-AI orchestration (parallel analysis, debate, consensus) activates when external providers are configured.
 
 ---
 
@@ -707,7 +707,7 @@ See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 - [Command Reference](docs/COMMAND-REFERENCE.md) — Commands, triggers, and provider indicators
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — Provider auth failures and common errors
 - [Architecture](docs/ARCHITECTURE.md) — Provider flow and execution model
-- [Agents & Personas](docs/AGENTS.md) — All 32 personas
+- [Agents & Personas](docs/AGENTS.md) — All 31 personas
 - [Provider Wiring Map](docs/PROVIDERS.md) — How a provider is wired (contributors)
 - [Developer Guide](docs/DEVELOPER.md) — Modular config, E2E testing, enforcement patterns
 - [Scheduler](docs/SCHEDULER.md) — Scheduled workflow runner

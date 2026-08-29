@@ -23,7 +23,7 @@
   },
   "components": {
     "commands": {
-      "count": 54,
+      "count": 53,
       "highlights": [
         "/octo:embrace",
         "/octo:discover",
@@ -36,14 +36,14 @@
       ]
     },
     "agents": {
-      "count": 42,
+      "count": 41,
       "breakdown": {
-        "personas": 32,
+        "personas": 31,
         "droids": 10
       }
     },
     "skills": {
-      "count": 63,
+      "count": 62,
       "highlights": [
         "flow-discover",
         "flow-develop",

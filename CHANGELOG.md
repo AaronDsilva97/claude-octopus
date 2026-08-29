@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Retire the `/octo:claw` command, `skill-claw`, OpenClaw administration
+  persona, and its dedicated sysadmin hook. The opt-in OpenClaw workflow
+  extension and MCP integration remain supported.
+
 ### Fixed
 
 - Migrate legacy generated `codex-mini` pins such as `gpt-5-codex-mini` to

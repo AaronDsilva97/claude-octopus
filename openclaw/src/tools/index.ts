@@ -29,7 +29,6 @@ export const SKILL_REGISTRY: SkillRegistryEntry[] = [
   { name: "skill-agent-topology", description: "Audit whether a multi-agent setup earns its coordination cost — use before adding an agent, or when a workflow feels slow or agents agree without adding signal", type: "skill", file: "skill-agent-topology/SKILL.md" },
   { name: "skill-audit", description: "Audit codebases for quality, consistency, and broken patterns — use for pre-release or tech debt review", type: "skill", file: "skill-audit/SKILL.md" },
   { name: "skill-authoring", description: "Principles for writing skills that behave the same way every run — use when adding, editing, or reviewing a skill in this plugin", type: "skill", file: "skill-authoring/SKILL.md" },
-  { name: "skill-claw", description: "OpenClaw instance administration — manage hosts across macOS, Ubuntu/Debian, Docker, OCI, and Proxmox", type: "skill", file: "skill-claw/SKILL.md" },
   { name: "skill-code-review", description: "Expert multi-AI code review with inline PR comments — use for thorough quality and security analysis", type: "skill", file: "skill-code-review/SKILL.md" },
   { name: "skill-content-pipeline", description: "Extract patterns and anatomy from URLs — use to reverse-engineer content strategies from live pages", type: "skill", file: "skill-content-pipeline/SKILL.md" },
   { name: "skill-context-detection", description: "Auto-detect work context (Dev vs Knowledge) — use to tailor workflows based on current task type", type: "skill", file: "skill-context-detection/SKILL.md" },
@@ -78,7 +77,6 @@ export const SKILL_REGISTRY: SkillRegistryEntry[] = [
   { name: "brainstorm", description: "Start a creative thought partner brainstorming session", type: "command", file: "brainstorm.md" },
   { name: "budget-mode", description: "Switch Octopus model routing to the configured budget tier", type: "command", file: "budget-mode.md" },
   { name: "careful", description: "[advanced] Activate destructive command warnings for the session", type: "command", file: "careful.md" },
-  { name: "claw", description: "[advanced] OpenClaw instance administration — manage hosts across macOS, Ubuntu/Debian, Docker, OCI, and Proxmox", type: "command", file: "claw.md" },
   { name: "costs", description: "[advanced] Show cost breakdown by provider and workflow for the current session", type: "command", file: "costs.md" },
   { name: "council", description: "Multi-LLM council for advice, decision support, implementation plans, and gated implementation", type: "command", file: "council.md" },
   { name: "debate", description: "AI Debate Hub - Structured debates across Claude and available external providers", type: "command", file: "debate.md" },
@@ -130,4 +128,4 @@ export const SKILL_REGISTRY: SkillRegistryEntry[] = [
   { name: "whats-new", description: "Review and enable Claude Octopus features added since you installed", type: "command", file: "whats-new.md" },
 ];
 
-export const REGISTRY_COUNT = 113;
+export const REGISTRY_COUNT = 111;
