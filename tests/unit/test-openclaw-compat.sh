@@ -509,11 +509,11 @@ test_no_openclaw_in_skills() {
         [[ -d "$_skill_dir" ]] || continue
         local _skill_label="${_skill_dir#"$PROJECT_ROOT/"}"
         _skill_label="${_skill_label%/}"
-        if grep -rl 'openclaw\|OpenClaw' "$_skill_dir" 2>/dev/null | head -1 | grep -q .; then
+        if grep -rl 'openclaw\|OpenClaw' "$_skill_dir" >/dev/null 2>&1; then
             found="${found:+$found }$_skill_label"
         fi
     done
-    if grep -rl 'openclaw\|OpenClaw' "$PROJECT_ROOT/commands/" 2>/dev/null | head -1 | grep -q .; then
+    if grep -rl 'openclaw\|OpenClaw' "$PROJECT_ROOT/commands/" >/dev/null 2>&1; then
         found="$found commands"
     fi
 

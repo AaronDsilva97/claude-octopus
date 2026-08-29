@@ -4,6 +4,9 @@ Last updated: 2026-08-29
 Status: The public plugin no longer ships the unused Claw administration
 feature. The opt-in OpenClaw adapter and MCP integration remain supported.
 Branch: `chore/retire-claw-admin`, based on `origin/main` `46d64cba`.
+Delivery: implementation commit `24bd50248fe723f853fcfe86df7c1ecb8b81b430`
+was pushed to `origin/chore/retire-claw-admin`; remote parity was verified before
+the automated review follow-up.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for this cleanup.
