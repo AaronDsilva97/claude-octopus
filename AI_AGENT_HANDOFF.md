@@ -1,16 +1,40 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-27
-Status: v10.0.0 is released. Broader issue-pattern regression coverage and
-installed-package UAT are published in PR #971, with no private environment,
-network, authentication, or operational details in the public diff.
-Branch: `codex/issue-pattern-uat`, based on `upstream/main` `23554eff`.
+Last updated: 2026-08-29
+Status: The public plugin no longer ships the unused Claw administration
+feature. The opt-in OpenClaw adapter and MCP integration remain supported.
+Branch: `chore/retire-claw-admin`, based on `origin/main` `46d64cba`.
+Delivery: implementation commit `24bd50248fe723f853fcfe86df7c1ecb8b81b430`
+was pushed to `origin/chore/retire-claw-admin`; remote parity was verified before
+the automated review follow-up.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
-updated for the post-release follow-ups.
-Next action: monitor PR #971's exact-head checks and resolve its review threads.
-Keep private UAT records out of commits and preserve unrelated dirty state in
-the coordination checkout.
+updated for this cleanup.
+Next action: review and merge the public pull request. Do not publish a release
+from the feature branch; follow `RELEASING.md` after the merge if a release is
+approved.
+
+## Claw Administration Retirement
+
+- Removed `/octo:claw`, `skill-claw`, the `openclaw-admin` persona and router
+  entries, the Cursor command, and the dedicated sysadmin hook.
+- Kept `openclaw/`, the MCP server, its build path, and compatibility coverage.
+  The retirement regression runs the retained OpenClaw compatibility suite.
+- Regenerated plugin and OpenClaw artifacts. Current inventories are 53
+  commands, 62 skills, 31 personas, and 10 Factory droids.
+- Expanded `scripts/sync-readme.py` so live README, documentation-index, browse
+  manifest, Codex, and Factory counts are derived together. Its fixture now
+  proves stale values are repaired and duplicate singleton surfaces fail
+  closed. The historical v8 count remains unchanged.
+- Focused evidence: retirement 24/24, README release sync 11/11, safety hooks
+  25/25, and command registration 66/66. The final full branch matrix passed
+  16/16 smoke, 292/292 unit, and 8/8 integration suites after the review fixes.
+- Independent Codex review found stale inventory surfaces, two fail-open
+  synchronization checks, and one stale release-guide boundary. Each finding
+  was verified against the current tree and covered by a failing test before
+  correction.
+- The dirty canonical public checkout was not modified. Work was isolated in
+  `/Users/chris/git/worktrees/claude-octopus/retire-claw-admin`.
 
 ## Reported-Issue Pattern UAT
 

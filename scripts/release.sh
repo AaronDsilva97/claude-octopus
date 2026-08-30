@@ -264,7 +264,7 @@ echo "2/8 Committing..."
 if [[ "$ON_RELEASE_BRANCH" == "false" ]]; then
     git checkout -b "$BRANCH" --quiet
 fi
-git add package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json .claude-plugin/plugin-manifest.json .claude-plugin/routines.json .claude-plugin/README.md .codex-plugin/plugin.json .cursor-plugin/plugin.json .factory-plugin/plugin.json .factory-plugin/marketplace.json README.md PRODUCT.md CHANGELOG.md
+git add package.json .claude-plugin/plugin.json .claude-plugin/marketplace.json .claude-plugin/plugin-manifest.json .claude-plugin/routines.json .claude-plugin/README.md .codex-plugin/plugin.json .cursor-plugin/plugin.json .factory-plugin/plugin.json .factory-plugin/marketplace.json README.md PRODUCT.md docs/AGENTS.md docs/COMMAND-REFERENCE.md docs/README.md CHANGELOG.md
 git commit --quiet -m "chore: release v${VERSION} — ${SUMMARY}
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"

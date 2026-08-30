@@ -36,12 +36,13 @@ Do NOT hand-edit these; CI diffs them against their generators:
 
 | Generated artifact | Generator | CI check that fails if stale |
 |--------------------|-----------|------------------------------|
-| `README.md`, `.claude-plugin/README.md`, `PRODUCT.md` mechanical release facts | `./scripts/sync-readme.py` | `tests/unit/test-readme-release-sync.sh` and `make sync-check` |
+| `README.md`, `.claude-plugin/README.md`, `PRODUCT.md`, `docs/AGENTS.md`, `docs/COMMAND-REFERENCE.md`, and `docs/README.md` mechanical release facts | `./scripts/sync-readme.py` | `tests/unit/test-readme-release-sync.sh` and `make sync-check` |
+| `.claude-plugin/plugin-manifest.json`, `.codex-plugin/plugin.json`, `.factory-plugin/plugin.json`, and `.factory-plugin/marketplace.json` component counts | `./scripts/sync-readme.py` | `tests/unit/test-readme-release-sync.sh` and `make sync-check` |
 | `.claude-plugin/marketplace.json` (octo entry description + counts) | `./scripts/sync-marketplace.sh` | Smoke job step "Verify marketplace.json is up to date" |
 | `openclaw/src/tools/index.ts` | `./scripts/build-openclaw.sh` | `tests/unit/test-openclaw-compat.sh` |
 
 Rules learned the hard way:
-- The marketplace generator derives the feature summary from `plugin.json`'s `description` and appends its own component counts ("32 personas, N commands, N skills"). To change the marketplace blurb, edit `plugin.json`'s description and run `make sync` — never edit `marketplace.json` directly. Never hand-write counts into `plugin.json`'s description; the generator appends them and `--check` will fail on the collision (the v9.50 description did this and shipped doubled counts until v9.51).
+- The marketplace generator derives the feature summary from `plugin.json`'s `description` and appends current persona, command, and skill counts. To change the marketplace blurb, edit `plugin.json`'s description and run `make sync` — never edit `marketplace.json` directly. Never hand-write counts into `plugin.json`'s description; the generator appends them and `--check` will fail on the collision (the v9.50 description did this and shipped doubled counts until v9.51).
 - The README generator derives the current release copy from `plugin.json`, model defaults from `scripts/lib/model-resolver.sh`, and Claude Code floor/ceiling facts from `scripts/orchestrate.sh` plus `scripts/lib/providers.sh`. Keep the `CURRENT RELEASE` and `CURRENT MODEL DEFAULTS` markers intact, plus exactly one version-table row marked `(new)`.
 - README body prose counts must match `plugin.json`: the "**N commands** ... **N skills**" sentence and the "[All N skills]" link are asserted by `tests/unit/test-docs-sync.sh`.
 

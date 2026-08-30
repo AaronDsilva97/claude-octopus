@@ -144,6 +144,10 @@ def derive_facts(root: Path) -> dict[str, object]:
     command_count = len(plugin.get("commands", []))
     skill_count = len(plugin.get("skills", []))
     persona_count = len(list((root / "agents/personas").glob("*.md")))
+    droid_dir = root / "agents/droids"
+    if not droid_dir.is_dir():
+        raise ValueError("agents/droids is missing")
+    droid_count = len(list(droid_dir.glob("*.md")))
     orchestrate = (root / "scripts/orchestrate.sh").read_text()
     providers = (root / "scripts/lib/providers.sh").read_text()
     resolver = (root / "scripts/lib/model-resolver.sh").read_text()
@@ -184,6 +188,7 @@ def derive_facts(root: Path) -> dict[str, object]:
         "command_count": command_count,
         "skill_count": skill_count,
         "persona_count": persona_count,
+        "droid_count": droid_count,
         "minimum_version": minimum_version,
         "capability_count": len(capability_flags),
         "capability_ceiling": capability_ceiling,
@@ -235,6 +240,38 @@ def sync_main_readme(text: str, facts: dict[str, object]) -> str:
     text = re.sub(r"\*\*\d+ commands\*\*", f"**{command_count} commands**", text)
     text = re.sub(r"\*\*\d+ skills\*\*", f"**{skill_count} skills**", text)
     text = re.sub(r"\[All \d+ skills\]", f"[All {skill_count} skills]", text)
+    text = re.sub(
+        r"^### \d+ Specialist Personas$",
+        f"### {persona_count} Specialist Personas",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = re.sub(r"\ball \d+ personas\b", f"all {persona_count} personas", text)
+    text = re.sub(r"\bAll \d+ personas\b", f"All {persona_count} personas", text)
+    text, category_count = re.subn(
+        (
+            r"^(?:"
+            r"Categories: Software Engineering \(\d+\), "
+            r"Specialized Development \(\d+\), "
+            r"Documentation & Communication \(\d+\), "
+            r"Research & Strategy \(\d+\), "
+            r"Business & Compliance \(\d+\), "
+            r"Creative & Design \(\d+\)"
+            r"|Categories span Software Engineering, Specialized Development, "
+            r"Documentation & Communication, Research & Strategy, "
+            r"Business & Compliance, and Creative & Design"
+            r")\.$"
+        ),
+        (
+            "Categories span Software Engineering, Specialized Development, "
+            "Documentation & Communication, Research & Strategy, "
+            "Business & Compliance, and Creative & Design."
+        ),
+        text,
+        flags=re.MULTILINE,
+    )
+    if category_count != 1:
+        raise ValueError("README persona category summary is missing or duplicated")
     provider_intro = (
         f"Every AI model has blind spots. Claude Octopus supports {provider_word} external "
         f"provider integrations — {provider_names} — alongside the built-in Claude Code "
@@ -362,6 +399,11 @@ def sync_plugin_readme(text: str, facts: dict[str, object]) -> str:
     text = re.sub(r"\b\d+ specialized personas\b", f"{persona_count} specialized personas", text)
     text = re.sub(r"\ball \d+ commands\b", f"all {command_count} commands", text)
     text = re.sub(
+        r"\b\d+ specialized agents\b",
+        f"{persona_count} specialized agents",
+        text,
+    )
+    text = re.sub(
         r"Claude Code v[0-9]+\.[0-9]+\.[0-9]+\+",
         f"Claude Code v{minimum}+",
         text,
@@ -395,8 +437,8 @@ def sync_product(text: str, facts: dict[str, object]) -> str:
         text,
     )
     text = re.sub(
-        r"\b\d+ slash commands, \d+ skills, \d+ specialized personas\b",
-        f"{command_count} slash commands, {skill_count} skills, {persona_count} specialized personas",
+        r"\b\d+ slash commands, \d+ skills, (?:and )?\d+ specialized personas\b",
+        f"{command_count} slash commands, {skill_count} skills, and {persona_count} specialized personas",
         text,
     )
     text = re.sub(
@@ -438,6 +480,84 @@ def sync_product(text: str, facts: dict[str, object]) -> str:
     return text
 
 
+def sync_agent_catalog(text: str, facts: dict[str, object]) -> str:
+    persona_count = int(facts["persona_count"])
+    updated, count = re.subn(
+        r"\b\d+ specialized personas\b",
+        f"{persona_count} specialized personas",
+        text,
+    )
+    if count != 1:
+        raise ValueError("agent catalog persona count is missing or duplicated")
+    return updated
+
+
+def sync_command_reference(text: str, facts: dict[str, object]) -> str:
+    command_count = int(facts["command_count"])
+    updated, count = re.subn(
+        r"Complete reference for all \d+ Claude Octopus slash commands",
+        f"Complete reference for all {command_count} Claude Octopus slash commands",
+        text,
+    )
+    if count != 1:
+        raise ValueError("command reference count is missing or duplicated")
+    return updated
+
+
+def sync_docs_index(text: str, facts: dict[str, object]) -> str:
+    command_count = int(facts["command_count"])
+    persona_count = int(facts["persona_count"])
+    droid_count = int(facts["droid_count"])
+    updated, command_matches = re.subn(
+        r"All \d+ slash commands",
+        f"All {command_count} slash commands",
+        text,
+    )
+    updated, agent_matches = re.subn(
+        r"\d+ persona agents and \d+ native agents",
+        f"{persona_count} persona agents and {droid_count} native agents",
+        updated,
+    )
+    if command_matches != 1 or agent_matches != 1:
+        raise ValueError("docs index count surface is missing or duplicated")
+    return updated
+
+
+def sync_plugin_manifest(text: str, facts: dict[str, object]) -> str:
+    data = json.loads(text)
+    command_count = int(facts["command_count"])
+    skill_count = int(facts["skill_count"])
+    persona_count = int(facts["persona_count"])
+    droid_count = int(facts["droid_count"])
+    components = data.setdefault("components", {})
+    components.setdefault("commands", {})["count"] = command_count
+    agents = components.setdefault("agents", {})
+    agents["count"] = persona_count + droid_count
+    breakdown = agents.setdefault("breakdown", {})
+    breakdown["personas"] = persona_count
+    breakdown["droids"] = droid_count
+    components.setdefault("skills", {})["count"] = skill_count
+    return json.dumps(data, indent=2) + "\n"
+
+
+def sync_component_counts(text: str, facts: dict[str, object]) -> str:
+    command_count = int(facts["command_count"])
+    skill_count = int(facts["skill_count"])
+    persona_count = int(facts["persona_count"])
+    updated, count = re.subn(
+        r"\b\d+ (expert )?personas, \d+ commands, \d+ skills\b",
+        lambda match: (
+            f"{persona_count} "
+            f"{'expert ' if match.group(1) else ''}"
+            f"personas, {command_count} commands, {skill_count} skills"
+        ),
+        text,
+    )
+    if count != 1:
+        raise ValueError("component count phrase is missing or duplicated")
+    return updated
+
+
 def main() -> int:
     args = parse_args()
     root = args.root.resolve()
@@ -448,6 +568,13 @@ def main() -> int:
             root / "README.md": sync_main_readme,
             root / ".claude-plugin/README.md": sync_plugin_readme,
             root / "PRODUCT.md": sync_product,
+            root / "docs/AGENTS.md": sync_agent_catalog,
+            root / "docs/COMMAND-REFERENCE.md": sync_command_reference,
+            root / "docs/README.md": sync_docs_index,
+            root / ".claude-plugin/plugin-manifest.json": sync_plugin_manifest,
+            root / ".codex-plugin/plugin.json": sync_component_counts,
+            root / ".factory-plugin/plugin.json": sync_component_counts,
+            root / ".factory-plugin/marketplace.json": sync_component_counts,
         }
         drifted: list[Path] = []
         updates: dict[Path, str] = {}
