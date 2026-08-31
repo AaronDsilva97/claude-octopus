@@ -20,7 +20,7 @@ fi
 
 test_case "commands without descriptions reach the explicit skip path"
 fixture="$TEST_TMP_DIR/factory-fixture"
-mkdir -p "$fixture/scripts" "$fixture/commands" \
+mkdir -p "$fixture/scripts" "$fixture/commands" "$fixture/.claude/agents" \
     "$fixture/.claude/skills/skill-doctor" "$fixture/.cursor-plugin/commands"
 cp "$GENERATOR" "$fixture/scripts/build-factory-skills.sh"
 cat > "$fixture/scripts/build-codex-skills.sh" <<'STUB'
@@ -30,7 +30,8 @@ STUB
 chmod +x "$fixture/scripts/build-codex-skills.sh"
 cat > "$fixture/commands/valid.md" <<'COMMAND'
 ---
-description: A valid command
+description: "[advanced] A valid command"
+argument-hint: "[--format json]"
 ---
 
 # Valid
@@ -42,6 +43,14 @@ allowed-tools: Bash
 
 # Missing description
 COMMAND
+cat > "$fixture/commands/escaped.md" <<'COMMAND'
+---
+description: "Path C:\\temp\\octo; line\nnext; tab\tstop; snowman \u2603"
+argument-hint: "quote: \"yes\"; slash: \\"
+---
+
+# Escaped metadata
+COMMAND
 cat > "$fixture/.claude/skills/skill-doctor/SKILL.md" <<'SKILL'
 ---
 name: skill-doctor
@@ -50,16 +59,63 @@ description: Fixture Doctor
 
 # Doctor
 SKILL
+cat > "$fixture/.claude/agents/reviewer.md" <<'AGENT'
+---
+description: "Review fixture changes"
+model: inherit
+---
+
+# Reviewer
+AGENT
 if output="$(bash "$fixture/scripts/build-factory-skills.sh" 2>&1)" &&
    [[ "$output" == *"SKIP (no description): missing.md"* ]] &&
    [[ -f "$fixture/.cursor-plugin/commands/octo-valid.md" ]] &&
+   [[ -f "$fixture/.cursor-plugin/commands/octo-escaped.md" ]] &&
    [[ -f "$fixture/.cursor-plugin/commands/octo-doctor.md" ]] &&
    [[ ! -e "$fixture/.cursor-plugin/commands/octo-missing.md" ]] &&
+   grep -Fq 'description: "[advanced] A valid command"' \
+       "$fixture/.cursor-plugin/commands/octo-valid.md" &&
+   grep -Fq 'argument-hint: "[--format json]"' \
+       "$fixture/.cursor-plugin/commands/octo-valid.md" &&
+   grep -Fq 'description: "Path C:\\temp\\octo; line next; tab stop; snowman ☃"' \
+       "$fixture/.cursor-plugin/commands/octo-escaped.md" &&
+   grep -Fq 'argument-hint: "quote: \"yes\"; slash: \\"' \
+       "$fixture/.cursor-plugin/commands/octo-escaped.md" &&
    grep -Fq 'allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion' \
-       "$fixture/.cursor-plugin/commands/octo-doctor.md"; then
+       "$fixture/.cursor-plugin/commands/octo-doctor.md" &&
+   grep -Fq 'description: "Review fixture changes"' \
+       "$fixture/agents/droids/octo-reviewer.md"; then
     test_pass
 else
     test_fail "generation skipped a valid command or complete Doctor adapter: $output"
+fi
+
+test_case "unsupported YAML escapes fail explicitly"
+cat > "$fixture/commands/invalid-escape.md" <<'COMMAND'
+---
+description: "invalid \q escape"
+---
+
+# Invalid escape
+COMMAND
+if invalid_output="$(bash "$fixture/scripts/build-factory-skills.sh" 2>&1)"; then
+    test_fail "Factory generation accepted an unsupported YAML escape"
+elif [[ "$invalid_output" == *'unsupported YAML escape \q'* ]]; then
+    test_pass
+else
+    test_fail "Factory generation failed without an actionable YAML escape error: $invalid_output"
+fi
+rm -f "$fixture/commands/invalid-escape.md"
+if ! bash "$fixture/scripts/build-factory-skills.sh" >/dev/null 2>&1; then
+    test_fail "Factory fixture did not recover after removing invalid metadata"
+fi
+
+test_case "generated command descriptions do not retain source quote characters"
+if grep -R -E '^(description|argument-hint): "\\".*\\""$' \
+    "$PROJECT_ROOT/.cursor-plugin/commands" >/dev/null 2>&1; then
+    test_fail "generated command metadata contains literal leading and trailing quotes"
+else
+    test_pass
 fi
 
 test_case "check mode accepts generated output without modifying it"

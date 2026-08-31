@@ -349,6 +349,95 @@ else
     test_fail "get_agent_command output for grok/claude-sdk rejected by validate_agent_command"
 fi
 
+test_case "generated standard Claude command passes validate_agent_command"
+if (
+    FIXTURE_HOME="$TEST_TMP_DIR/claude-command-validation-home"
+    mkdir -p "$FIXTURE_HOME/.claude-octopus/config"
+    export PLUGIN_DIR="$PROJECT_ROOT" OCTOPUS_PLATFORM=Linux HOME="$FIXTURE_HOME"
+    export _BARE_OPT="" SUPPORTS_OPUS_5=true SUPPORTS_OPUS_4_8=true
+    export SUPPORTS_OPUS_4_7=true SUPPORTS_SDK_MODEL_CAPS=true
+    export SUPPORTS_EFFORT_COMMAND=true SUPPORTS_XHIGH_EFFORT=false
+    export SUPPORTS_EFFORT_CLI_FLAG=true
+    log() { :; }
+    source "$PROJECT_ROOT/scripts/lib/validation.sh"
+    source "$PROJECT_ROOT/scripts/lib/model-cache-path.sh"
+    source "$PROJECT_ROOT/scripts/lib/model-resolver.sh"
+    source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+    source "$PROJECT_ROOT/scripts/lib/agents.sh"
+    source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+    claude_cmd="$(get_agent_command claude-opus discover reviewer 128)" || exit 1
+    validate_agent_command "$claude_cmd" >/dev/null 2>&1 || exit 1
+); then
+    test_pass
+else
+    test_fail "generated standard Claude command was rejected by validate_agent_command"
+fi
+
+test_case "validate_agent_command rejects Claude command separators"
+if validate_agent_command "claude --print --model claude-opus-5; touch /tmp/pwned" >/dev/null 2>&1; then
+    test_fail "expected a command separator to be rejected"
+else
+    test_pass
+fi
+
+test_case "validate_agent_command rejects Claude command substitutions"
+if validate_agent_command 'claude --print --model $(touch /tmp/pwned)' >/dev/null 2>&1; then
+    test_fail "expected command substitution to be rejected"
+else
+    test_pass
+fi
+
+test_case "validate_agent_command rejects unapproved Claude flags"
+if validate_agent_command "claude --print --model claude-opus-5 --dangerously-skip-permissions" >/dev/null 2>&1; then
+    test_fail "expected an unapproved Claude flag to be rejected"
+else
+    test_pass
+fi
+
+test_case "validate_agent_command rejects extra Claude executables"
+if validate_agent_command "claude --print --model claude-opus-5 echo pwned" >/dev/null 2>&1; then
+    test_fail "expected an extra executable token to be rejected"
+else
+    test_pass
+fi
+
+test_case "validate_agent_command rejects arbitrary Claude env assignments"
+if validate_agent_command "env ATTACKER_VALUE=x claude --print --model claude-opus-5" >/dev/null 2>&1; then
+    test_fail "expected an arbitrary env assignment to be rejected"
+else
+    test_pass
+fi
+
+test_case "validate_agent_command allows configured Claude wrapper tokens"
+if OCTOPUS_CLAUDE_BIN="clarp --strict-mcp-config" \
+    validate_agent_command "clarp --strict-mcp-config --print --model claude-opus-5 --effort high --allowed-tools Read,Glob,Grep"; then
+    test_pass
+else
+    test_fail "expected the configured Claude wrapper and its fixed flag to be accepted"
+fi
+
+test_case "validate_agent_command allows configured setting-source wrapper tokens"
+if OCTOPUS_CLAUDE_BIN="claude --setting-sources project,local" \
+    validate_agent_command "claude --setting-sources project,local --print --model claude-opus-5 --effort high --allowed-tools Read,Glob,Grep"; then
+    test_pass
+else
+    test_fail "expected fixed configured setting sources to be accepted"
+fi
+
+test_case "validate_agent_command rejects multiline Claude commands"
+if validate_agent_command $'claude --print --model claude-opus-5 --allowed-tools Read,Glob,Grep\necho pwned' >/dev/null 2>&1; then
+    test_fail "expected a multiline command to be rejected"
+else
+    test_pass
+fi
+
+test_case "validate_agent_command allows Codex-host setting isolation"
+if validate_agent_command "claude --setting-sources project,local --print --model claude-opus-5 --effort high --allowed-tools Read,Glob,Grep"; then
+    test_pass
+else
+    test_fail "expected the fixed project,local setting source to be accepted"
+fi
+
 test_case "validate_agent_command rejects unsafe command"
 if validate_agent_command "rm -rf /" >/dev/null 2>&1; then
     test_fail "expected unsafe command to be rejected"

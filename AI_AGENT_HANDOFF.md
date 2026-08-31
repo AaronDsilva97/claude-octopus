@@ -1,18 +1,120 @@
 # AI Agent Handoff
 
-Last updated: 2026-08-29
-Status: The public plugin no longer ships the unused Claw administration
-feature. The opt-in OpenClaw adapter and MCP integration remain supported.
-Branch: `chore/retire-claw-admin`, based on `origin/main` `46d64cba`.
-Delivery: implementation commit `24bd50248fe723f853fcfe86df7c1ecb8b81b430`
-was pushed to `origin/chore/retire-claw-admin`; remote parity was verified before
-the automated review follow-up.
+Last updated: 2026-08-30
+Status: PR #984 contains the install, setup, readiness, dispatch, cost, and
+uninstall simplification. Two findings from the latest exact-head CodeRabbit
+round have verified fixes in the branch head, independent Fable 5 review
+returned PASS/PASS, and the complete local matrix is green. The final head
+still needs exact-head hosted review before merge.
+Branch: `feat/simplify-install-setup-use`, reconciled with `origin/main` at
+`f9b8c92aa228a4b3f6bc9132c6c0a06f3142b73e`.
+Delivery: PR [#984](https://github.com/nyldn/claude-octopus/pull/984) is open.
+Its branch head includes the final reviewed follow-up after
+`d412469ce7345496793849b88b1803a0b23c4d28`.
 Current release: [v10.0.0](https://github.com/nyldn/claude-octopus/releases/tag/v10.0.0)
 Tracking: `bd` is unavailable in this checkout, so no Beads issue was created or
 updated for this cleanup.
-Next action: review and merge the public pull request. Do not publish a release
-from the feature branch; follow `RELEASING.md` after the merge if a release is
-approved.
+Next action: commit and push the review follow-up, resolve the verified review
+threads, wait for exact-head checks and approval, then squash-merge PR #984 and
+run the guarded v10.1.0 release workflow. The user authorized merge, release,
+shared-marketplace publication, and cleanup of only the related worktrees
+proven safe to remove.
+
+## Install, Setup, and Everyday-Use Simplification
+
+- The private governing plan remains in the development repository. This
+  handoff contains the durable public implementation context; the private
+  development checkout and dirty canonical public checkout were not modified.
+- Dispatch exposes bounded, validated CLI controls for working directory,
+  model, permission mode, output format, schema, effort, session continuity,
+  and agent fan-out. Claude effort flags are emitted only when the installed
+  CLI advertises support.
+- Setup and preflight now share auth-aware provider readiness. The public
+  guidance routes users through one setup path, preserves explicit
+  compatibility redirects, reports per-provider outcomes, and avoids claiming
+  that an installed but unauthenticated provider is ready.
+- Parallel work has a bounded fan-out and truthful per-seat outcomes. Cost
+  output uses deterministic usage records instead of estimates detached from
+  actual dispatch. Uninstall guidance distinguishes plugin removal from
+  retained project and user state; automatic purge remains deliberately
+  deferred.
+- Public-reference, provider-readiness, dispatch, compatibility, usage, and
+  uninstall regressions were added or updated. The release validator now treats
+  an existing version-tag mismatch as fatal on `main`, `release/*`, and detached
+  HEAD, while allowing validation-only checks on an ordinary feature branch.
+  Tag creation remains restricted to a clean `main` checkout.
+- Independent review used direct `claude -p` sessions whose runtime model was
+  exactly `claude-fable-5`. Main review session
+  `bec243c0-6146-4a49-a79f-23b40e611a99` returned `SPEC_VERDICT: PASS` and
+  `QUALITY_VERDICT: PASS`. Final release-scope review session
+  `cf08fb48-f01b-48e2-8d6e-e25c09fad087` also returned both verdicts as PASS.
+  Review artifacts are retained under the ignored
+  `.claude-octopus/simplification-loop/reviews/` directory.
+- Review follow-up session `cc4d537b-0cb8-4e0c-868e-7664f63a54e3` ran on
+  exactly `claude-fable-5` after the corrected `$ARGUMENTS` command contract
+  and returned `SPEC_VERDICT: PASS` and `QUALITY_VERDICT: PASS` with no
+  blockers. The earlier review session
+  `c8c74e5f-a0b0-40ab-b9b5-3b4f2332a4e7` identified that blocker before it
+  was fixed.
+- Exact-head Test Suite run `33344261102` exposed one macOS-only failure in
+  job `99345492361`: `test-agy-provider.sh` passed 50/51 because the portable
+  timeout monitor kept a command-substitution pipe open after the probe
+  returned. The provider helper now uses a one-process Perl watchdog when
+  available and detaches the shell fallback's standard streams. The focused
+  suite passes 51/51 and the formerly slow case finishes in two seconds.
+- CodeRabbit's next round opened five threads. Four findings were valid and
+  fixed: YAML escape decoding, signal-time process cleanup, registry-derived
+  preflight candidates, and a truly jq-free PATH fixture. The proposed removal
+  of the skill-root fallback was rejected because non-Claude and non-Codex
+  hosts still need it; the runtime prefers `CLAUDE_PLUGIN_ROOT`, and the
+  fallback has direct coverage.
+- Fable 5 caught three real lifecycle gaps during review: Bash 3.2 empty-array
+  expansion under `set -u`, an untracked wrapper before provider PID handoff,
+  and a provider process-group child discoverable only through the capture
+  file. Each was fixed and regression-tested. Final exact-model session
+  `512e82b8-6c8f-4332-8c53-fc58e79699d8` returned `SPEC_VERDICT: PASS` and
+  `QUALITY_VERDICT: PASS`. A later whole-diff rerun consumed its analysis but
+  ended with a 429 usage-credit error before verdict text, so it is not counted
+  as a review result. The only change after the successful verdict is the
+  test-harness correction described below.
+- Final source verification on `26d2c8a`:
+  `CI=true GITHUB_ACTIONS=true make ci-changed` failed closed to the complete
+  local matrix and passed 16/16 smoke, 300/300 unit, and 8/8 integration suites,
+  plus CI-only checks. The documented Council macOS PTY case and probe dry-run
+  timeout case remained skips rather than failures. Plugin assembly reported
+  118 skills, 53 commands, 51 agents, and 31 agent-config references.
+  `make sync-check`, `git diff --check`, and the executable-mode check passed.
+  After incorporating the squash-merged claw-admin retirement from `main`, the
+  unchanged implementation tree passed the same complete gate again on
+  `837d7dae`: 16/16 smoke, 300/300 unit, and 8/8 integration suites.
+- `scripts/validate-release.sh` passed on the feature branch and explicitly
+  confirmed that the existing `v10.0.0` tag and GitHub release remain unchanged.
+  At this handoff update, the feature pull request, v10.1.0 tag, GitHub release,
+  and shared-marketplace publication remain pending.
+- Final review-follow-up verification: `CI=true GITHUB_ACTIONS=true make
+  ci-changed` selected the full matrix and passed 16/16 smoke, 300/300 unit,
+  and 8/8 integration suites, plus CI-only checks. An earlier run exposed a
+  false-negative v8.48 assertion that searched only the first ten lines of
+  `parallel_execute`; the added lifecycle helpers moved the existing cron
+  export lower in the function. The assertion now checks the complete function
+  with one pipefail-safe `awk` predicate. Its focused suite passes 28/28 and
+  the corrected full matrix passes. `make sync-check`, `git diff --check`, and
+  the executable-mode check also pass. Re-run those short checks after this
+  handoff edit and before committing.
+- Exact-head Test Suite run `33350545805` passed every hosted job on
+  `d412469c`, including macOS smoke and unit, Ubuntu smoke and unit, symlinked
+  path, full integration, and summaries. Native review run `33350545819`
+  passed. This confirms the macOS timeout correction on the target platform.
+- CodeRabbit then opened two new findings, both verified against the current
+  code. The parallel cleanup fallback now reads the process group and sends a
+  negative-PID signal only when the provider is its group leader; otherwise it
+  signals only the known PID. The v8.48 assertion now leaves the target scope
+  at every top-level function definition rather than only at `}`. Focused
+  suites pass 21/21 and 28/28 respectively.
+- Fresh verification after those final fixes ran `CI=true GITHUB_ACTIONS=true
+  make ci-changed`, which again failed closed to the complete local matrix and
+  passed 16/16 smoke, 300/300 unit, and 8/8 integration suites, plus CI-only
+  checks. Thread resolution and exact-head hosted review remain pending.
 
 ## Claw Administration Retirement
 
@@ -33,8 +135,8 @@ approved.
   synchronization checks, and one stale release-guide boundary. Each finding
   was verified against the current tree and covered by a failing test before
   correction.
-- The dirty canonical public checkout was not modified. Work was isolated in
-  `/Users/chris/git/worktrees/claude-octopus/retire-claw-admin`.
+- The dirty canonical public checkout was not modified. Work was isolated in a
+  dedicated public-repository worktree.
 
 ## Reported-Issue Pattern UAT
 
@@ -205,9 +307,8 @@ approved.
   reproducible locally. The test now bounds its own teardown and passes 4/4 in
   about three seconds, so future failure cannot wait for the synthetic
   300-second child.
-- Original checkout `/Users/chris/git/claude-octopus-dev` remains untouched;
-  preserve its unrelated dirty state. Do not treat `.octo-continue.md` as
-  authoritative.
+- The original private coordination checkout remains untouched; preserve its
+  unrelated dirty state. Do not treat `.octo-continue.md` as authoritative.
 
 ## GitHub Queue Audit (2026-08-23)
 

@@ -37,6 +37,15 @@ _octopus_is_safe_env_var_name() {
     [[ "${1:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
 }
 
+_octopus_claude_reasoning_fragment() {
+    local level="$1" policy="${2:-best_effort}"
+    if [[ "${SUPPORTS_EFFORT_COMMAND:-false}" != "true" ||
+          "${SUPPORTS_EFFORT_CLI_FLAG:-false}" != "true" ]]; then
+        return 0
+    fi
+    octopus_reasoning_cli_fragment claude "$level" "$policy"
+}
+
 _octopus_openai_compatible_runtime_config() {
     local provider="$1"
     local config_provider="$provider" base_url api_key_env credential_value
@@ -227,7 +236,7 @@ get_agent_command() {
             local reasoning_level reasoning_policy reasoning_fragment
             reasoning_level="$(octopus_resolve_reasoning_level claude "$phase" "$role")" || return 1
             reasoning_policy="$(octopus_resolve_reasoning_policy claude "$phase" "$role")" || return 1
-            reasoning_fragment="$(octopus_reasoning_cli_fragment claude "$reasoning_level" "$reasoning_policy")" || return 1
+            reasoning_fragment="$(_octopus_claude_reasoning_fragment "$reasoning_level" "$reasoning_policy")" || return 1
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
                 return 1
             fi
@@ -237,17 +246,18 @@ get_agent_command() {
             local reasoning_level reasoning_policy reasoning_fragment
             reasoning_level="$(octopus_resolve_reasoning_level claude "$phase" "$role")" || return 1
             reasoning_policy="$(octopus_resolve_reasoning_policy claude "$phase" "$role")" || return 1
-            reasoning_fragment="$(octopus_reasoning_cli_fragment claude "$reasoning_level" "$reasoning_policy")" || return 1
+            reasoning_fragment="$(_octopus_claude_reasoning_fragment "$reasoning_level" "$reasoning_policy")" || return 1
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
                 return 1
             fi
             model="${model//./-}"
             echo "${_claude_bin}${_BARE_OPT} --print --model ${model} ${reasoning_fragment} ${claude_perm}" ;;
-        claude-opus)
+        claude-opus|claude-opus-fast)
             # Resolve a concrete model so current-host detection and user pins
             # remain visible on the wire instead of depending on a moving alias.
-            # Use `env VAR=val` prefix so the assignment survives read -ra word-splitting
-            # in spawn.sh — a bare VAR=val prefix only works in shell eval context.
+            # claude-opus-fast is a compatibility executor. Claude's spawned
+            # --print CLI does not expose a documented --fast flag, so both
+            # executors use the same validated standard command shape.
             local opus_effort="high"
             if declare -f get_effort_level >/dev/null 2>&1; then
                 local opus_complexity="2"
@@ -297,6 +307,14 @@ get_agent_command() {
             if declare -f fable5_clamp_effort_for_model >/dev/null 2>&1; then
                 opus_effort="$(fable5_clamp_effort_for_model "$opus_effort" "$opus_model_flag")"
             fi
+            if [[ "${SUPPORTS_XHIGH_EFFORT:-false}" != "true" ]]; then
+                case "$opus_effort" in
+                    xhigh|max)
+                        log "WARN" "Claude effort ${opus_effort} is unavailable on this CLI; using high"
+                        opus_effort="high"
+                        ;;
+                esac
+            fi
             opus_model_flag="$(_octopus_allowed_model_or_fallback "claude" "$opus_model_flag")" || return 1
             if ! validate_model_name "$opus_model_flag"; then
                 log "ERROR" "Invalid resolved Claude Opus model: '${opus_model_flag}'"
@@ -310,25 +328,9 @@ get_agent_command() {
                     ;;
             esac
             opus_model_flag="${opus_model_flag//./-}"
-            if [[ "${SUPPORTS_EFFORT_COMMAND:-false}" == "true" || "${SUPPORTS_XHIGH_EFFORT:-false}" == "true" ]]; then
-                echo "env CLAUDE_CODE_EFFORT_LEVEL=${opus_effort} ${_claude_bin}${_BARE_OPT} --print --model ${opus_model_flag} ${claude_perm}"
-            else
-                echo "${_claude_bin}${_BARE_OPT} --print --model ${opus_model_flag} ${claude_perm}"
-            fi
-            ;;
-        claude-opus-fast)
-            local opus_fast_model
-            opus_fast_model="$(opus_default_model)"
-            if [[ "$opus_fast_model" == "claude-fable-5" ]] && declare -f fable5_fallback_model >/dev/null 2>&1; then
-                opus_fast_model="$(fable5_fallback_model)"
-            fi
-            opus_fast_model="$(_octopus_allowed_model_or_fallback "claude" "$opus_fast_model")" || return 1
-            if ! validate_model_name "$opus_fast_model"; then
-                log "ERROR" "Invalid resolved Claude Opus fast model: '${opus_fast_model}'"
-                return 1
-            fi
-            opus_fast_model="${opus_fast_model//./-}"
-            echo "${_claude_bin}${_BARE_OPT} --print --model ${opus_fast_model} --fast ${claude_perm}"
+            local opus_reasoning_fragment=""
+            opus_reasoning_fragment="$(_octopus_claude_reasoning_fragment "$opus_effort" best_effort)" || return 1
+            echo "${_claude_bin}${_BARE_OPT} --print --model ${opus_model_flag}${opus_reasoning_fragment:+ ${opus_reasoning_fragment}} ${claude_perm}"
             ;;
         claude-opus-legacy) echo "${_claude_bin}${_BARE_OPT} --print --model claude-opus-4-6 ${claude_perm}" ;; # v9.23: explicit 4.6 opt-in
         openrouter) echo "openrouter_execute" ;;                 # OpenRouter API (v4.8)

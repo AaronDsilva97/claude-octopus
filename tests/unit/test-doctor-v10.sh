@@ -13,6 +13,26 @@ mkdir -p "$HOME"
 MAGENTA="" BOLD="" BLUE="" GREEN="" YELLOW="" RED="" DIM="" NC=""
 source "$PROJECT_ROOT/scripts/lib/doctor.sh"
 
+test_case "Perplexity-only auth is described as a credential, not workflow readiness"
+original_doctor_collect="$(declare -f _doctor_collect_provider_readiness)"
+_doctor_collect_provider_readiness() {
+    DOCTOR_PROVIDER_READINESS=('{"provider":"perplexity","status":"available","remediation":""}')
+}
+DOCTOR_RESULTS_NAME=() DOCTOR_RESULTS_CAT=() DOCTOR_RESULTS_STATUS=() DOCTOR_RESULTS_MSG=() DOCTOR_RESULTS_DETAIL=()
+doctor_check_auth
+auth_summary=""
+for i in "${!DOCTOR_RESULTS_NAME[@]}"; do
+    if [[ "${DOCTOR_RESULTS_NAME[$i]}" == "any-provider-auth" ]]; then
+        auth_summary="${DOCTOR_RESULTS_MSG[$i]}"
+    fi
+done
+if [[ "$auth_summary" == "At least one provider credential is configured" ]]; then
+    test_pass
+else
+    test_fail "ambiguous auth summary: $auth_summary"
+fi
+eval "$original_doctor_collect"
+
 # Keep this suite deterministic and limited to the Doctor runner/output layer.
 # Full category implementations retain their own focused suites.
 doctor_check_providers() {
@@ -197,17 +217,49 @@ else
     test_fail "rc=$orchestrator_rc stdout=$orchestrator_json"
 fi
 
-test_case "setup final verification reuses the resolved root and fresh Doctor JSON"
-setup_step5="$(sed -n '/^## STEP 5: Verify & Summarize/,$p' "$PROJECT_ROOT/commands/setup.md")"
-if [[ "$setup_step5" == *'OCTO_ROOT="${CLAUDE_PLUGIN_ROOT:-}"'* &&
-      "$setup_step5" == *'doctor --json'* &&
-      "$setup_step5" == *'FINAL_DOCTOR_EXIT'* &&
-      "$setup_step5" == *'FINAL_FAILURES'* &&
-      "$setup_step5" == *'```text'* ]]; then
+test_case "setup verification is local-only and points to current Doctor entry points"
+setup_default="$(sed -n '/^## Default path/,/^## Advanced setup/p' "$PROJECT_ROOT/commands/setup.md")"
+if [[ "$setup_default" == *'setup-verification:pass (no provider request)'* &&
+      "$setup_default" == *'/octo:skill-doctor'* &&
+      "$setup_default" == *'octopus doctor'* &&
+      "$setup_default" != *'/octo:doctor'* ]]; then
     test_pass
 else
-    test_fail "Step 5 must rerun Doctor from the resolved plugin root and render a typed summary"
+    test_fail "setup must use deterministic no-billing verification and current Doctor entry points"
 fi
+
+test_case "Doctor providers and auth reuse one shared readiness collection"
+doctor_source="$(cat "$PROJECT_ROOT/scripts/lib/doctor.sh")"
+if [[ "$doctor_source" == *'_doctor_collect_provider_readiness'* &&
+      "$doctor_source" == *'octo_provider_readiness_all'* &&
+      "$doctor_source" == *'DOCTOR_PROVIDER_READINESS_KIND'* ]]; then
+    test_pass
+else
+    test_fail "Doctor does not consume the shared provider readiness contract"
+fi
+
+test_case "each Doctor invocation refreshes the provider readiness snapshot"
+readiness_calls="$TEST_TMP_DIR/doctor-readiness-calls"
+: > "$readiness_calls"
+original_readiness_all="$(declare -f octo_provider_readiness_all)"
+original_doctor_check_providers="$(declare -f doctor_check_providers)"
+original_doctor_output_json="$(declare -f doctor_output_json)"
+octo_provider_readiness_all() {
+    printf 'call\n' >> "$readiness_calls"
+    printf '%s\n' '{"provider":"claude","status":"available","reason_code":"ready"}'
+}
+doctor_check_providers() { _doctor_collect_provider_readiness; }
+doctor_output_json() { :; }
+do_doctor providers --json
+do_doctor providers --json
+if [[ "$(wc -l < "$readiness_calls" | tr -d '[:space:]')" -eq 2 ]]; then
+    test_pass
+else
+    test_fail "Doctor reused readiness from an earlier invocation"
+fi
+eval "$original_readiness_all"
+eval "$original_doctor_check_providers"
+eval "$original_doctor_output_json"
 
 test_case "plan provider display reuses preflight output and handles dispatch failure"
 plan_command="$(cat "$PROJECT_ROOT/commands/plan.md")"
