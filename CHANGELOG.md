@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Refuse Codex plugin updates from inside the Codex session using the loaded
+  version. This prevents cache replacement from deleting hook and skill paths
+  that remain bound to the running session.
+
 ## [10.1.0] - 2026-08-30
 
 ### Removed
