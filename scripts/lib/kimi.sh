@@ -4,6 +4,8 @@
 # (orchestrate.sh already sets `set -eo pipefail`).
 # Auth: $MOONSHOT_API_KEY or ~/.kimi-code/credentials/kimi-code.json (kimi login).
 # Headless: kimi -p "<prompt>" --output-format text  (single-turn, prints+exits).
+# Config errors (no model / unknown alias) exit 1, so the exit-code check below
+# is the whole contract — no stdout scanning needed. Verified on kimi 0.39.1.
 
 _kimi_log(){ if declare -f log >/dev/null 2>&1; then log "$@"; else echo "[${1}] ${*:2}" >&2; fi; }
 
@@ -17,12 +19,21 @@ _kimi_run_with_timeout(){
 # `kimi` is an unambiguous binary name — no identity regex needed (unlike cursor's `agent`).
 _is_kimi_binary(){ command -v kimi &>/dev/null; }
 
-# A signed-in kimi with no configured provider still refuses every prompt with
-# "No model configured", so a model alias is part of the availability contract,
-# not a nicety. Without this check dispatch burns a seat on a guaranteed failure.
+# A signed-in kimi with no configured provider refuses every prompt, so a model
+# is part of the availability contract, not a nicety. Readiness must be proven by
+# kimi's OWN config.toml: an octo-side pin is not sufficient on its own, because
+# kimi resolves -m against its config and otherwise fails with
+#   Model "<alias>" is not configured in config.toml.
+# So a pin only counts when config.toml actually declares that alias.
 kimi_has_model(){
-    [[ -n "${OCTOPUS_KIMI_MODEL:-}" && "${OCTOPUS_KIMI_MODEL}" != "default" ]] && return 0
-    grep -Eq '^[[:space:]]*default_model[[:space:]]*=' "${HOME}/.kimi-code/config.toml" 2>/dev/null
+    local config="${HOME}/.kimi-code/config.toml"
+    [[ -f "$config" ]] || return 1
+    local pinned="${OCTOPUS_KIMI_MODEL:-}"
+    if [[ -n "$pinned" && "$pinned" != "default" ]]; then
+        grep -Fq -- "$pinned" "$config"
+        return $?
+    fi
+    grep -Eq '^[[:space:]]*default_model[[:space:]]*=' "$config"
 }
 
 kimi_is_available(){
@@ -65,11 +76,6 @@ kimi_execute(){
             _kimi_log ERROR "kimi: auth failure — run: kimi login (or set MOONSHOT_API_KEY)"; return 1
         fi
         _kimi_log ERROR "kimi: exit $exit_code"; return 1
-    fi
-    # kimi prints its config error on stdout and still exits 0, so a zero exit is
-    # not proof of an answer — otherwise debate/council read the error as a verdict.
-    if printf '%s' "$response" | grep -q 'No model configured'; then
-        _kimi_log ERROR "kimi: no model configured — run: kimi, then /login"; return 1
     fi
     [[ -z "$response" ]] && { _kimi_log WARN "kimi: empty response"; return 1; }
     if [[ -n "$output_file" ]]; then printf '%s\n' "$response" > "$output_file"; else printf '%s\n' "$response"; fi

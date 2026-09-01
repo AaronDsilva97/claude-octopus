@@ -32,7 +32,7 @@ qwen||qwen|alibaba|model-config,council,health,detect,dispatch,env
 ollama|local|ollama|local|model-config,health,detect,dispatch,env,model-gateway
 copilot|github-copilot|copilot|github|model-config,health,detect,dispatch,env,model-gateway
 vibe||vibe|mistral|model-config,health,detect,dispatch,env
-kimi|moonshot|kimi|moonshot|model-config,health,detect,dispatch,env
+kimi||kimi|moonshot|model-config,health,detect,dispatch,env
 EOF
 }
 
