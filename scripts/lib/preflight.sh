@@ -246,7 +246,7 @@ _octo_provider_static_readiness() {
                 if _octo_value_has_nonwhitespace "${MOONSHOT_API_KEY:-}" || [[ -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]]; then
                     if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
                         status="degraded"; reason_code="model-missing"
-                        remediation="Run: kimi, then /login to configure a model, or set OCTOPUS_KIMI_MODEL."
+                        remediation="Run: kimi, then /login, or set default_model in ~/.kimi-code/config.toml. OCTOPUS_KIMI_MODEL only picks among aliases kimi already declares, so it cannot stand in for that."
                     else
                         status="available"; reason_code="ready"; remediation=""
                     fi

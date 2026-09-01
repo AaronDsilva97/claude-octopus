@@ -20,20 +20,16 @@ _kimi_run_with_timeout(){
 _is_kimi_binary(){ command -v kimi &>/dev/null; }
 
 # A signed-in kimi with no configured provider refuses every prompt, so a model
-# is part of the availability contract, not a nicety. Readiness must be proven by
-# kimi's OWN config.toml: an octo-side pin is not sufficient on its own, because
-# kimi resolves -m against its config and otherwise fails with
+# is part of the availability contract, not a nicety. Readiness is proven only by
+# kimi's OWN config.toml declaring default_model — which is what `kimi` + /login
+# writes, and what kimi's own error names as the alternative:
+#   "Run `kimi` and use /login to sign in, then retry; or set default_model in
+#    config.toml."
+# OCTOPUS_KIMI_MODEL deliberately does NOT count here. kimi resolves -m against
+# that same config, so a pin with no matching alias fails just as hard:
 #   Model "<alias>" is not configured in config.toml.
-# So a pin only counts when config.toml actually declares that alias.
 kimi_has_model(){
-    local config="${HOME}/.kimi-code/config.toml"
-    [[ -f "$config" ]] || return 1
-    local pinned="${OCTOPUS_KIMI_MODEL:-}"
-    if [[ -n "$pinned" && "$pinned" != "default" ]]; then
-        grep -Fq -- "$pinned" "$config"
-        return $?
-    fi
-    grep -Eq '^[[:space:]]*default_model[[:space:]]*=' "$config"
+    grep -Eq '^[[:space:]]*default_model[[:space:]]*=' "${HOME}/.kimi-code/config.toml" 2>/dev/null
 }
 
 kimi_is_available(){
