@@ -143,6 +143,7 @@ def pricing_provider(provider):
         ("grok", "grok"),
         ("opencode", "opencode"),
         ("vibe", "vibe"),
+        ("kimi", "kimi"),
     )
     if provider in ("antigravity",):
         return "agy"

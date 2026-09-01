@@ -67,6 +67,7 @@ provider	grok	3.00	15.00	Standalone metered xAI route
 provider	cursor-agent	0.00	0.00	Subscription
 provider	opencode	0.00	0.00	Native free models
 provider	vibe	0.00	0.00	Local subscription or configured account
+provider	kimi	0.00	0.00	Kimi Code subscription or configured account
 provider	default	1.00	5.00	Unknown fallback
 provider-override	copilot	0.00	0.00	Subscription pricing wins over pinned model API pricing
 provider-override	cursor-agent	0.00	0.00	Cursor subscription pricing wins over model API pricing

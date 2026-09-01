@@ -40,6 +40,7 @@ octo_agent_spec_provider() {
         cursor-agent|cursor-agent-*) echo cursor-agent ;;
         copilot|copilot-*) echo copilot ;;
         vibe|vibe-*) echo vibe ;;
+        kimi|kimi-*) echo kimi ;;
         ollama|ollama-*) echo ollama ;;
         *) echo "$executor" ;;
     esac
@@ -231,6 +232,7 @@ octo_model_family() {
         qwen|qwen-*) echo alibaba ;;
         grok|grok-*|cursor-agent|cursor-agent-*) echo xai ;;
         vibe|vibe-*) echo mistral ;;
+        kimi|kimi-*) echo moonshot ;;
         perplexity|perplexity-*) echo perplexity ;;
         copilot|copilot-*) echo microsoft ;;
         commandcode|commandcode-*|openrouter|openrouter-*|opencode|opencode-*|openai-compatible|openai-compatible-*|atlascloud|atlascloud-*) echo multi ;;

@@ -32,6 +32,7 @@ qwen||qwen|alibaba|model-config,council,health,detect,dispatch,env
 ollama|local|ollama|local|model-config,health,detect,dispatch,env,model-gateway
 copilot|github-copilot|copilot|github|model-config,health,detect,dispatch,env,model-gateway
 vibe||vibe|mistral|model-config,health,detect,dispatch,env
+kimi|moonshot|kimi|moonshot|model-config,health,detect,dispatch,env
 EOF
 }
 
@@ -64,6 +65,7 @@ qwen|api-key-or-cli-session|check_provider_health|detect_providers|OCTOPUS_QWEN_
 ollama|local-runtime|check_provider_health|detect_providers|OCTOPUS_OLLAMA_MODEL|resolve_octopus_model|12000|local|local-runtime|local
 copilot|cli-session|check_provider_health|detect_providers|OCTOPUS_COPILOT_MODEL|resolve_octopus_model|12000|bundled|provider-managed|github
 vibe|api-key-or-cli-session|check_provider_health|detect_providers|OCTOPUS_VIBE_MODEL|resolve_octopus_model|12000|metered|provider-managed|mistral
+kimi|api-key-or-cli-session|check_provider_health|detect_providers|OCTOPUS_KIMI_MODEL|resolve_octopus_model|12000|metered|provider-managed|moonshot
 EOF
 }
 
@@ -294,6 +296,7 @@ grok|council|grok-runtime-is-not-a-supported-council-seat
 ollama|council|local-runtime-is-not-a-supported-council-seat
 copilot|council|copilot-runtime-is-not-a-supported-council-seat
 vibe|council|vibe-runtime-is-not-a-supported-council-seat
+kimi|council|kimi-runtime-is-not-a-supported-council-seat
 EOF
 }
 

@@ -203,6 +203,29 @@ _octo_build_provider_env_impl() {
                 fi
             fi
             ;;
+        kimi*)
+            # Kimi defaults to a minimal environment (parity with codex/grok/agy).
+            if [[ "${OCTOPUS_ALLOW_FULL_KIMI_ENV:-false}" == "true" ]]; then
+                if [[ "${OCTOPUS_SECURITY_V870:-true}" == "true" ]] && declare -f log_warn >/dev/null 2>&1; then
+                    log_warn "Kimi Code CLI inherits the parent shell environment because OCTOPUS_ALLOW_FULL_KIMI_ENV=true."
+                fi
+                PROVIDER_ENV_ARRAY=()
+            else
+                if [[ -z "${MOONSHOT_API_KEY:-}" ]] && declare -f resolve_provider_env >/dev/null 2>&1; then
+                    resolve_provider_env "MOONSHOT_API_KEY" 2>/dev/null || true
+                fi
+                PROVIDER_ENV_ARRAY=(env -i "PATH=$PATH" "HOME=$HOME" "TERM=${TERM:-dumb}" "TMPDIR=${TMPDIR:-/tmp}")
+                if [[ -n "${MOONSHOT_API_KEY:-}" ]]; then
+                    PROVIDER_ENV_ARRAY+=("MOONSHOT_API_KEY=${MOONSHOT_API_KEY}")
+                fi
+                if [[ -n "${OCTOPUS_KIMI_MODEL:-}" ]]; then
+                    PROVIDER_ENV_ARRAY+=("OCTOPUS_KIMI_MODEL=${OCTOPUS_KIMI_MODEL}")
+                fi
+                if [[ ${#_trace_env[@]} -gt 0 ]]; then
+                    PROVIDER_ENV_ARRAY+=("${_trace_env[@]}")
+                fi
+            fi
+            ;;
         grok*)
             # Grok defaults to a minimal environment (parity with codex/agy).
             # Users needing full desktop/session inheritance can opt out.
