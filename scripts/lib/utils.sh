@@ -413,11 +413,15 @@ validate_agent_command() {
     if [[ "$cmd_executable" == */vibe-exec.sh || "$cmd_executable" == */ollama-run.sh || "$cmd_executable" == */codex-run.sh \
         || "$cmd_executable" == */scripts/helpers/agy-exec.sh || "$cmd_executable" == */scripts/helpers/copilot-exec.sh \
         || "$cmd_executable" == */scripts/helpers/commandcode-exec.sh || "$cmd_executable" == */scripts/helpers/grok-exec.sh \
-        || "$cmd_executable" == */scripts/helpers/claude-sdk-exec.sh ]]; then
+        || "$cmd_executable" == */scripts/helpers/claude-sdk-exec.sh \
+        || "$cmd_executable" == */scripts/helpers/kimi-exec.sh ]]; then
         return 0
     fi
     if [[ "$cmd_executable" == "env" ]]; then
         if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_GROK_MODEL" "/scripts/helpers/grok-exec.sh"; then
+            return 0
+        fi
+        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_KIMI_MODEL" "/scripts/helpers/kimi-exec.sh"; then
             return 0
         fi
         if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_COPILOT_MODEL" "/scripts/helpers/copilot-exec.sh"; then

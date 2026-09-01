@@ -64,7 +64,7 @@ provider_status_is_available() {
 # Preference order for primary slot assignment. Every entry is still admitted
 # only when the shared status source reports exactly `available`.
 for _provider in codex commandcode grok agy copilot qwen cursor-agent opencode \
-    ollama vibe claude-sdk openrouter openai-compatible perplexity; do
+    ollama vibe kimi claude-sdk openrouter openai-compatible perplexity; do
     provider_status_is_available "$_provider" && AVAILABLE_CLI+=("$_provider")
 done
 # Atlas Cloud's canonical provider status is `atlascloud`, while its executable
@@ -113,7 +113,7 @@ build_diverse_order() {
 
     # Preferred order for primary diversity.
     for p in codex commandcode agy copilot qwen grok cursor-agent opencode ollama \
-        vibe claude-sdk openrouter openai-compatible atlascloud-agent perplexity; do
+        vibe kimi claude-sdk openrouter openai-compatible atlascloud-agent perplexity; do
         is_available "$p" || continue
         local fam
         fam=$(get_family "$p")

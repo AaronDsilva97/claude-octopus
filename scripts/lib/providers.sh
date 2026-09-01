@@ -26,6 +26,9 @@ source "${_providers_lib_dir}/openai-compatible.sh" 2>/dev/null || true
 if ! declare -f grok_is_available >/dev/null 2>&1 || ! declare -f grok_auth_method >/dev/null 2>&1; then
     source "${_providers_lib_dir}/grok.sh" 2>/dev/null || true
 fi
+if ! declare -f kimi_is_available >/dev/null 2>&1 || ! declare -f kimi_auth_method >/dev/null 2>&1; then
+    source "${_providers_lib_dir}/kimi.sh" 2>/dev/null || true
+fi
 if ! declare -f copilot_is_available >/dev/null 2>&1; then
     source "${_providers_lib_dir}/copilot.sh" 2>/dev/null || true
 fi
@@ -1063,6 +1066,26 @@ check_provider_health() {
                 return 1
             fi
             ;;
+        kimi)
+            if ! command -v kimi &>/dev/null; then
+                echo "kimi: CLI not found in PATH" >&2
+                return 1
+            fi
+            if [[ -z "${MOONSHOT_API_KEY:-}" ]] && declare -f resolve_provider_env >/dev/null 2>&1; then
+                resolve_provider_env "MOONSHOT_API_KEY" 2>/dev/null || true
+            fi
+            # Auth: env MOONSHOT_API_KEY or ~/.kimi-code/credentials (kimi login session)
+            if [[ -z "${MOONSHOT_API_KEY:-}" && ! -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]]; then
+                echo "kimi: not authenticated (run: kimi login or set MOONSHOT_API_KEY)" >&2
+                return 1
+            fi
+            # Auth alone is not enough: with no configured provider, every kimi -p
+            # aborts with "No model configured". Fail closed rather than mid-workflow.
+            if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
+                echo "kimi: no model configured (run: kimi, then /login, or set OCTOPUS_KIMI_MODEL)" >&2
+                return 1
+            fi
+            ;;
         cursor-agent)
             if ! command -v agent &>/dev/null; then
                 echo "cursor-agent: CLI not found in PATH" >&2
@@ -1422,6 +1445,11 @@ detect_providers() {
     # Detect xAI Grok CLI (standalone grok provider)
     if { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed grok; } && declare -f grok_is_available >/dev/null 2>&1 && grok_is_available; then
         result="${result}grok:$(grok_auth_method) "
+    fi
+
+    # Detect Moonshot Kimi Code CLI
+    if { ! declare -f octo_provider_allowed >/dev/null 2>&1 || octo_provider_allowed kimi; } && command -v kimi &>/dev/null; then
+        result="${result}kimi:$(kimi_auth_method) "
     fi
 
     # Detect Claude Agent SDK seat (CLAUDE_SDK_API_KEY unlocks Opus 5 + 1M context)

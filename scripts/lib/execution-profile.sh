@@ -13,6 +13,7 @@ octo_model_family() {
     gemini-*|agy-*|google/*) printf '%s\n' google ;;
     qwen-*|qwen/*) printf '%s\n' alibaba ;;
     grok-*|xai/*) printf '%s\n' xai ;;
+    kimi-*|moonshot/*) printf '%s\n' moonshot ;;
     *) printf '%s\n' unknown ;;
   esac
 }
