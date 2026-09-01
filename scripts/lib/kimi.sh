@@ -28,8 +28,11 @@ _is_kimi_binary(){ command -v kimi &>/dev/null; }
 # OCTOPUS_KIMI_MODEL deliberately does NOT count here. kimi resolves -m against
 # that same config, so a pin with no matching alias fails just as hard:
 #   Model "<alias>" is not configured in config.toml.
+# The value matters, not just the key: `default_model = ""` (or a bare `=`) is
+# not a model, and kimi fails resolution on it exactly as if it were absent.
 kimi_has_model(){
-    grep -Eq '^[[:space:]]*default_model[[:space:]]*=' "${HOME}/.kimi-code/config.toml" 2>/dev/null
+    grep -Eq '^[[:space:]]*default_model[[:space:]]*=[[:space:]]*("[^"[:space:]][^"]*"|'"'"'[^'"'"'[:space:]][^'"'"']*'"'"'|[^[:space:]"'"'"'#])' \
+        "${HOME}/.kimi-code/config.toml" 2>/dev/null
 }
 
 kimi_is_available(){
