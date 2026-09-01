@@ -1082,7 +1082,7 @@ check_provider_health() {
             # Auth alone is not enough: with no configured provider, every kimi -p
             # aborts. Fail closed here rather than mid-workflow.
             if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
-                echo "kimi: no model configured (run: kimi, then /login, or set OCTOPUS_KIMI_MODEL)" >&2
+                echo "kimi: no model configured (run: kimi, then /login, or set default_model in ~/.kimi-code/config.toml; OCTOPUS_KIMI_MODEL only picks among aliases kimi already declares, so it cannot stand in for that)" >&2
                 return 1
             fi
             ;;
