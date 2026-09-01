@@ -11,10 +11,10 @@
   `scripts/helpers/kimi-exec.sh` (kimi's `-p` takes the prompt as argv, so the
   shim bridges octo's stdin contract), with model selection wired from
   `providers.json` / `OCTOPUS_KIMI_MODEL`. Auth is `MOONSHOT_API_KEY` or a
-  `kimi login` session. Availability additionally requires a configured model:
-  a signed-in kimi with no provider configured rejects every prompt with
-  "No model configured" while still exiting 0, so both the health check and
-  `kimi_execute` fail closed rather than letting that error read as a response.
+  `kimi login` session. Availability additionally requires a model that kimi's
+  own `config.toml` declares: a signed-in kimi with no provider configured
+  rejects every prompt, and it resolves `-m` against that same config, so an
+  octo-side model pin is not on its own proof that a dispatch can succeed.
 
 ## [10.1.0] - 2026-08-30
 

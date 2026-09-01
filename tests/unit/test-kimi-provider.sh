@@ -7,8 +7,9 @@
 #   3. provider-routing isolates kimi by default with a full-env opt-in.
 #   4. providers.json kimi model resolves and kimi-exec.sh emits --model;
 #      "default" emits no --model.
-#   5. kimi_execute propagates failure, including kimi's exit-0 config error.
-#   6. kimi_is_available requires the binary AND auth AND a configured model.
+#   5. kimi_execute propagates a non-zero exit even with stdout.
+#   6. kimi_is_available requires the binary AND auth AND a model kimi itself
+#      declares — an octo-side pin alone is not proof of readiness.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -140,21 +141,31 @@ test_kimi_exit_propagation() {
     fi
 }
 
-# ── 8. kimi's exit-0 "No model configured" error is not a valid response ──────
-test_kimi_config_error_not_a_response() {
-    test_case "kimi_execute rejects the exit-0 'No model configured' error"
-    local tmp_bin old_path rc
-    tmp_bin="$TEST_TMP_DIR/kimi-bin-nomodel"
-    _kimi_mock_bin "$tmp_bin" 'printf "error: failed to run prompt: No model configured.\n"; exit 0'
-    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+# ── 8. an octo-side model pin is not proof of readiness ──────────────────────
+test_kimi_pin_needs_native_alias() {
+    test_case "OCTOPUS_KIMI_MODEL alone does not make kimi available"
+    local tmp_bin old_path old_home old_key rc_unbacked rc_backed
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-pin"
+    _kimi_mock_bin "$tmp_bin" 'exit 0'
+    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY:-}"
+    PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-pin-home"; mkdir -p "$HOME/.kimi-code"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
-    rc=0
-    kimi_execute kimi "probe" >/dev/null 2>&1 || rc=$?
-    PATH="$old_path"
-    if [[ "$rc" -ne 0 ]]; then
+    MOONSHOT_API_KEY="moonshot-test-key"
+
+    # config.toml exists but does not declare the pinned alias: kimi would fail
+    # with 'Model "kimi-k2.5" is not configured in config.toml.'
+    printf '# empty\n' > "$HOME/.kimi-code/config.toml"
+    rc_unbacked=0; OCTOPUS_KIMI_MODEL="kimi-k2.5" kimi_is_available >/dev/null 2>&1 || rc_unbacked=$?
+
+    # same pin, now actually declared by kimi's own config
+    printf '[models.kimi-k2.5]\nprovider = "kimi"\n' > "$HOME/.kimi-code/config.toml"
+    rc_backed=0; OCTOPUS_KIMI_MODEL="kimi-k2.5" kimi_is_available >/dev/null 2>&1 || rc_backed=$?
+
+    PATH="$old_path"; HOME="$old_home"; [[ -n "$old_key" ]] && export MOONSHOT_API_KEY="$old_key"
+    if [[ "$rc_unbacked" -ne 0 && "$rc_backed" -eq 0 ]]; then
         test_pass
     else
-        test_fail "kimi_execute returned 0 for kimi's config error — councils would read it as a verdict"
+        test_fail "expected unbacked pin!=0 ($rc_unbacked) and config-backed pin=0 ($rc_backed)"
     fi
 }
 
@@ -196,7 +207,7 @@ test_kimi_config_runtime_model
 test_kimi_default_no_model
 test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
-test_kimi_config_error_not_a_response
+test_kimi_pin_needs_native_alias
 test_kimi_detection
 
 test_summary
