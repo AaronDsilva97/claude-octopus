@@ -142,9 +142,9 @@ test_kimi_exit_propagation() {
 }
 
 # ── 8. an octo-side model pin is not proof of readiness ──────────────────────
-test_kimi_pin_needs_native_alias() {
-    test_case "OCTOPUS_KIMI_MODEL alone does not make kimi available"
-    local tmp_bin old_path old_home old_key rc_unbacked rc_backed
+test_kimi_pin_is_not_readiness() {
+    test_case "OCTOPUS_KIMI_MODEL does not substitute for kimi's own default_model"
+    local tmp_bin old_path old_home old_key rc_pin_only rc_default
     tmp_bin="$TEST_TMP_DIR/kimi-bin-pin"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
     old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY:-}"
@@ -152,20 +152,19 @@ test_kimi_pin_needs_native_alias() {
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
     MOONSHOT_API_KEY="moonshot-test-key"
 
-    # config.toml exists but does not declare the pinned alias: kimi would fail
-    # with 'Model "kimi-k2.5" is not configured in config.toml.'
-    printf '# empty\n' > "$HOME/.kimi-code/config.toml"
-    rc_unbacked=0; OCTOPUS_KIMI_MODEL="kimi-k2.5" kimi_is_available >/dev/null 2>&1 || rc_unbacked=$?
+    # A model alias declared but no default_model: kimi resolves -m against its
+    # own config, so a pin here is not evidence a dispatch can succeed.
+    printf '[models."kimi-k2.5"]\nprovider = "kimi"\n' > "$HOME/.kimi-code/config.toml"
+    rc_pin_only=0; OCTOPUS_KIMI_MODEL="kimi-k2.5" kimi_is_available >/dev/null 2>&1 || rc_pin_only=$?
 
-    # same pin, now actually declared by kimi's own config
-    printf '[models.kimi-k2.5]\nprovider = "kimi"\n' > "$HOME/.kimi-code/config.toml"
-    rc_backed=0; OCTOPUS_KIMI_MODEL="kimi-k2.5" kimi_is_available >/dev/null 2>&1 || rc_backed=$?
+    printf 'default_model = "kimi-k2.5"\n' > "$HOME/.kimi-code/config.toml"
+    rc_default=0; kimi_is_available >/dev/null 2>&1 || rc_default=$?
 
     PATH="$old_path"; HOME="$old_home"; [[ -n "$old_key" ]] && export MOONSHOT_API_KEY="$old_key"
-    if [[ "$rc_unbacked" -ne 0 && "$rc_backed" -eq 0 ]]; then
+    if [[ "$rc_pin_only" -ne 0 && "$rc_default" -eq 0 ]]; then
         test_pass
     else
-        test_fail "expected unbacked pin!=0 ($rc_unbacked) and config-backed pin=0 ($rc_backed)"
+        test_fail "expected pin-only!=0 ($rc_pin_only) and default_model=0 ($rc_default)"
     fi
 }
 
@@ -207,7 +206,7 @@ test_kimi_config_runtime_model
 test_kimi_default_no_model
 test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
-test_kimi_pin_needs_native_alias
+test_kimi_pin_is_not_readiness
 test_kimi_detection
 
 test_summary
