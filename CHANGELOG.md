@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [10.2.0] - 2026-09-01
+
 ### Added
 
 - Moonshot Kimi Code CLI (`kimi`) as a first-class provider, alongside the
