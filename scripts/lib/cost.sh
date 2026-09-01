@@ -873,6 +873,7 @@ get_model_pricing() {
         grok*) provider="grok" ;;
         opencode*) provider="opencode" ;;
         vibe*) provider="vibe" ;;
+        kimi*) provider="kimi" ;;
     esac
 
     if [[ ! -r "$OCTOPUS_MODEL_PRICING_FILE" ]]; then

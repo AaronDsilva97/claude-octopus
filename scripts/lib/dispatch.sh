@@ -451,6 +451,17 @@ get_agent_command() {
                 echo "${PLUGIN_DIR}/scripts/helpers/grok-exec.sh"
             fi
             ;;
+        kimi|kimi-research)  # Moonshot Kimi Code CLI — headless single-turn via helpers/kimi-exec.sh
+            # Model wiring mirrors grok: get_agent_model reads providers.json +
+            # OCTOPUS_KIMI_MODEL, and the env prefix carries the pick to the shim.
+            # Kimi model ids are single tokens, so the prefix survives word-splitting.
+            if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then return 1; fi
+            if [[ -n "$model" && "$model" != "default" ]]; then
+                echo "env OCTOPUS_KIMI_MODEL=${model} ${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
+            else
+                echo "${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
+            fi
+            ;;
         claude-sdk|claude-sdk-agent|claude-sdk-research)  # v9.50.0: Claude Agent SDK seat
             # Routes to helpers/claude-sdk-exec.sh when CLAUDE_SDK_API_KEY is set —
             # unlocks Opus 5 + 1M context independent of the host session. Model

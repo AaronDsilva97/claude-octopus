@@ -201,7 +201,7 @@ validate_model_name_for_provider() {
 
 _octo_is_known_provider_name() {
     case "$1" in
-        codex|claude|perplexity|qwen|copilot|opencode|ollama|openrouter|orcarouter|cursor-agent|commandcode|vibe|agy|agy-research|antigravity)
+        codex|claude|perplexity|qwen|copilot|opencode|ollama|openrouter|orcarouter|cursor-agent|commandcode|vibe|kimi|agy|agy-research|antigravity)
             return 0 ;;
         *)
             return 1 ;;
@@ -612,6 +612,7 @@ resolve_octopus_model() {
             opencode-fast*)  resolved_model="opencode/deepseek-v4-flash-free" ;;
             opencode*)       resolved_model="opencode/deepseek-v4-flash-free" ;;
             grok*)           resolved_model="default" ;; # xAI's own default; dispatch.sh/grok-exec.sh omit --model for "default" (#797)
+            kimi*)           resolved_model="default" ;; # Kimi's own default from ~/.kimi-code/config.toml; the shim omits --model for "default"
             vibe*)           resolved_model="default" ;; # Mistral Vibe's own default from ~/.vibe/config.toml; never wired to --model (#797)
             atlascloud*)     resolved_model="" ;; # No safe universal default; atlascloud-agent dispatch already requires an explicit model pin (#797)
             *)              resolved_model="$(codex_default_model)" ;; # Safest universal fallback
@@ -758,6 +759,9 @@ is_agent_available_v2() {
             fi
             [[ -n "${ATLASCLOUD_API_KEY:-}" ]] && \
                 { [[ -n "${ATLASCLOUD_MODEL:-}" ]] || [[ -n "${OCTOPUS_ATLASCLOUD_MODEL:-}" ]] || [[ -n "${OPENAI_COMPAT_MODEL:-}" ]]; }
+            ;;
+        kimi|kimi-*)
+            declare -f kimi_is_available >/dev/null 2>&1 && kimi_is_available
             ;;
         vibe|vibe-*)
             if [[ -z "${MISTRAL_API_KEY:-}" ]] && declare -f resolve_provider_env >/dev/null 2>&1; then

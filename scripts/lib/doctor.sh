@@ -83,6 +83,7 @@ _doctor_provider_result_name() {
         cursor-agent) printf '%s\n' "cursor-agent" ;;
         grok) printf '%s\n' "grok" ;;
         vibe) printf '%s\n' "vibe-cli" ;;
+        kimi) printf '%s\n' "kimi-cli" ;;
         opencode) printf '%s\n' "opencode-cli" ;;
         *) printf '%s-readiness\n' "$1" ;;
     esac

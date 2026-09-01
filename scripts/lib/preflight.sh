@@ -5,7 +5,7 @@
 _preflight_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_preflight_registry_dir}/provider-registry.sh" 2>/dev/null || true
 
-for _preflight_dependency in provider-allowlist auth provider-routing qwen openai-compatible grok copilot quota-watcher events; do
+for _preflight_dependency in provider-allowlist auth provider-routing qwen openai-compatible grok kimi copilot quota-watcher events; do
     # shellcheck source=/dev/null
     source "${_preflight_registry_dir}/${_preflight_dependency}.sh" 2>/dev/null || true
 done
@@ -127,6 +127,7 @@ _octo_provider_static_readiness() {
             atlascloud) [[ -n "${ATLASCLOUD_API_KEY:-}" ]] || resolve_provider_env ATLASCLOUD_API_KEY 2>/dev/null || true ;;
             grok) [[ -n "${XAI_API_KEY:-}" ]] || resolve_provider_env XAI_API_KEY 2>/dev/null || true ;;
             vibe) [[ -n "${MISTRAL_API_KEY:-}" ]] || resolve_provider_env MISTRAL_API_KEY 2>/dev/null || true ;;
+            kimi) [[ -n "${MOONSHOT_API_KEY:-}" ]] || resolve_provider_env MOONSHOT_API_KEY 2>/dev/null || true ;;
         esac
     fi
 
@@ -236,6 +237,21 @@ _octo_provider_static_readiness() {
                     status="available"; reason_code="ready"; remediation=""
                 else
                     status="degraded"; reason_code="auth-missing"; remediation="Run: grok login, or set XAI_API_KEY."
+                fi
+            fi
+            ;;
+        kimi)
+            remediation="Install Kimi Code, then run: kimi login"
+            if command -v kimi >/dev/null 2>&1; then
+                if _octo_value_has_nonwhitespace "${MOONSHOT_API_KEY:-}" || [[ -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]]; then
+                    if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
+                        status="degraded"; reason_code="model-missing"
+                        remediation="Run: kimi, then /login to configure a model, or set OCTOPUS_KIMI_MODEL."
+                    else
+                        status="available"; reason_code="ready"; remediation=""
+                    fi
+                else
+                    status="degraded"; reason_code="auth-missing"; remediation="Run: kimi login, or set MOONSHOT_API_KEY."
                 fi
             fi
             ;;
