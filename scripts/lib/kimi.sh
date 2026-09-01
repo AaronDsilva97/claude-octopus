@@ -4,6 +4,7 @@
 # (orchestrate.sh already sets `set -eo pipefail`).
 # Auth: $MOONSHOT_API_KEY or ~/.kimi-code/credentials/kimi-code.json (kimi login).
 # Headless: kimi -p "<prompt>" --output-format text  (single-turn, prints+exits).
+# NB: --auto is mutually exclusive with -p ("Cannot combine --prompt with --auto").
 # Config errors (no model / unknown alias) exit 1, so the exit-code check below
 # is the whole contract — no stdout scanning needed. Verified on kimi 0.39.1.
 
@@ -20,19 +21,41 @@ _kimi_run_with_timeout(){
 _is_kimi_binary(){ command -v kimi &>/dev/null; }
 
 # A signed-in kimi with no configured provider refuses every prompt, so a model
-# is part of the availability contract, not a nicety. Readiness is proven only by
-# kimi's OWN config.toml declaring default_model — which is what `kimi` + /login
-# writes, and what kimi's own error names as the alternative:
-#   "Run `kimi` and use /login to sign in, then retry; or set default_model in
-#    config.toml."
-# OCTOPUS_KIMI_MODEL deliberately does NOT count here. kimi resolves -m against
-# that same config, so a pin with no matching alias fails just as hard:
-#   Model "<alias>" is not configured in config.toml.
-# The value matters, not just the key: `default_model = ""` (or a bare `=`) is
-# not a model, and kimi fails resolution on it exactly as if it were absent.
+# is part of the availability contract, not a nicety.
+#
+# kimi reads the pointer as a TOP-LEVEL key only (`config.raw["default_model"]`),
+# and `[secondary_model]` carries its own `default_model` for the subagent pool.
+# A line-anchored grep therefore reports ready for a config that has only a
+# subagent model and no main one. So the scan stops at the first table header.
+#
+# The value matters too: `default_model = ""` or a bare `=` is not a model, and
+# kimi fails resolution on it exactly as if the key were absent.
+#
+# Not verified here: that the pointer names a live `[models."<alias>"]` entry
+# with reachable provider credentials — kimi's own gate does check that, but it
+# needs the parsed config. A stale pointer costs one dispatch that exits
+# non-zero with a clear message, which spawn.sh already treats as a failure.
+# `kimi provider list --json` would be authoritative but costs ~1.4s a call,
+# far too slow for a path that runs per provider on every detection.
+#
+# OCTOPUS_KIMI_MODEL deliberately does not count: kimi resolves -m against this
+# same config, so a pin with no matching alias fails just as hard.
 kimi_has_model(){
-    grep -Eq '^[[:space:]]*default_model[[:space:]]*=[[:space:]]*("[^"[:space:]][^"]*"|'"'"'[^'"'"'[:space:]][^'"'"']*'"'"'|[^[:space:]"'"'"'#])' \
-        "${HOME}/.kimi-code/config.toml" 2>/dev/null
+    local config="${HOME}/.kimi-code/config.toml"
+    [[ -f "$config" ]] || return 1
+    awk '
+        # Stop at the first table header: past it we are no longer top-level.
+        /^[[:space:]]*\[/ { stop = 1 }
+        !stop && /^[[:space:]]*default_model[[:space:]]*=/ {
+            value = $0
+            sub(/^[[:space:]]*default_model[[:space:]]*=[[:space:]]*/, "", value)
+            sub(/[[:space:]]*#.*$/, "", value)
+            gsub(/^["'"'"']|["'"'"']$/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            if (length(value) > 0) { found = 1 }
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$config"
 }
 
 kimi_is_available(){
@@ -65,7 +88,7 @@ kimi_execute(){
     command -v kimi &>/dev/null || { _kimi_log ERROR "kimi: CLI not found"; return 1; }
     local timeout="${OCTOPUS_KIMI_TIMEOUT:-150}"
     local model="${OCTOPUS_KIMI_MODEL:-default}"
-    local -a cmd=(kimi -p "$prompt" --output-format text --auto)
+    local -a cmd=(kimi -p "$prompt" --output-format text)
     [[ -n "$model" && "$model" != "default" ]] && cmd+=(--model "$model")
     local response exit_code
     response=$(_kimi_run_with_timeout "$timeout" "${cmd[@]}" 2>/dev/null) && exit_code=0 || exit_code=$?
