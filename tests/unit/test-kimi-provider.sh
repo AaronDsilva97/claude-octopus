@@ -22,6 +22,12 @@ test_suite "Moonshot Kimi Code CLI Provider"
 # Stub log() — kimi.sh/model-resolver.sh call it outside orchestrate.sh.
 log() { :; }
 
+# Restore MOONSHOT_API_KEY exactly as found — including "was not set at all",
+# which a plain -n check would silently turn into "keep the fake test key".
+_kimi_restore_key() {
+    if [[ -n "$1" ]]; then export MOONSHOT_API_KEY="$2"; else unset MOONSHOT_API_KEY; fi
+}
+
 _kimi_mock_bin() {
     local dir="$1" body="$2"
     mkdir -p "$dir"
@@ -144,10 +150,10 @@ test_kimi_exit_propagation() {
 # ── 8. an octo-side model pin is not proof of readiness ──────────────────────
 test_kimi_pin_is_not_readiness() {
     test_case "OCTOPUS_KIMI_MODEL does not substitute for kimi's own default_model"
-    local tmp_bin old_path old_home old_key rc_pin_only rc_default
+    local tmp_bin old_path old_home old_key had_key rc_pin_only rc_default
     tmp_bin="$TEST_TMP_DIR/kimi-bin-pin"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY:-}"
+    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-pin-home"; mkdir -p "$HOME/.kimi-code"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
     MOONSHOT_API_KEY="moonshot-test-key"
@@ -160,7 +166,7 @@ test_kimi_pin_is_not_readiness() {
     printf 'default_model = "kimi-k2.5"\n' > "$HOME/.kimi-code/config.toml"
     rc_default=0; kimi_is_available >/dev/null 2>&1 || rc_default=$?
 
-    PATH="$old_path"; HOME="$old_home"; [[ -n "$old_key" ]] && export MOONSHOT_API_KEY="$old_key"
+    PATH="$old_path"; HOME="$old_home"; _kimi_restore_key "$had_key" "$old_key"
     if [[ "$rc_pin_only" -ne 0 && "$rc_default" -eq 0 ]]; then
         test_pass
     else
@@ -168,13 +174,39 @@ test_kimi_pin_is_not_readiness() {
     fi
 }
 
+# ── 8b. default_model must have a value, not just a key ──────────────────────
+test_kimi_empty_default_model() {
+    test_case "default_model with an empty value is not readiness"
+    local tmp_bin old_path old_home old_key had_key rc_empty rc_bare rc_set
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-empty"
+    _kimi_mock_bin "$tmp_bin" 'exit 0'
+    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
+    PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-empty-model-home"; mkdir -p "$HOME/.kimi-code"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
+    MOONSHOT_API_KEY="moonshot-test-key"
+
+    printf 'default_model = ""\n' > "$HOME/.kimi-code/config.toml"
+    rc_empty=0; kimi_is_available >/dev/null 2>&1 || rc_empty=$?
+    printf 'default_model =\n' > "$HOME/.kimi-code/config.toml"
+    rc_bare=0; kimi_is_available >/dev/null 2>&1 || rc_bare=$?
+    printf 'default_model = "kimi-k2.5"\n' > "$HOME/.kimi-code/config.toml"
+    rc_set=0; kimi_is_available >/dev/null 2>&1 || rc_set=$?
+
+    PATH="$old_path"; HOME="$old_home"; _kimi_restore_key "$had_key" "$old_key"
+    if [[ "$rc_empty" -ne 0 && "$rc_bare" -ne 0 && "$rc_set" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "expected empty!=0 ($rc_empty) bare!=0 ($rc_bare) set=0 ($rc_set)"
+    fi
+}
+
 # ── 9. availability requires binary AND auth AND a configured model ───────────
 test_kimi_detection() {
     test_case "kimi_is_available requires the kimi binary, auth, and a model"
-    local tmp_bin old_path old_home old_key rc_ready rc_nomodel rc_noauth
+    local tmp_bin old_path old_home old_key had_key rc_ready rc_nomodel rc_noauth
     tmp_bin="$TEST_TMP_DIR/kimi-bin-det"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY:-}"
+    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-empty-home"; mkdir -p "$HOME"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
 
@@ -191,7 +223,7 @@ test_kimi_detection() {
     unset MOONSHOT_API_KEY
     rc_noauth=0; kimi_is_available >/dev/null 2>&1 || rc_noauth=$?
 
-    PATH="$old_path"; HOME="$old_home"; [[ -n "$old_key" ]] && export MOONSHOT_API_KEY="$old_key"
+    PATH="$old_path"; HOME="$old_home"; _kimi_restore_key "$had_key" "$old_key"
     if [[ "$rc_ready" -eq 0 && "$rc_nomodel" -ne 0 && "$rc_noauth" -ne 0 ]]; then
         test_pass
     else
@@ -207,6 +239,7 @@ test_kimi_default_no_model
 test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
 test_kimi_pin_is_not_readiness
+test_kimi_empty_default_model
 test_kimi_detection
 
 test_summary
