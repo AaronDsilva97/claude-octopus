@@ -16,6 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$SCRIPT_DIR/../helpers/test-framework.sh"
+PLUGIN_DIR="$PROJECT_ROOT"
+source "$PROJECT_ROOT/scripts/lib/model-resolver.sh" 2>/dev/null || true
+source "$PROJECT_ROOT/scripts/lib/dispatch.sh" 2>/dev/null || true
 
 test_suite "Moonshot Kimi Code CLI Provider"
 
@@ -32,6 +35,39 @@ _kimi_mock_bin() {
     local dir="$1" body="$2"
     mkdir -p "$dir"
     printf '%s\n' '#!/usr/bin/env bash' "$body" > "$dir/kimi"
+    chmod +x "$dir/kimi"
+}
+
+# A mock that enforces the real CLI's argument contract, so a permissive mock
+# cannot green-light an invocation kimi would reject. Mirrors kimi 0.39.1:
+#   -p/--prompt is single-turn and cannot be combined with --auto
+#     ("error: Cannot combine --prompt with --auto.")
+#   unknown flags are rejected ("error: unknown option '<flag>'")
+_kimi_strict_mock_bin() {
+    local dir="$1"
+    mkdir -p "$dir"
+    cat > "$dir/kimi" <<'MOCK'
+#!/usr/bin/env bash
+have_prompt=0; have_auto=0
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+    case "${args[$i]}" in
+        -p|--prompt)        have_prompt=1; i=$((i+2)); continue ;;
+        --auto)             have_auto=1 ;;
+        --output-format)    i=$((i+2)); continue ;;
+        -m|--model)         i=$((i+2)); continue ;;
+        -y|--yolo|--plan)   ;;
+        *) echo "error: unknown option '${args[$i]}'" >&2; exit 1 ;;
+    esac
+    i=$((i+1))
+done
+if [[ $have_prompt -eq 1 && $have_auto -eq 1 ]]; then
+    echo "error: Cannot combine --prompt with --auto." >&2; exit 1
+fi
+[[ $have_prompt -eq 1 ]] || { echo "error: no prompt" >&2; exit 1; }
+printf 'MOCK_KIMI_OK\n'
+MOCK
     chmod +x "$dir/kimi"
 }
 
@@ -200,6 +236,33 @@ test_kimi_empty_default_model() {
     fi
 }
 
+# ── 8c. the dispatch command is one the real CLI would accept ────────────────
+test_kimi_dispatch_command_is_valid() {
+    test_case "dispatch's kimi command survives the real CLI's argument contract"
+    local tmp_bin old_path out rc cmd
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-strict"
+    _kimi_strict_mock_bin "$tmp_bin"
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+
+    # Take the command dispatch.sh actually builds, strip any env prefix, and
+    # run it exactly as spawn.sh would: flags as argv, prompt on stdin.
+    PLUGIN_DIR="$PROJECT_ROOT"
+    cmd="$(get_agent_command kimi 2>/dev/null)"
+    cmd="${cmd#env *MODEL=* }"
+    # `|| rc=$?` not `; rc=$?` — the suite runs under `set -e`, which would
+    # abort on a failing assignment and make this test unable to fail at all.
+    rc=0
+    # shellcheck disable=SC2086
+    out="$(printf 'probe' | bash $cmd 2>&1)" || rc=$?
+    PATH="$old_path"
+
+    if [[ "$rc" -eq 0 && "$out" == *MOCK_KIMI_OK* ]]; then
+        test_pass
+    else
+        test_fail "dispatch command rejected by the CLI argument contract: rc=$rc out=$out"
+    fi
+}
+
 # ── 9. availability requires binary AND auth AND a configured model ───────────
 test_kimi_detection() {
     test_case "kimi_is_available requires the kimi binary, auth, and a model"
@@ -240,6 +303,7 @@ test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
 test_kimi_pin_is_not_readiness
 test_kimi_empty_default_model
+test_kimi_dispatch_command_is_valid
 test_kimi_detection
 
 test_summary
