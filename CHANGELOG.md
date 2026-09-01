@@ -10,9 +10,12 @@
   shim bridges octo's stdin contract), with model selection wired from
   `providers.json` / `OCTOPUS_KIMI_MODEL`. Auth is `MOONSHOT_API_KEY` or a
   `kimi login` session. Availability additionally requires a model that kimi's
-  own `config.toml` declares: a signed-in kimi with no provider configured
-  rejects every prompt, and it resolves `-m` against that same config, so an
-  octo-side model pin is not on its own proof that a dispatch can succeed.
+  own `config.toml` declares at the top level — `[secondary_model]` carries its
+  own `default_model` for the subagent pool, which is not a main model — with a
+  non-empty value. An octo-side pin is not proof of readiness: kimi resolves
+  `-m` against that same config, so a pin with no matching alias fails just as
+  hard. Config errors exit 1, so the existing exit-code gate in `spawn.sh`
+  handles them.
 
 ## [10.1.0] - 2026-08-30
 
