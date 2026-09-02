@@ -50,6 +50,7 @@ resolve_provider_to_agent() {
         perplexity|perplexity-fast)
                                 agent="$provider" ;;
         qwen|qwen-research)     agent="$provider" ;;
+        kimi|kimi-research)     agent="$provider" ;;
         copilot|copilot-research)
                                 agent="$provider" ;;
         cursor-agent|ollama)    agent="$provider" ;;
@@ -77,6 +78,7 @@ agent_display_label() {
         orcarouter*) echo "OrcaRouter" ;;
         openai-compatible|openai-tools|openai-compatible-agent) echo "OpenAI-compatible" ;;
         qwen*) echo "Qwen" ;;
+        kimi*) echo "Kimi" ;;
         perplexity*) echo "Perplexity" ;;
         copilot*) echo "Copilot" ;;
         cursor-agent) echo "Cursor Agent" ;;

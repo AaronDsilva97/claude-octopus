@@ -13,6 +13,8 @@
 #      contaminating successful response output.
 #   8. kimi_is_available requires the binary AND auth AND a model kimi itself
 #      declares — an octo-side pin alone is not proof of readiness.
+#   9. standard dispatch validation and configured routing accept both Kimi
+#      agent types and give them a stable display label.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,6 +24,8 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 PLUGIN_DIR="$PROJECT_ROOT"
 source "$PROJECT_ROOT/scripts/lib/model-resolver.sh" 2>/dev/null || true
 source "$PROJECT_ROOT/scripts/lib/dispatch.sh" 2>/dev/null || true
+source "$PROJECT_ROOT/scripts/lib/routing.sh" 2>/dev/null || true
+source "$PROJECT_ROOT/scripts/lib/parallel.sh" 2>/dev/null || true
 
 test_suite "Moonshot Kimi Code CLI Provider"
 
@@ -590,6 +594,42 @@ test_kimi_detection() {
     fi
 }
 
+test_kimi_agent_validation() {
+    test_case "kimi agent types pass the standard dispatch allowlist"
+    local AVAILABLE_AGENTS agent
+    AVAILABLE_AGENTS="$(sed -n 's/^AVAILABLE_AGENTS="\([^"]*\)".*/\1/p' "$PROJECT_ROOT/scripts/orchestrate.sh")"
+
+    for agent in kimi kimi-research; do
+        if ! validate_agent_type "$agent"; then
+            test_fail "expected $agent to pass validate_agent_type"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_kimi_configured_provider_resolution() {
+    test_case "configured kimi providers resolve to labeled agent types"
+    local AVAILABLE_AGENTS provider agent label
+    AVAILABLE_AGENTS="$(sed -n 's/^AVAILABLE_AGENTS="\([^"]*\)".*/\1/p' "$PROJECT_ROOT/scripts/orchestrate.sh")"
+
+    for provider in kimi kimi-research; do
+        agent="$(resolve_provider_to_agent "$provider")" || {
+            test_fail "expected configured provider $provider to resolve"
+            return
+        }
+        label="$(agent_display_label "$agent")" || {
+            test_fail "expected $agent to have a display label"
+            return
+        }
+        if [[ "$agent" != "$provider" || "$label" != "Kimi" ]]; then
+            test_fail "expected $provider|Kimi, got $agent|$label"
+            return
+        fi
+    done
+    test_pass
+}
+
 test_kimi_dispatch_shim
 test_kimi_dispatch_wires_model
 test_kimi_env_isolation
@@ -607,5 +647,7 @@ test_kimi_pin_is_not_readiness
 test_kimi_empty_default_model
 test_kimi_dispatch_command_is_valid
 test_kimi_detection
+test_kimi_agent_validation
+test_kimi_configured_provider_resolution
 
 test_summary
