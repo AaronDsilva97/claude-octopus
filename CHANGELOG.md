@@ -33,6 +33,16 @@
   `summary.json` under `quorum.blind_seats`, and trigger an end-of-run warning
   naming the provider — so the seat's mode/model can be switched after the first
   blind round. (The default per-seat dispatch mode is unchanged.)
+- Council quorum no longer records a real, passed cross-vendor vote as
+  `quorum.met: false` when the chair synthesis fully degenerates. A chair that
+  was dispatched but returned a degenerate response (all chair seats degenerate,
+  host not the chair) previously forced `met=false` even when both independent
+  vendors cleanly APPROVED with distinct model families — silently, since the
+  family-shortage warning did not apply. `quorum.met` now reflects the
+  independent vote (as the host-native-chair carve-out already intended); the
+  missing synthesis is surfaced via a new `summary.json quorum.chair_synthesis_available`
+  flag and an end-of-run warning, and the run stops before synthesis with a clear
+  message directing the operator to the per-seat verdicts in `responses/`.
 
 ## [10.1.0] - 2026-08-30
 

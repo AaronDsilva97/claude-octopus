@@ -1574,7 +1574,7 @@ test_council_run_status_beacon_lifecycle() {
 }
 
 test_council_quorum_met_with_host_native_chair() {
-    test_case "quorum.met is true when a host-native chair + two vendors approve (chair_received stays false)"
+    test_case "quorum.met reflects the vote before synthesis: host-native and absent chairs keep two vendor approvals without claiming synthesis"
     load_council_lib || return 1
     local d; d="$(mktemp -d "$TEST_TMP_DIR/council-hnchair.XXXXXX")"; mkdir -p "$d/responses"
     COUNCIL_RUN_DIR="$d"
@@ -1600,21 +1600,234 @@ test_council_quorum_met_with_host_native_chair() {
 
     COUNCIL_PROVIDER_STATUS_JSON='{"claude":"host-native","codex":"available","agy":"available"}' \
         council_run_advice_phase >/dev/null 2>&1 || true
-    local met_hn chair_recv_hn hostnative_hn
-    met_hn="$COUNCIL_QUORUM_MET"; chair_recv_hn="$COUNCIL_CHAIR_RESPONSE_RECEIVED"; hostnative_hn="$COUNCIL_CHAIR_HOST_NATIVE"
+    local met_hn chair_recv_hn hostnative_hn synth_hn
+    met_hn="$COUNCIL_QUORUM_MET"; chair_recv_hn="$COUNCIL_CHAIR_RESPONSE_RECEIVED"
+    hostnative_hn="$COUNCIL_CHAIR_HOST_NATIVE"; synth_hn="$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE"
 
-    # Negative control: same two approvals but the chair provider is merely
-    # "available" and never responded — chair is genuinely absent, met must be false.
+    # Chair genuinely absent (provider merely "available", never responded, no
+    # fallback): the two vendor approvals still carry the VOTE, so met stays true
+    # (Finding 4 — a missing/degenerate chair must not corrupt the tally to
+    # met=false), but the missing synthesis is flagged chair_synthesis_available=false.
     COUNCIL_PROVIDER_STATUS_JSON='{"claude":"available","codex":"available","agy":"available"}' \
         council_run_advice_phase >/dev/null 2>&1 || true
-    local met_absent="$COUNCIL_QUORUM_MET"
+    local met_absent="$COUNCIL_QUORUM_MET" synth_absent="$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE"
 
     unset -f council_dispatch_member_detached council_run_chair_fallback
 
-    if [[ "$met_hn" == "true" && "$chair_recv_hn" == "false" && "$hostnative_hn" == "true" && "$met_absent" == "false" ]]; then
+    if [[ "$met_hn" == "true" && "$chair_recv_hn" == "false" && "$hostnative_hn" == "true" && "$synth_hn" == "false" \
+          && "$met_absent" == "true" && "$synth_absent" == "false" ]]; then
         test_pass
     else
-        test_fail "host-native chair quorum wrong: met=$met_hn chair_received=$chair_recv_hn host_native=$hostnative_hn ; absent-chair met=$met_absent"
+        test_fail "host-native chair quorum wrong: met=$met_hn chair_received=$chair_recv_hn host_native=$hostnative_hn synth=$synth_hn ; absent-chair met=$met_absent synth=$synth_absent"
+        return 1
+    fi
+}
+
+test_council_reset_defaults_clears_chair_state() {
+    test_case "council_reset_defaults clears chair and blind-seat state from a prior run"
+    load_council_lib || return 1
+
+    COUNCIL_CHAIR_HOST_NATIVE="true"
+    COUNCIL_CHAIR_SYNTHESIS_AVAILABLE="true"
+    COUNCIL_BLIND_SEATS="codex agy"
+    council_reset_defaults
+
+    if [[ "$COUNCIL_CHAIR_HOST_NATIVE" == "false" \
+          && "$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE" == "false" \
+          && -z "$COUNCIL_BLIND_SEATS" ]]; then
+        test_pass
+    else
+        test_fail "per-run state survived reset: host_native=$COUNCIL_CHAIR_HOST_NATIVE synthesis=$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE blind=[$COUNCIL_BLIND_SEATS]"
+        return 1
+    fi
+}
+
+test_council_dry_run_does_not_reuse_blind_seats() {
+    test_case "a dry run does not report blind seats retained from a prior run"
+    load_council_lib || return 1
+    local d summary
+    d="$(mktemp -d "$TEST_TMP_DIR/council-blind-reset.XXXXXX")"
+
+    COUNCIL_BLIND_SEATS="codex agy"
+    council_run --dry-run --goal advice --depth quick --benchmark off \
+        --output-dir "$d" "Review the change" >/dev/null
+    summary="$(find "$d" -name summary.json -type f -print -quit)"
+
+    if [[ -f "$summary" ]] && jq -e \
+        '.status == "dry-run" and .quorum.blind_seats == []' "$summary" >/dev/null; then
+        test_pass
+    else
+        test_fail "dry-run retained blind seats: $(jq -c '.quorum.blind_seats' "$summary" 2>/dev/null || printf missing)"
+        return 1
+    fi
+}
+
+test_council_host_native_placeholder_completes_in_context() {
+    test_case "host-native synthesis placeholder remains completed and available in context"
+    load_council_lib || return 1
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/council-hnsynth.XXXXXX")"
+    mkdir -p "$d/responses" "$d/critiques" "$d/revisions"
+
+    council_parse_args() { council_reset_defaults; COUNCIL_TASK="Review the change"; }
+    council_create_run_dir() { COUNCIL_RUN_DIR="$d"; COUNCIL_RUN_ID="test-host-native-synthesis"; }
+    council_build_roster() {
+        COUNCIL_RESOLVED_MEMBERS="strategy-analyst,backend-architect,security-auditor"
+        COUNCIL_ROSTER_JSON='[{"persona":"strategy-analyst","seat":"chair","provider":"claude"}]'
+    }
+    council_write_config_json() { :; }
+    council_write_research_artifact() { :; }
+    council_check_cost_cap() { return 0; }
+    council_run_advice_phase() {
+        COUNCIL_QUORUM_MET="true"
+        COUNCIL_CHAIR_RESPONSE_RECEIVED="false"
+        COUNCIL_CHAIR_HOST_NATIVE="true"
+        COUNCIL_CHAIR_SYNTHESIS_AVAILABLE="false"
+    }
+    council_run_critique_phase() { :; }
+    council_run_revision_phase() { :; }
+    council_dispatch_member() { return 1; }
+    council_append_corpus_artifacts() { :; }
+    council_write_summary_json() { printf '%s' "$1" > "$d/summary-status"; }
+    council_print_run_warnings() { :; }
+    council_write_implementation_plan() { :; }
+    council_scan_veto_artifacts() { :; }
+    council_needs_implementation_plan() { return 1; }
+    council_process_implementation_gates() { :; }
+
+    local rc=0
+    _council_run_impl "Review the change" >/dev/null 2>&1 || rc=$?
+    local status=""
+    status="$(cat "$d/summary-status" 2>/dev/null)"
+
+    if [[ "$rc" -eq 0 && "$status" == "completed" \
+          && "$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE" == "true" \
+          && -s "$d/synthesis.md" ]]; then
+        test_pass
+    else
+        test_fail "host-native placeholder contract wrong: rc=$rc status=$status synthesis=$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE artifact=$([[ -s "$d/synthesis.md" ]] && printf yes || printf no)"
+        return 1
+    fi
+}
+
+test_council_failed_dispatched_synthesis_is_partial() {
+    test_case "a failed dispatched chair synthesis remains partial and unavailable"
+    load_council_lib || return 1
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/council-dispatched-synth.XXXXXX")"
+    mkdir -p "$d/responses" "$d/critiques" "$d/revisions"
+
+    council_parse_args() { council_reset_defaults; COUNCIL_TASK="Review the change"; }
+    council_create_run_dir() { COUNCIL_RUN_DIR="$d"; COUNCIL_RUN_ID="test-dispatched-synthesis"; }
+    council_build_roster() {
+        COUNCIL_RESOLVED_MEMBERS="strategy-analyst,backend-architect,security-auditor"
+        COUNCIL_ROSTER_JSON='[{"persona":"strategy-analyst","seat":"chair","provider":"codex"}]'
+    }
+    council_write_config_json() { :; }
+    council_write_research_artifact() { :; }
+    council_check_cost_cap() { return 0; }
+    council_run_advice_phase() {
+        COUNCIL_QUORUM_MET="true"
+        COUNCIL_CHAIR_RESPONSE_RECEIVED="true"
+        COUNCIL_CHAIR_HOST_NATIVE="false"
+        COUNCIL_CHAIR_SYNTHESIS_AVAILABLE="false"
+    }
+    council_run_critique_phase() { :; }
+    council_run_revision_phase() { :; }
+    council_dispatch_member() { return 1; }
+    council_append_corpus_artifacts() { :; }
+    council_write_summary_json() { printf '%s' "$1" > "$d/summary-status"; }
+    council_print_run_warnings() { :; }
+    council_write_implementation_plan() { :; }
+    council_scan_veto_artifacts() { :; }
+    council_needs_implementation_plan() { return 1; }
+    council_process_implementation_gates() { :; }
+
+    local rc=0
+    _council_run_impl "Review the change" >/dev/null 2>&1 || rc=$?
+    local status=""
+    status="$(cat "$d/summary-status" 2>/dev/null)"
+
+    if [[ "$rc" -ne 0 && "$status" == "partial" \
+          && "$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE" == "false" ]]; then
+        test_pass
+    else
+        test_fail "failed dispatched synthesis contract wrong: rc=$rc status=$status synthesis=$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE"
+        return 1
+    fi
+}
+
+test_council_synthesis_warning_uses_logger_and_stays_capturable() {
+    test_case "chair synthesis warning uses the project logger and remains capturable on stdout"
+    load_council_lib || return 1
+    local logged="$TEST_TMP_DIR/council-warning-log.txt"
+    local stderr="$TEST_TMP_DIR/council-warning-stderr.txt"
+    local message="Council warning: quorum met on independent vendor approvals, but chair synthesis was unavailable (no chair response / all chair seats degenerate). No synthesized recommendation was produced — read responses/*.md for the per-seat verdicts. See summary.json quorum.chair_synthesis_available."
+
+    log() {
+        printf '%s|%s\n' "$1" "$2" > "$logged"
+        printf 'LOGGER: %s\n' "$2" >&2
+    }
+    COUNCIL_QUORUM_MET="true"
+    COUNCIL_CHAIR_SYNTHESIS_AVAILABLE="false"
+
+    local output
+    output="$(council_print_run_warnings 2> "$stderr")"
+    unset -f log
+
+    if [[ "$(cat "$logged" 2>/dev/null)" == "WARN|$message" \
+          && "$output" == *"$message"* && ! -s "$stderr" ]]; then
+        test_pass
+    else
+        test_fail "warning logger contract wrong: logged=[$(cat "$logged" 2>/dev/null)] output=[$output] stderr=[$(cat "$stderr" 2>/dev/null)]"
+        return 1
+    fi
+}
+
+test_council_degenerate_chair_keeps_vote_and_flags_synthesis() {
+    test_case "a dispatched chair that returns a degenerate response keeps quorum.met=true on the two vendor approvals, flags chair_synthesis_available=false, and warns (Finding 4)"
+    load_council_lib || return 1
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/council-degchair.XXXXXX")"; mkdir -p "$d/responses"
+    COUNCIL_RUN_DIR="$d"
+    COUNCIL_DEPTH="standard"   # required_non_chair = 2
+    COUNCIL_FIXTURE=""
+    COUNCIL_CHAIR_FALLBACK_USED="false"; COUNCIL_CHAIR_FALLBACK_PERSONA=""
+    COUNCIL_ROSTER_JSON='[
+      {"persona":"strategy-analyst","seat":"chair","provider":"codex","provider_org":"openai","model":"gpt"},
+      {"persona":"backend-architect","seat":"member","provider":"codex","provider_org":"openai","model":"gpt"},
+      {"persona":"security-auditor","seat":"member","provider":"agy","provider_org":"google","model":"gemini"}
+    ]'
+    # The two non-chair vendors cleanly APPROVE with grounded evidence; the chair
+    # seat is DISPATCHED but returns the host self-dispatch stub (non-substantive →
+    # degenerate). The chair provider is NOT host-native, and no fallback recovers
+    # it, so the chair synthesis is genuinely absent — but the vote still carries.
+    council_dispatch_member_detached() {
+        local mj="$1" out="$3" seat
+        seat="$(jq -r '.seat // "member"' <<< "$mj")"
+        if [[ "$seat" == "chair" ]]; then
+            printf 'Subprocess dispatch is unavailable in this environment.\n' > "$out"
+            return 0
+        fi
+        printf '## Review\n\nsrc/app.ts:42 correctly guards the nil case; tests cover it.\n\nVERDICT: APPROVE\n' > "$out"
+        return 0
+    }
+    council_run_chair_fallback() { :; }   # no dispatched fallback available
+
+    COUNCIL_PROVIDER_STATUS_JSON='{"codex":"available","agy":"available"}' \
+        council_run_advice_phase >/dev/null 2>&1 || true
+
+    local met synth chair_status approving warn
+    met="$COUNCIL_QUORUM_MET"
+    synth="$COUNCIL_CHAIR_SYNTHESIS_AVAILABLE"
+    chair_status="$(jq -r 'map(select(.seat == "chair"))[0].status // "none"' <<< "$COUNCIL_SEAT_RECORDS_JSON" 2>/dev/null)"
+    approving="$COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES"
+    warn="$(council_print_run_warnings)"
+
+    unset -f council_dispatch_member_detached council_run_chair_fallback
+
+    if [[ "$met" == "true" && "$synth" == "false" && "$chair_status" == "degenerate" \
+          && "$approving" == "2" && "$warn" == *"chair synthesis was unavailable"* ]]; then
+        test_pass
+    else
+        test_fail "degenerate-chair quorum wrong: met=$met synth=$synth chair_status=$chair_status approving_families=$approving warn=[$warn]"
         return 1
     fi
 }
@@ -1731,7 +1944,13 @@ test_council_run_status_beacon_lifecycle
 test_council_per_session_pool_isolation
 test_council_benchmark_routing_lib_is_extracted
 test_council_chair_is_host_native_detects_status
+test_council_reset_defaults_clears_chair_state
+test_council_dry_run_does_not_reuse_blind_seats
+test_council_host_native_placeholder_completes_in_context
+test_council_failed_dispatched_synthesis_is_partial
+test_council_synthesis_warning_uses_logger_and_stays_capturable
 test_council_quorum_met_with_host_native_chair
+test_council_degenerate_chair_keeps_vote_and_flags_synthesis
 test_council_one_vote_per_vendor_opt_in
 test_council_defaults_are_depth_aware
 test_council_rejects_non_usd_budget
@@ -1898,10 +2117,12 @@ test_council_split_double_seat_fails_quorum() {
     OCTOPUS_COUNCIL_FIXTURE_REVISE_PERSONAS='code-reviewer' \
         council_run --depth standard --output-dir "$tmp_dir" "Review X" >/dev/null 2>&1 || true
     rd="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
-    if jq -e '.quorum.met == false and .quorum.distinct_approving_providers == 1 and .quorum.approving_providers == "agy"' "$rd/summary.json" >/dev/null; then
+    # This run stops before synthesis (quorum not met), so synthesis.md is never
+    # written — summary.json must NOT advertise it (artifacts.synthesis == null).
+    if jq -e '.quorum.met == false and .quorum.distinct_approving_providers == 1 and .quorum.approving_providers == "agy" and .artifacts.synthesis == null' "$rd/summary.json" >/dev/null; then
         test_pass
     else
-        test_fail "split double-seat did not fail quorum: $(jq -c .quorum "$rd/summary.json" 2>/dev/null)"
+        test_fail "split double-seat did not fail quorum or advertised a missing synthesis.md: quorum=$(jq -c .quorum "$rd/summary.json" 2>/dev/null) synthesis=$(jq -c .artifacts.synthesis "$rd/summary.json" 2>/dev/null)"
         return 1
     fi
 }
@@ -1911,10 +2132,11 @@ test_council_all_approve_meets_quorum() {
     load_council_lib || return 1
     prepare_cached_all_approve_run || { test_fail "cached all-approve run failed"; return 1; }
     local rd="$CACHED_COUNCIL_ALL_APPROVE_RUN_DIR"
-    if jq -e '.quorum.met == true and .quorum.distinct_approving_providers >= 2' "$rd/summary.json" >/dev/null; then
+    # This run completes through synthesis, so summary.json advertises synthesis.md.
+    if jq -e '.quorum.met == true and .quorum.distinct_approving_providers >= 2 and .artifacts.synthesis == "synthesis.md"' "$rd/summary.json" >/dev/null; then
         test_pass
     else
-        test_fail "clean all-approve did not meet quorum: $(jq -c .quorum "$rd/summary.json" 2>/dev/null)"
+        test_fail "clean all-approve did not meet quorum or failed to advertise synthesis.md: quorum=$(jq -c .quorum "$rd/summary.json" 2>/dev/null) synthesis=$(jq -c .artifacts.synthesis "$rd/summary.json" 2>/dev/null)"
         return 1
     fi
 }
