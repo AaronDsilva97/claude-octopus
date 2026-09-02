@@ -1426,11 +1426,11 @@ record.
 - Real host verification upgraded and enabled both `octo@nyldn-plugins` and
   `claude-octopus@nyldn-plugins` at v9.61.3. The stable
   `~/.claude-octopus/plugin` link resolves to the v9.61.3 Claude cache.
-- **Post-release #865:** The Oracle `amy` E2E runner still asserted direct
+- **Post-release #865:** The Linux ARM64 E2E runner still asserted direct
   Gemini detection and probed Gemini after the provider was retired. Its
   durable source is the separate `nyldn/claude-octopus-dev` repository. PR #5
   there squash-merged as `218c3a7f` and the exact merged tree was deployed to
-  `~/.octopus-e2e/e2e-command-test.sh` on `amy`.
+  `~/.octopus-e2e/e2e-command-test.sh` on that runner.
 - The runner now asserts an `agy:*` registration with no executable `gemini:*`
   seat, probes AGY rather than Gemini, and classifies approval, weekly/session
   limit, quota, auth, and capacity responses as infrastructure skips. The

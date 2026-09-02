@@ -29,7 +29,8 @@ fingerprint can be reported immediately.
 - Claude Code refreshes `nyldn-plugins`, then updates
   `octo@nyldn-plugins`.
 - Codex upgrades `nyldn-plugins`, then refreshes
-  `claude-octopus@nyldn-plugins`.
+  `claude-octopus@nyldn-plugins`, but only when the command is run outside an
+  active Codex session.
 - Factory and standalone installs receive host-specific/manual guidance instead
   of an assumed command.
 
@@ -43,6 +44,18 @@ Claude Code may download an update in the background, but the current process
 continues using the plugin version it loaded at session start. Run
 `/reload-plugins` or restart Claude Code after an update; restart Codex after a
 Codex plugin update.
+
+Do not replace the installed plugin from a terminal owned by the Codex session
+that is using it. Codex can remove the old versioned cache directory while the
+session still has hooks and skills bound to that path. `update-plugin` detects
+this condition and exits before either Codex update command runs. Exit Codex,
+run the printed commands from a separate terminal, and then start Codex again.
+
+If the updater cannot inspect process ancestry from that separate terminal, it
+fails closed without changing the cache. After confirming the terminal is not
+owned by a running Codex session, set
+`OCTOPUS_CODEX_ACTIVE_SESSION=false` for that update command only. Definitive
+Codex runtime markers still block the update even when this override is set.
 
 On the next session, Octopus compares the stable
 `~/.claude-octopus/plugin` entrypoint with the version supplied by the host and

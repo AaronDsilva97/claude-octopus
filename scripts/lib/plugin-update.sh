@@ -80,6 +80,44 @@ octo_plugin_detect_host() {
     fi
 }
 
+octo_plugin_running_inside_codex() {
+    local override="${OCTOPUS_CODEX_ACTIVE_SESSION:-auto}"
+    local process_pid="${1:-${PPID:-}}" process_name="" parent_pid="" depth=0
+
+    case "$override" in
+        true|1|yes) return 0 ;;
+    esac
+
+    [[ -n "${CODEX_SANDBOX:-}" || -n "${CODEX_PLUGIN_ROOT:-}" ]] && return 0
+
+    case "$override" in
+        false|0|no) return 1 ;;
+    esac
+
+    command -v ps >/dev/null 2>&1 || return 2
+    [[ "$process_pid" =~ ^[0-9]+$ ]] || return 2
+    [[ "$process_pid" -gt 1 ]] || return 2
+    while [[ "$process_pid" -gt 1 ]]; do
+        [[ "$depth" -lt 12 ]] || return 2
+        process_name="$(ps -o comm= -p "$process_pid" 2>/dev/null)" || return 2
+        process_name="$(printf '%s' "$process_name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        [[ -n "$process_name" ]] || return 2
+        process_name="${process_name##*/}"
+        case "$process_name" in
+            codex|codex.exe) return 0 ;;
+        esac
+
+        parent_pid="$(ps -o ppid= -p "$process_pid" 2>/dev/null)" || return 2
+        parent_pid="${parent_pid//[[:space:]]/}"
+        [[ "$parent_pid" =~ ^[0-9]+$ ]] || return 2
+        [[ "$parent_pid" != "$process_pid" ]] || return 2
+        process_pid="$parent_pid"
+        depth=$((depth + 1))
+    done
+
+    return 1
+}
+
 octo_plugin_update_load() {
     local plugin_root="${1:-${CLAUDE_PLUGIN_ROOT:-}}"
     local requested_host="${2:-}"
@@ -174,7 +212,7 @@ ${OCTO_PLUGIN_CACHE_VERSION}")"
 octo_plugin_update_run() {
     local plugin_root="${1:-${CLAUDE_PLUGIN_ROOT:-}}"
     local host="${2:-$(octo_plugin_detect_host "$plugin_root")}"
-    local expected_before="unknown" expected_after="unknown"
+    local expected_before="unknown" expected_after="unknown" codex_session_rc=0
 
     octo_plugin_update_load "$plugin_root" "$host"
     expected_before="$OCTO_PLUGIN_NEWEST_VERSION"
@@ -198,6 +236,21 @@ ${OCTO_PLUGIN_CATALOG_VERSION}")"
             printf 'Run /reload-plugins or restart Claude Code before continuing.\n'
             ;;
         codex)
+            octo_plugin_running_inside_codex "" || codex_session_rc=$?
+            if [[ "$codex_session_rc" -eq 0 ]]; then
+                printf '%s\n' \
+                    'Claude Octopus will not replace its plugin cache from inside the running Codex session.' \
+                    'Exit Codex, run the update outside the running Codex session, then start Codex again:' \
+                    '  codex plugin marketplace upgrade nyldn-plugins' \
+                    '  codex plugin add claude-octopus@nyldn-plugins' >&2
+                return 2
+            fi
+            if [[ "$codex_session_rc" -ne 1 ]]; then
+                printf '%s\n' \
+                    'Claude Octopus could not safely determine whether this terminal belongs to a running Codex session.' \
+                    'No update was attempted. Run the update from a separate terminal, or set OCTOPUS_CODEX_ACTIVE_SESSION=false there.' >&2
+                return 2
+            fi
             if ! command -v codex >/dev/null 2>&1; then
                 printf 'Codex CLI is not available; update through the Codex plugin manager instead.\n' >&2
                 return 1
