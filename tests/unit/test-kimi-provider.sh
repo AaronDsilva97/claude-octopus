@@ -41,6 +41,20 @@ _kimi_mock_bin() {
     chmod +x "$dir/kimi"
 }
 
+_kimi_fake_system_timeout_bins() {
+    local dir="$1" timeout_name
+    mkdir -p "$dir"
+    for timeout_name in gtimeout timeout; do
+        cat > "$dir/$timeout_name" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "${0##*/}" >> "${FAKE_TIMEOUT_USED:?}"
+shift 3
+"$@"
+MOCK
+        chmod +x "$dir/$timeout_name"
+    done
+}
+
 # A mock that enforces the real CLI's argument contract, so a permissive mock
 # cannot green-light an invocation kimi would reject. Mirrors kimi 0.39.1:
 #   -p/--prompt is single-turn and cannot be combined with --auto
@@ -354,6 +368,83 @@ EOF
     fi
 }
 
+test_kimi_interruption_bypasses_system_timeout() {
+    local timeout_name signal_name expected_status case_dir bin_dir harness
+    local started_file completed_file used_file harness_rc leaks kimi_pid process_stat
+    local kimi_alive
+
+    for timeout_name in gtimeout timeout; do
+        for signal_name in INT TERM; do
+            expected_status=130
+            [[ "$signal_name" == "TERM" ]] && expected_status=143
+            test_case "kimi_execute uses the portable supervisor for $signal_name when $timeout_name is available"
+
+            case_dir="$TEST_TMP_DIR/kimi-system-timeout-${timeout_name}-${signal_name}"
+            bin_dir="$case_dir/bin"
+            harness="$case_dir/harness.sh"
+            started_file="$case_dir/kimi.pid"
+            completed_file="$case_dir/kimi.completed"
+            used_file="$case_dir/system-timeout.used"
+            mkdir -p "$case_dir"
+            _kimi_mock_bin "$bin_dir" 'printf "%s\n" "$$" > "${KIMI_STARTED:?}"; trap "" TERM; /bin/sleep 2; : > "${KIMI_COMPLETED:?}"; printf "late response\n"'
+            _kimi_fake_system_timeout_bins "$bin_dir"
+            cat > "$harness" <<'EOF'
+#!/bin/bash
+set -u
+source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+log() { :; }
+if [[ "$TIMEOUT_NAME" == "timeout" ]]; then
+    command() {
+        if [[ "${1:-}" == "-v" && "${2:-}" == "gtimeout" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+fi
+source "$PROJECT_ROOT/scripts/lib/heartbeat.sh"
+run_with_timeout 2 /usr/bin/true >/dev/null 2>&1 || exit 90
+[[ -s "$FAKE_TIMEOUT_USED" ]] || exit 91
+rm -f "$FAKE_TIMEOUT_USED"
+(
+    sleep 0.2
+    kill -"$SIGNAL_NAME" "$$"
+) &
+OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
+EOF
+            chmod +x "$harness"
+
+            set +e
+            TMPDIR="$case_dir" PATH="$bin_dir:/usr/bin:/bin" PROJECT_ROOT="$PROJECT_ROOT" \
+                TIMEOUT_NAME="$timeout_name" SIGNAL_NAME="$signal_name" \
+                KIMI_STARTED="$started_file" KIMI_COMPLETED="$completed_file" \
+                FAKE_TIMEOUT_USED="$used_file" \
+                /bin/bash "$harness" >/dev/null 2>&1
+            harness_rc=$?
+            set -e
+
+            kimi_pid=""
+            [[ -s "$started_file" ]] && kimi_pid="$(< "$started_file")"
+            kimi_alive=false
+            if [[ "$kimi_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$kimi_pid" 2>/dev/null; then
+                process_stat="$(/bin/ps -o stat= -p "$kimi_pid" 2>/dev/null | tr -d '[:space:]')"
+                [[ -n "$process_stat" && "$process_stat" != Z* ]] && kimi_alive=true
+            fi
+            leaks="$(find "$case_dir" -maxdepth 1 \( -name 'octo-kimi-response.*' -o -name 'octo-kimi-error.*' \) -print)"
+            if [[ "$kimi_alive" == true ]]; then
+                kill -KILL "$kimi_pid" 2>/dev/null || true
+            fi
+
+            if [[ "$harness_rc" -eq "$expected_status" && -n "$kimi_pid" &&
+                  "$kimi_alive" == false && -z "$leaks" && ! -e "$used_file" &&
+                  ! -e "$completed_file" ]]; then
+                test_pass
+            else
+                test_fail "expected rc=$expected_status, killed provider, clean captures, and unused $timeout_name; got rc=$harness_rc pid=${kimi_pid:-missing}/$kimi_alive completed=$([[ -e "$completed_file" ]] && echo yes || echo no) leaks='${leaks:-none}' timeout-used=$([[ -e "$used_file" ]] && echo yes || echo no)"
+            fi
+        done
+    done
+}
+
 # ── 8. request timeout uses the shared portable watchdog ─────────────────────
 test_kimi_portable_timeout() {
     test_case "kimi_execute enforces its timeout without GNU/BSD timeout"
@@ -510,6 +601,7 @@ test_kimi_stderr_auth_classification
 test_kimi_success_stderr_is_not_response
 test_kimi_interruption_cleans_private_captures
 test_kimi_interruption_restores_caller_trap
+test_kimi_interruption_bypasses_system_timeout
 test_kimi_portable_timeout
 test_kimi_pin_is_not_readiness
 test_kimi_empty_default_model

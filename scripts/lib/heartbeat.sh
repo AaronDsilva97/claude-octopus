@@ -396,9 +396,15 @@ _octo_timeout_handle_caller_signal() {
     return "$_octo_timeout_interrupted_status"
 }
 
-# Portable timeout function (works on macOS and Linux)
-# Prefers system timeout commands, falls back to manual implementation
+# Portable timeout function (works on macOS and Linux).
+# Prefers system timeout commands unless the internal --portable-supervisor
+# option is requested by a caller that must process signals while it waits.
 run_with_timeout() {
+    local force_portable_supervisor=false
+    if [[ "${1:-}" == "--portable-supervisor" ]]; then
+        force_portable_supervisor=true
+        shift
+    fi
     local timeout_secs="$1"
     shift
 
@@ -436,14 +442,16 @@ run_with_timeout() {
     # provider that catches SIGTERM and stalls (e.g. node mid-OAuth device-flow)
     # would otherwise outlive the timeout — that is exactly how an expired-token
     # qwen probe hung ~10min instead of dying at the per-agent cap.
-    if [[ "$_cmd_is_function" == "false" ]] && command -v gtimeout &>/dev/null; then
+    if [[ "$force_portable_supervisor" == "false" && "$_cmd_is_function" == "false" ]] &&
+       command -v gtimeout &>/dev/null; then
         if [[ "${OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP:-false}" == "true" ]]; then
             _run_with_timeout_preserving_process_group gtimeout "$timeout_secs" "$@"
         else
             gtimeout -k 10 "$timeout_secs" "$@"
         fi
         exit_code=$?
-    elif [[ "$_cmd_is_function" == "false" ]] && command -v timeout &>/dev/null; then
+    elif [[ "$force_portable_supervisor" == "false" && "$_cmd_is_function" == "false" ]] &&
+         command -v timeout &>/dev/null; then
         if [[ "${OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP:-false}" == "true" ]]; then
             _run_with_timeout_preserving_process_group timeout "$timeout_secs" "$@"
         else

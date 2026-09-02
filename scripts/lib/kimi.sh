@@ -166,7 +166,10 @@ kimi_execute(){
         _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
         return "$_kimi_interrupted_status"
     fi
-    run_with_timeout "$timeout" "${cmd[@]}" >"$response_file" 2>"$error_file" && exit_code=0 || exit_code=$?
+    # Kimi owns private capture files, so its shell must remain able to process
+    # INT/TERM while the provider is running. The asynchronous supervisor keeps
+    # that contract even on hosts where GNU timeout is installed.
+    run_with_timeout --portable-supervisor "$timeout" "${cmd[@]}" >"$response_file" 2>"$error_file" && exit_code=0 || exit_code=$?
     if [[ "$_kimi_interrupted_status" -ne 0 ]]; then
         _kimi_cleanup_captures
         _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
