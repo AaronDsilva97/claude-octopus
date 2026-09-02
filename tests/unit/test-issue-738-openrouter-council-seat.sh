@@ -55,13 +55,13 @@ else
     test_fail "expected REACHED-END, got: '$out' (set -e aborted before reaching the end)"
 fi
 
-test_case "heartbeat.sh guards both the monitor kill and the monitor wait with || true"
+test_case "heartbeat.sh guards both the supervisor timer kill and wait with || true"
 HB="$PROJECT_ROOT/scripts/lib/heartbeat.sh"
-if grep -qE 'kill "\$monitor_pid" 2>/dev/null \|\| true' "$HB" && \
-   grep -qE 'wait "\$monitor_pid" 2>/dev/null \|\| true' "$HB"; then
+if grep -qF 'kill -KILL -- "-$timer_pid" 2>/dev/null || true' "$HB" && \
+   grep -qF 'wait "$timer_pid" 2>/dev/null || true' "$HB"; then
     test_pass
 else
-    test_fail "monitor cleanup in heartbeat.sh is missing the || true guard on kill and/or wait (#738 regression)"
+    test_fail "supervisor timer cleanup in heartbeat.sh is missing the || true guard on kill and/or wait (#738 regression)"
 fi
 
 test_case "run_with_timeout's in-process fallback still returns the captured output of a fast function command"

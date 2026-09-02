@@ -10,6 +10,43 @@
 
 _kimi_log(){ if declare -f log >/dev/null 2>&1; then log "$@"; else echo "[${1}] ${*:2}" >&2; fi; }
 
+_kimi_restore_trap(){
+    local signal_name="$1" saved_trap="$2"
+    if [[ -n "$saved_trap" ]]; then eval "$saved_trap"; else trap - "$signal_name"; fi
+}
+
+_kimi_restore_execute_traps(){
+    _kimi_restore_trap INT "$1"
+    _kimi_restore_trap TERM "$2"
+    _kimi_restore_trap HUP "$3"
+}
+
+_kimi_signal_status(){
+    case "$1" in HUP) echo 129 ;; INT) echo 130 ;; TERM) echo 143 ;; *) echo 1 ;; esac
+}
+
+_kimi_cleanup_captures(){
+    [[ -z "${response_file:-}" ]] || rm -f "$response_file" 2>/dev/null || true
+    [[ -z "${error_file:-}" ]] || rm -f "$error_file" 2>/dev/null || true
+    response_file=""
+    error_file=""
+}
+
+_kimi_handle_execute_signal(){
+    local signal_name="$1"
+    _kimi_interrupted_status="$(_kimi_signal_status "$signal_name")"
+    trap '' TERM INT HUP
+    _kimi_cleanup_captures
+    _kimi_restore_execute_traps \
+        "$_kimi_previous_int_trap" \
+        "$_kimi_previous_term_trap" \
+        "$_kimi_previous_hup_trap"
+    # A direct child sees this shell's real PID as PPID even under Bash 3.2,
+    # where $$ does not change in a subshell.
+    /bin/sh -c 'kill -s "$1" "$PPID"' kimi-signal "$signal_name"
+    return "$_kimi_interrupted_status"
+}
+
 # `kimi` is an unambiguous binary name — no identity regex needed (unlike cursor's `agent`).
 _is_kimi_binary(){ command -v kimi &>/dev/null; }
 
@@ -99,20 +136,47 @@ kimi_execute(){
     fi
     # File-backed capture prevents a provider descendant from keeping command
     # substitution open after the main process has exited.
-    local response error_response response_file error_file exit_code
+    local response error_response response_file="" error_file="" exit_code
+    local _kimi_previous_int_trap _kimi_previous_term_trap _kimi_previous_hup_trap
+    local _kimi_interrupted_status=0
+    _kimi_previous_int_trap="$(trap -p INT)"
+    _kimi_previous_term_trap="$(trap -p TERM)"
+    _kimi_previous_hup_trap="$(trap -p HUP)"
+    trap '_kimi_handle_execute_signal INT' INT
+    trap '_kimi_handle_execute_signal TERM' TERM
+    trap '_kimi_handle_execute_signal HUP' HUP
     response_file="$(umask 077 && mktemp "${TMPDIR:-/tmp}/octo-kimi-response.XXXXXX")" || {
+        _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
         _kimi_log ERROR "kimi: could not create response capture"
         return 1
     }
+    if [[ "$_kimi_interrupted_status" -ne 0 ]]; then
+        _kimi_cleanup_captures
+        _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
+        return "$_kimi_interrupted_status"
+    fi
     error_file="$(umask 077 && mktemp "${TMPDIR:-/tmp}/octo-kimi-error.XXXXXX")" || {
-        rm -f "$response_file"
+        _kimi_cleanup_captures
+        _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
         _kimi_log ERROR "kimi: could not create error capture"
         return 1
     }
+    if [[ "$_kimi_interrupted_status" -ne 0 ]]; then
+        _kimi_cleanup_captures
+        _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
+        return "$_kimi_interrupted_status"
+    fi
     run_with_timeout "$timeout" "${cmd[@]}" >"$response_file" 2>"$error_file" && exit_code=0 || exit_code=$?
-    response="$(< "$response_file")"
-    error_response="$(< "$error_file")"
-    rm -f "$response_file" "$error_file"
+    if [[ "$_kimi_interrupted_status" -ne 0 ]]; then
+        _kimi_cleanup_captures
+        _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
+        return "$_kimi_interrupted_status"
+    fi
+    response="$(< "$response_file")" 2>/dev/null || response=""
+    error_response="$(< "$error_file")" 2>/dev/null || error_response=""
+    _kimi_cleanup_captures
+    _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
+    [[ "$_kimi_interrupted_status" -eq 0 ]] || return "$_kimi_interrupted_status"
     if [[ $exit_code -ne 0 ]]; then
         [[ $exit_code -eq 124 ]] && { _kimi_log WARN "kimi: timed out after ${timeout}s"; return 1; }
         if printf '%s\n%s' "$response" "$error_response" | grep -ciE 'unauthorized|forbidden|(401|403)|not authorized|invalid token|expired token|please .?login|login required' >/dev/null; then

@@ -245,10 +245,155 @@ _octo_timeout_signal_snapshot() {
     done <<< "$process_tree"
 }
 
-_octo_timeout_mark_snapshot() {
-    local marker="$1" process_tree="$2"
-    [[ -n "$process_tree" ]] || return 0
-    printf '%s\n' "$process_tree" > "$marker"
+_octo_timeout_signal_status() {
+    case "$1" in
+        HUP)  printf '%s\n' 129 ;;
+        INT)  printf '%s\n' 130 ;;
+        TERM) printf '%s\n' 143 ;;
+        *)    printf '%s\n' 1 ;;
+    esac
+}
+
+_octo_timeout_restore_trap() {
+    local signal_name="$1" saved_trap="$2"
+    if [[ -n "$saved_trap" ]]; then
+        eval "$saved_trap"
+    else
+        trap - "$signal_name"
+    fi
+}
+
+_octo_timeout_restore_signal_traps() {
+    _octo_timeout_restore_trap INT "$1"
+    _octo_timeout_restore_trap TERM "$2"
+    _octo_timeout_restore_trap HUP "$3"
+}
+
+# Ask a direct child to signal its actual parent. Bash 3.2 has no BASHPID, and
+# $$ intentionally remains the top-level shell PID inside subshells, so neither
+# is safe when this library itself runs in a background shell.
+_octo_timeout_redeliver_signal() {
+    /bin/sh -c 'kill -s "$1" "$PPID"' octo-signal "$1"
+}
+
+_octo_timeout_process_group_exists() {
+    local process_group="$1"
+    [[ "$process_group" =~ ^[1-9][0-9]*$ && "$process_group" != "1" ]] || return 1
+    kill -0 -- "-$process_group" 2>/dev/null
+}
+
+_octo_timeout_job_is_running() {
+    local expected_pid="$1" job_pid
+    while IFS= read -r job_pid; do
+        [[ "$job_pid" == "$expected_pid" ]] && return 0
+    done < <(jobs -pr 2>/dev/null)
+    return 1
+}
+
+_octo_timeout_stop_process_group() {
+    local process_group="$1" initial_signal="$2" allow_term_grace="$3"
+    local grace_tick
+    [[ "$process_group" =~ ^[1-9][0-9]*$ && "$process_group" != "1" ]] || return 0
+
+    kill -"$initial_signal" -- "-$process_group" 2>/dev/null || true
+    if [[ "$allow_term_grace" == "true" ]]; then
+        # Match timeout -k 10: allow the provider group ten seconds to perform
+        # normal TERM cleanup before forcing out resistant descendants.
+        for ((grace_tick=0; grace_tick<100; grace_tick++)); do
+            _octo_timeout_process_group_exists "$process_group" || break
+            sleep 0.1
+        done
+    else
+        # An interrupted caller is already unwinding. Give ordinary handlers a
+        # scheduling turn, then guarantee that no provider descendant survives.
+        sleep 0.1
+    fi
+    kill -KILL -- "-$process_group" 2>/dev/null || true
+}
+
+_octo_timeout_supervisor_handle_signal() {
+    local signal_name="$1" exit_status initial_signal allow_term_grace=false
+    exit_status="$(_octo_timeout_signal_status "$signal_name")"
+    initial_signal="$signal_name"
+    if [[ "$signal_name" == "USR1" ]]; then
+        exit_status=124
+        initial_signal=TERM
+        allow_term_grace=true
+    fi
+
+    # Prevent nested signals from interrupting cleanup. Reap the timer first to
+    # suppress Bash job-status output, then terminate the private provider PGID.
+    trap '' USR1 TERM INT HUP
+    if [[ "${timer_pid:-}" =~ ^[1-9][0-9]*$ ]]; then
+        kill -KILL -- "-$timer_pid" 2>/dev/null || true
+        wait "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ "${provider_pid:-}" =~ ^[1-9][0-9]*$ ]]; then
+        _octo_timeout_stop_process_group "$provider_pid" "$initial_signal" "$allow_term_grace"
+        wait "$provider_pid" 2>/dev/null || true
+    fi
+    exit "$exit_status"
+}
+
+# Bash 3.2/macOS-compatible timeout supervisor. Monitor mode gives the provider
+# wrapper a private process group; monitor mode is disabled again inside that
+# wrapper so its full descendant tree remains in the same group. The wrapper PID
+# stays an unreaped child until cleanup completes, preventing PGID reuse even if
+# process metadata cannot be read with ps.
+_octo_timeout_supervisor() {
+    local timeout_secs="$1"
+    shift
+    local provider_pid="" timer_pid="" provider_status=0
+
+    set -m
+    trap '_octo_timeout_supervisor_handle_signal USR1' USR1
+    trap '_octo_timeout_supervisor_handle_signal TERM' TERM
+    trap '_octo_timeout_supervisor_handle_signal HUP' HUP
+
+    (
+        set +m
+        "$@" <&0
+    ) <&0 &
+    provider_pid=$!
+
+    # This must be a directly executed child, not command substitution: its
+    # PPID is the supervisor's real PID even in Bash 3.2 subshells.
+    /bin/sh -c 'sleep "$1"; kill -USR1 "$PPID"' octo-timer "$timeout_secs" &
+    timer_pid=$!
+
+    if wait "$provider_pid" 2>/dev/null; then
+        provider_status=0
+    else
+        provider_status=$?
+    fi
+
+    trap '' USR1 TERM INT HUP
+    kill -KILL -- "-$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+    trap - USR1 TERM INT HUP
+    set +m
+    return "$provider_status"
+}
+
+_octo_timeout_handle_caller_signal() {
+    local signal_name="$1"
+    _octo_timeout_interrupted_status="$(_octo_timeout_signal_status "$signal_name")"
+
+    trap '' TERM INT HUP
+    if [[ "${_octo_timeout_supervisor_pid:-}" =~ ^[1-9][0-9]*$ ]] &&
+       _octo_timeout_job_is_running "$_octo_timeout_supervisor_pid"; then
+        # TERM is always actionable for an asynchronous Bash child; INT may be
+        # inherited as ignored when the caller has job control disabled. The
+        # jobs check proves this PID is still our live child before signalling.
+        kill -TERM "$_octo_timeout_supervisor_pid" 2>/dev/null || true
+        wait "$_octo_timeout_supervisor_pid" 2>/dev/null || true
+    fi
+    _octo_timeout_restore_signal_traps \
+        "$_octo_timeout_previous_int_trap" \
+        "$_octo_timeout_previous_term_trap" \
+        "$_octo_timeout_previous_hup_trap"
+    _octo_timeout_redeliver_signal "$signal_name"
+    return "$_octo_timeout_interrupted_status"
 }
 
 # Portable timeout function (works on macOS and Linux)
@@ -306,70 +451,45 @@ run_with_timeout() {
         fi
         exit_code=$?
     else
-        # Fallback with proper cleanup (also used for shell functions).
-        # `<&0` explicitly inherits stdin from the caller: non-interactive bash
-        # otherwise redirects background-job stdin to /dev/null, which starves
-        # shell-function providers (perplexity_execute, openrouter_execute)
-        # that read their prompt from stdin. See issue #307.
-        local cmd_pid monitor_pid timeout_marker process_tree=""
+        # The Bash 3.2 fallback runs a supervisor asynchronously so this shell
+        # can trap interruption while waiting. The provider itself receives the
+        # caller's stdin through the private process-group wrapper.
+        local _octo_timeout_previous_int_trap _octo_timeout_previous_term_trap
+        local _octo_timeout_previous_hup_trap _octo_timeout_supervisor_pid=""
+        local _octo_timeout_interrupted_status=0
+        _octo_timeout_previous_int_trap="$(trap -p INT)"
+        _octo_timeout_previous_term_trap="$(trap -p TERM)"
+        _octo_timeout_previous_hup_trap="$(trap -p HUP)"
+        trap '_octo_timeout_handle_caller_signal INT' INT
+        trap '_octo_timeout_handle_caller_signal TERM' TERM
+        trap '_octo_timeout_handle_caller_signal HUP' HUP
 
-        "$@" <&0 &
-        cmd_pid=$!
-
-        timeout_marker="$(umask 077 && mktemp "${TMPDIR:-/tmp}/octo-timeout.XXXXXX")" || {
-            kill -KILL "$cmd_pid" 2>/dev/null || true
-            wait "$cmd_pid" 2>/dev/null || true
-            return 1
-        }
-
-        # Snapshot before TERM: children may be reparented as soon as the root
-        # exits. Persist the frozen PID set before signalling so the parent can
-        # finish cleanup even if it races with and stops this monitor.
-        (
-            sleep "$timeout_secs"
-            process_tree="$(_octo_timeout_process_tree_depth_first "$cmd_pid" true)"
-            _octo_timeout_mark_snapshot "$timeout_marker" "$process_tree"
-            _octo_timeout_signal_snapshot TERM "$process_tree"
-
-            local grace_tick target_pid process_started any_running
-            for ((grace_tick=0; grace_tick<100; grace_tick++)); do
-                any_running=false
-                while IFS=$'\t' read -r target_pid process_started; do
-                    if _octo_timeout_pid_is_running "$target_pid" "$process_started"; then
-                        any_running=true
-                        break
-                    fi
-                done <<< "$process_tree"
-                [[ "$any_running" == "false" ]] && break
-                sleep 0.1
-            done
-
-            _octo_timeout_signal_snapshot KILL "$process_tree"
-        ) &
-        monitor_pid=$!
-
-        if wait "$cmd_pid" 2>/dev/null; then
+        _octo_timeout_supervisor "$timeout_secs" "$@" <&0 &
+        _octo_timeout_supervisor_pid=$!
+        if [[ "$_octo_timeout_interrupted_status" -ne 0 ]]; then
+            # A signal can arrive after the temporary traps are installed but
+            # before `$!` is assigned. The handler records it; finish cleanup
+            # here once the supervisor PID is available.
+            kill -TERM "$_octo_timeout_supervisor_pid" 2>/dev/null || true
+            wait "$_octo_timeout_supervisor_pid" 2>/dev/null || true
+            return "$_octo_timeout_interrupted_status"
+        fi
+        if wait "$_octo_timeout_supervisor_pid" 2>/dev/null; then
             exit_code=0
         else
             exit_code=$?
         fi
 
-        # Stop and join the monitor before examining the marker to close the
-        # timeout-boundary race. A non-empty marker contains the frozen process
-        # tree; sweep it from the parent too in case the monitor was interrupted
-        # during its TERM grace period. Normal completions leave it empty.
-        # `kill`/`wait` on a monitor that already exited on its own (race with its
-        # sleep) return non-zero — under `set -e` that would kill this function (and
-        # the seat's already-captured output with it) after the provider call
-        # succeeded. Same class as the subshell kill fixed in #336. (#738)
-        kill "$monitor_pid" 2>/dev/null || true
-        wait "$monitor_pid" 2>/dev/null || true
-        if [[ -s "$timeout_marker" ]]; then
-            process_tree="$(< "$timeout_marker")"
-            _octo_timeout_signal_snapshot KILL "$process_tree"
-            exit_code=124
+        if [[ "$_octo_timeout_interrupted_status" -ne 0 ]]; then
+            # The signal handler has already restored (and re-delivered to) the
+            # caller's disposition. A nested trap may have restored another
+            # outer trap, so do not overwrite it here.
+            return "$_octo_timeout_interrupted_status"
         fi
-        rm -f "$timeout_marker"
+        _octo_timeout_restore_signal_traps \
+            "$_octo_timeout_previous_int_trap" \
+            "$_octo_timeout_previous_term_trap" \
+            "$_octo_timeout_previous_hup_trap"
     fi
 
     # Enhanced timeout error messaging (v7.16.0 Feature 3)

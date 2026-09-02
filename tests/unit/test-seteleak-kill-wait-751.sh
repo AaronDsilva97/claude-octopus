@@ -67,7 +67,7 @@ test_workflows_synthesis_monitor_guarded() {
     test_pass
 }
 
-# heartbeat.sh:197/200 — run_with_timeout()'s TERM-then-KILL escalation.
+# heartbeat.sh — run_with_timeout()'s TERM-then-KILL escalation.
 # This one is directly callable and lets us reproduce the exact race from
 # the issue: the wrapped command finishes before the monitor's first signal
 # fires, so kill -TERM targets an already-dead PID and must not skip the
@@ -101,22 +101,23 @@ test_heartbeat_run_with_timeout_survives_early_exit_race() {
 }
 
 test_heartbeat_kill_lines_guarded() {
-    test_case "heartbeat.sh: snapshot TERM/KILL helper is guarded against set -e leaks"
+    test_case "heartbeat.sh: process-group TERM/KILL helper is guarded against set -e leaks"
 
     local file="$PROJECT_ROOT/scripts/lib/heartbeat.sh"
     local snippet
-    if ! snippet=$(grep -m1 -A10 '^_octo_timeout_signal_snapshot()' "$file"); then
-        test_fail "could not locate the process-snapshot signal helper in heartbeat.sh"
+    if ! snippet=$(grep -m1 -A22 '^_octo_timeout_stop_process_group()' "$file"); then
+        test_fail "could not locate the process-group signal helper in heartbeat.sh"
         return
     fi
 
-    assert_contains "$snippet" 'kill -"$signal_name" "$target_pid" 2>/dev/null || true' \
-        "snapshot signal must be guarded" || return
-    if grep -q '_octo_timeout_signal_snapshot TERM' "$file" && \
-       grep -q '_octo_timeout_signal_snapshot KILL' "$file"; then
+    assert_contains "$snippet" 'kill -"$initial_signal" -- "-$process_group" 2>/dev/null || true' \
+        "initial process-group signal must be guarded" || return
+    assert_contains "$snippet" 'kill -KILL -- "-$process_group" 2>/dev/null || true' \
+        "process-group KILL must be guarded" || return
+    if grep -q '_octo_timeout_stop_process_group "$provider_pid"' "$file"; then
         test_pass
     else
-        test_fail "timeout fallback must invoke the guarded helper for TERM and KILL"
+        test_fail "timeout fallback must invoke the guarded process-group helper"
     fi
 }
 

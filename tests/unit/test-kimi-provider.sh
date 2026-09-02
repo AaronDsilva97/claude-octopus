@@ -207,7 +207,7 @@ test_kimi_stderr_auth_classification() {
 }
 
 test_kimi_success_stderr_is_not_response() {
-    test_case "kimi_execute keeps successful stderr out of response output"
+    test_case "kimi_execute discards successful stderr instead of exposing it as response or diagnostics"
     local tmp_bin old_path output_file stderr_file rc=0 response stdout_response call_output
     tmp_bin="$TEST_TMP_DIR/kimi-bin-success-stderr"
     output_file="$TEST_TMP_DIR/kimi-success.out"
@@ -222,10 +222,135 @@ test_kimi_success_stderr_is_not_response() {
     response="$(< "$output_file")"
 
     if [[ "$rc" -eq 0 && "$stdout_response" == "answer" && -z "$call_output" &&
-          "$response" == "answer" && "$response" != *"provider diagnostic"* ]]; then
+          "$response" == "answer" && "$response" != *"provider diagnostic"* &&
+          ! -s "$stderr_file" ]]; then
         test_pass
     else
-        test_fail "expected only provider stdout in both output modes, got rc=$rc stdout='$stdout_response' file-call-stdout='$call_output' response='$response'"
+        test_fail "expected successful stderr to be discarded in both output modes, got rc=$rc stdout='$stdout_response' file-call-stdout='$call_output' response='$response' caller-stderr-bytes=$(wc -c < "$stderr_file" | tr -d ' ')"
+    fi
+}
+
+test_kimi_interruption_cleans_private_captures() {
+    test_case "kimi_execute removes private captures before preserving default TERM semantics"
+    local case_dir="$TEST_TMP_DIR/kimi-interrupt-default"
+    local tmp_bin="$case_dir/bin" harness="$case_dir/harness.sh"
+    local started_file="$case_dir/kimi.pid" harness_pid="" kimi_pid="" rc=0
+    local leaks="" kimi_alive=false attempt
+    mkdir -p "$case_dir"
+    _kimi_mock_bin "$tmp_bin" 'printf "%s\n" "$$" > "${KIMI_STARTED:?}"; trap "" TERM; exec /bin/sleep 30'
+    cat > "$harness" <<'EOF'
+#!/bin/bash
+set -u
+source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+log() { :; }
+command() {
+    if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+        return 1
+    fi
+    builtin command "$@"
+}
+OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
+EOF
+    chmod +x "$harness"
+
+    TMPDIR="$case_dir" PATH="$tmp_bin:$PATH" PROJECT_ROOT="$PROJECT_ROOT" \
+        KIMI_STARTED="$started_file" /bin/bash "$harness" &
+    harness_pid=$!
+    for ((attempt=0; attempt<100; attempt++)); do
+        [[ -s "$started_file" ]] && break
+        sleep 0.05
+    done
+    if [[ -s "$started_file" ]]; then
+        kimi_pid="$(< "$started_file")"
+        kill -TERM "$harness_pid"
+    else
+        kill -KILL "$harness_pid" 2>/dev/null || true
+    fi
+    set +e
+    wait "$harness_pid"
+    rc=$?
+    set -e
+    sleep 0.2
+
+    if [[ -n "$kimi_pid" ]] && kill -0 "$kimi_pid" 2>/dev/null; then
+        local process_stat
+        process_stat="$(/bin/ps -o stat= -p "$kimi_pid" 2>/dev/null | tr -d '[:space:]')"
+        [[ -n "$process_stat" && "$process_stat" != Z* ]] && kimi_alive=true
+    fi
+    leaks="$(find "$case_dir" -maxdepth 1 \( -name 'octo-kimi-response.*' -o -name 'octo-kimi-error.*' -o -name 'octo-timeout.*' \) -print)"
+    if [[ "$kimi_alive" == true ]]; then kill -KILL "$kimi_pid" 2>/dev/null || true; fi
+
+    if [[ "$rc" -eq 143 && -n "$kimi_pid" && "$kimi_alive" == false && -z "$leaks" ]]; then
+        test_pass
+    else
+        test_fail "expected TERM rc=143, dead Kimi, and no private temp files; got rc=$rc pid=${kimi_pid:-missing}/$kimi_alive leaks='${leaks:-none}'"
+    fi
+}
+
+test_kimi_interruption_restores_caller_trap() {
+    test_case "kimi_execute restores a returning caller TERM trap and returns 143"
+    local case_dir="$TEST_TMP_DIR/kimi-interrupt-trap"
+    local tmp_bin="$case_dir/bin" harness="$case_dir/harness.sh"
+    local started_file="$case_dir/kimi.pid" trap_hits="$case_dir/trap-hits"
+    local before="$case_dir/trap-before" after="$case_dir/trap-after"
+    local harness_pid="" kimi_pid="" rc=0 hit_count=0 leaks="" kimi_alive=false attempt
+    mkdir -p "$case_dir"
+    _kimi_mock_bin "$tmp_bin" 'printf "%s\n" "$$" > "${KIMI_STARTED:?}"; exec /bin/sleep 30'
+    cat > "$harness" <<'EOF'
+#!/bin/bash
+set -u
+source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+log() { :; }
+command() {
+    if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+        return 1
+    fi
+    builtin command "$@"
+}
+trap 'printf "TERM\n" >> "$TRAP_HITS"' TERM
+trap -p TERM > "$TRAP_BEFORE"
+set +e
+OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
+rc=$?
+set -e
+trap -p TERM > "$TRAP_AFTER"
+kill -TERM "$$"
+exit "$rc"
+EOF
+    chmod +x "$harness"
+
+    TMPDIR="$case_dir" PATH="$tmp_bin:$PATH" PROJECT_ROOT="$PROJECT_ROOT" KIMI_STARTED="$started_file" \
+        TRAP_HITS="$trap_hits" TRAP_BEFORE="$before" TRAP_AFTER="$after" /bin/bash "$harness" &
+    harness_pid=$!
+    for ((attempt=0; attempt<100; attempt++)); do
+        [[ -s "$started_file" ]] && break
+        sleep 0.05
+    done
+    if [[ -s "$started_file" ]]; then
+        kimi_pid="$(< "$started_file")"
+        kill -TERM "$harness_pid"
+    else
+        kill -KILL "$harness_pid" 2>/dev/null || true
+    fi
+    set +e
+    wait "$harness_pid"
+    rc=$?
+    set -e
+    [[ -f "$trap_hits" ]] && hit_count="$(wc -l < "$trap_hits" | tr -d ' ')"
+    sleep 0.2
+    if [[ -n "$kimi_pid" ]] && kill -0 "$kimi_pid" 2>/dev/null; then
+        local process_stat
+        process_stat="$(/bin/ps -o stat= -p "$kimi_pid" 2>/dev/null | tr -d '[:space:]')"
+        [[ -n "$process_stat" && "$process_stat" != Z* ]] && kimi_alive=true
+    fi
+    leaks="$(find "$case_dir" -maxdepth 1 \( -name 'octo-kimi-response.*' -o -name 'octo-kimi-error.*' -o -name 'octo-timeout.*' \) -print)"
+    if [[ "$kimi_alive" == true ]]; then kill -KILL "$kimi_pid" 2>/dev/null || true; fi
+
+    if [[ "$rc" -eq 143 && "$hit_count" -eq 2 && -s "$before" && -s "$after" ]] &&
+       cmp -s "$before" "$after" && [[ "$kimi_alive" == false && -z "$leaks" ]]; then
+        test_pass
+    else
+        test_fail "expected rc=143, restored trap invoked twice, dead Kimi, and no temp files; got rc=$rc hits=$hit_count pid=${kimi_pid:-missing}/$kimi_alive leaks='${leaks:-none}'"
     fi
 }
 
@@ -383,6 +508,8 @@ test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
 test_kimi_stderr_auth_classification
 test_kimi_success_stderr_is_not_response
+test_kimi_interruption_cleans_private_captures
+test_kimi_interruption_restores_caller_trap
 test_kimi_portable_timeout
 test_kimi_pin_is_not_readiness
 test_kimi_empty_default_model
