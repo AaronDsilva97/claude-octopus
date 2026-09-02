@@ -102,4 +102,12 @@ else
     test_fail "coding subtask prompt was not dispatched"
 fi
 
+test_case "both tangle spawn paths detach from caller stdin"
+if grep -Eq 'spawn_agent_async .* </dev/null\)' "$WORKFLOWS" && \
+   grep -Eq 'spawn_agent_capture_pid .* </dev/null\)' "$WORKFLOWS"; then
+    test_pass
+else
+    test_fail "expected async and standard tangle spawns to redirect stdin from /dev/null"
+fi
+
 test_summary

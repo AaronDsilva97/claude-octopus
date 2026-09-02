@@ -66,6 +66,19 @@ else
     test_fail "transitive overlap component was not fully consolidated"
 fi
 
+test_case "consolidation keeps repeated Task segments on one parseable line"
+repeated_task='1. [CODING] First — Files: apps/web/package.json — Task: first segment Task: second segment
+2. [CODING] Second — Files: apps/web/package.json — Task: third segment'
+result=$(tangle_consolidate_overlapping_subtasks "$repeated_task")
+if [[ "$(printf '%s\n' "$result" | wc -l | tr -d ' ')" -eq 1 ]] &&
+   [[ "$(tangle_parseable_subtask_count "$result")" -eq 1 ]] &&
+   [[ "$result" == *"Task: first segment second segment; third segment"* ]]; then
+    test_pass
+else
+    printf '%s\n' "$result"
+    test_fail "repeated Task segments produced a multiline consolidated subtask"
+fi
+
 test_case "repairs the exact Memory Keeper residual overlap"
 mkdir -p "$WORKSPACE_DIR/apps/web/src" "$WORKSPACE_DIR/apps/server/src" "$WORKSPACE_DIR/apps/server/data" "$WORKSPACE_DIR/docs"
 touch "$WORKSPACE_DIR/package.json" "$WORKSPACE_DIR/.env.example" "$WORKSPACE_DIR/.gitignore" "$WORKSPACE_DIR/README.md" \

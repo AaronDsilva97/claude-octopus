@@ -1198,7 +1198,7 @@ Execution instructions:
 - Treat the original task as authoritative for requirements, explicit file targets, acceptance criteria, and forbidden changes.
 - Complete the assigned subtask without dropping original constraints that apply to it.
 - For [CODING] work, edit the repository files directly in the current worktree. Do not only describe a plan or paste code snippets.
-- For [CODING] work, treat file paths/directories named in the assigned subtask as approximate exclusive write scope intent. Use the resolved repository context files above as the concrete targets. Do not edit files clearly owned by another subtask; report a blocker if the required change crosses scopes.
+- For [CODING] work, treat the assigned subtask's Files: paths/directories as the exclusive write-scope authority. The resolved repository context above is lookup/read guidance and may help resolve an approximate Files: scope to its concrete target; it does not grant permission to edit additional files. Do not edit files clearly owned by another subtask; report a blocker if the required change crosses scopes.
 - If the subtask creates a new exported component, command, event type, route, hook, or helper, wire it into at least one production call site unless the original task explicitly asks for an isolated artifact.
 - Tests alone are not integration evidence. User-facing features must be reachable from the relevant user flow or the subtask must report a blocker.
 Migration safety:
@@ -1208,28 +1208,143 @@ ${migration_safety}
 EOF
 }
 
+tangle_normalize_declared_scope() {
+    local original="$1"
+    local normalized="$original"
+    local basename
+
+    if [[ "$normalized" =~ ^(.*):[0-9]+$ ]]; then
+        normalized="${BASH_REMATCH[1]}"
+    fi
+
+    # Preserve path-navigation tokens verbatim so the safety validator can
+    # reject them. Normalizing these would narrow repository-root authority or
+    # erase the declaration while the original remains in the worker prompt.
+    case "$normalized" in
+        .|..|*/.|*/..) printf '%s\n' "$normalized"; return 0 ;;
+    esac
+
+    local before_dot_alias="$normalized"
+    while [[ "$normalized" == ./* ]]; do
+        normalized="${normalized#./}"
+    done
+    if [[ -z "$normalized" ]]; then
+        printf '%s\n' "$before_dot_alias"
+        return 0
+    fi
+
+    normalized=$(printf '%s\n' "$normalized" | sed -E 's#/+#/#g')
+    case "$normalized" in
+        .|..|*/.|*/..) printf '%s\n' "$normalized"; return 0 ;;
+    esac
+
+    # A final period is usually sentence punctuation after a file path. Only
+    # trim it when the basename contains a non-period character; bare dot path
+    # segments must survive unchanged for rejection above.
+    basename="${normalized##*/}"
+    if [[ "$basename" == *'.' && "${basename//./}" != "" ]]; then
+        while [[ "$normalized" == *'.' ]]; do
+            normalized="${normalized%.}"
+        done
+    fi
+
+    printf '%s\n' "$normalized"
+}
+
+tangle_structured_clause_segments() {
+    local text="$1"
+
+    # Normalize the two supported human-readable separators without placing a
+    # multibyte em dash in a sed bracket expression. The latter is byte-based
+    # under LC_ALL=C and can split the UTF-8 sequence into stray scope tokens.
+    text="${text//$' — '/$'\n'}"
+    text="${text//' - '/$'\n'}"
+    text="${text//'. Files:'/$'\nFiles:'}"
+    text="${text//'. Creates:'/$'\nCreates:'}"
+    text="${text//'. Reads:'/$'\nReads:'}"
+    text="${text//' Task:'/$'\nTask:'}"
+    printf '%s\n' "$text"
+}
+
+tangle_structured_clause_count() {
+    local text="$1" clause="$2" segment count=0
+    while IFS= read -r segment; do
+        segment="${segment#"${segment%%[![:space:]]*}"}"
+        if [[ "$segment" == "$clause:"* ]]; then
+            ((count++)) || true
+            [[ "${segment#"$clause:"}" == *" $clause:"* ]] && ((count++)) || true
+        elif [[ "$count" -gt 0 && "$segment" == "Task:"*" $clause:"* ]]; then
+            # Once an actual clause exists, a repeated label in Task prose is
+            # ambiguous and must fail closed. Without the first clause, Task
+            # prose alone must not create write authority.
+            ((count++)) || true
+        fi
+    done < <(tangle_structured_clause_segments "$text")
+    printf '%s\n' "$count"
+}
+
+tangle_extract_structured_clause() {
+    local text="$1" clause="$2" segment value seen_task=false
+    while IFS= read -r segment; do
+        segment="${segment#"${segment%%[![:space:]]*}"}"
+        if [[ "$segment" == "Task:"* ]]; then
+            seen_task=true
+            if [[ "$clause" == "Task" ]]; then
+                value="${segment#Task:}"
+                value="${value#"${value%%[![:space:]]*}"}"
+                printf '%s\n' "$value"
+            fi
+            continue
+        fi
+        [[ "$seen_task" == "false" || "$clause" == "Task" ]] || continue
+        if [[ "$segment" == "$clause:"* ]]; then
+            value="${segment#"$clause:"}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            printf '%s\n' "$value"
+            return 0
+        fi
+    done < <(tangle_structured_clause_segments "$text")
+    return 1
+}
+
+
 tangle_extract_write_scopes() {
     local text="$1"
     local files_text
 
-    files_text=$(printf '%s\n' "$text" | sed -nE 's/.*Files:[[:space:]]*//p' | head -n 1)
-    files_text=$(printf '%s\n' "$files_text" | sed -E 's/[[:space:]]+[—-][[:space:]]+Task:.*$//; s/[[:space:]]+Task:.*$//')
+    files_text=$(tangle_extract_structured_clause "$text" "Files" 2>/dev/null || true)
     [[ -n "$files_text" ]] || return 0
 
     printf '%s\n' "$files_text" \
-        | tr ' `",;()[]{}' '\n' \
-        | sed -nE '/^([A-Za-z0-9_.@%+-]+(\/[A-Za-z0-9_.@%+\/-]+)?)(\*|\/)?(:[0-9]+)?$/p' \
-        | sed -E 's/:([0-9]+)$//; s/[[:punct:]]+$//' \
-        | sed -E 's#^\./##; s#/\*$#/#; s#//+#/#g' \
+        | tr ' ,;' '\n' \
+        | while IFS= read -r declared_scope; do
+            [[ -n "$declared_scope" ]] || continue
+            # Markdown/code quotation is permitted only as a balanced wrapper.
+            # Preserve punctuation inside a token so validation can reject it
+            # instead of laundering it into a narrower path.
+            case "$declared_scope" in
+                \`*\`) declared_scope="${declared_scope#\`}"; declared_scope="${declared_scope%\`}" ;;
+                \"*\") declared_scope="${declared_scope#\"}"; declared_scope="${declared_scope%\"}" ;;
+            esac
+            tangle_normalize_declared_scope "$declared_scope"
+        done \
         | sed '/^$/d' \
         | sort -u
 }
 
 tangle_scope_is_directory() {
     local scope="$1"
-    local base
+    local base repo_root normalized
     [[ "$scope" == */ ]] && return 0
     [[ "$scope" == *"*"* ]] && return 0
+    normalized="${scope%/}"
+    if repo_root=$(tangle_resolve_repo_root 2>/dev/null); then
+        [[ -d "$repo_root/$normalized" ]] && return 0
+        if git -C "$repo_root" rev-parse --show-toplevel >/dev/null 2>&1 && \
+           [[ -n "$(git -C "$repo_root" ls-files "$normalized/" 2>/dev/null || true)" ]]; then
+            return 0
+        fi
+    fi
     base="${scope##*/}"
     [[ "$base" != *.* ]]
 }
@@ -1237,13 +1352,16 @@ tangle_scope_is_directory() {
 tangle_scopes_overlap() {
     local left="${1%/}"
     local right="${2%/}"
+    local left_cmp right_cmp
     [[ -z "$left" || -z "$right" ]] && return 1
-    [[ "$left" == "$right" ]] && return 0
+    left_cmp=$(printf '%s' "$left" | tr '[:upper:]' '[:lower:]')
+    right_cmp=$(printf '%s' "$right" | tr '[:upper:]' '[:lower:]')
+    [[ "$left_cmp" == "$right_cmp" ]] && return 0
 
-    if tangle_scope_is_directory "$1" && [[ "$right" == "$left"/* ]]; then
+    if [[ "$right_cmp" == "$left_cmp"/* ]]; then
         return 0
     fi
-    if tangle_scope_is_directory "$2" && [[ "$left" == "$right"/* ]]; then
+    if [[ "$left_cmp" == "$right_cmp"/* ]]; then
         return 0
     fi
 
@@ -1336,6 +1454,44 @@ tangle_resolve_repo_context_files() {
     printf '%s\n' "${files[@]}" | sed '/^$/d' | awk '!seen[$0]++' | sed -n "1,${max_files}p"
 }
 
+tangle_resolve_write_scope_files() {
+    local scope="$1"
+    local normalized="${scope#./}"
+    normalized="${normalized%/}"
+    tangle_scope_is_safe_relative_path "$scope" || return 0
+
+    local repo_root
+    repo_root=$(tangle_resolve_repo_root) || return 0
+    git -C "$repo_root" rev-parse --show-toplevel >/dev/null 2>&1 || return 0
+
+    # Exact tracked file/directory matches preserve the declared scope.
+    if git -C "$repo_root" ls-files --error-unmatch "$normalized" >/dev/null 2>&1; then
+        printf '%s\n' "$normalized"
+        return 0
+    fi
+    if [[ -n "$(git -C "$repo_root" ls-files "$normalized/" 2>/dev/null || true)" ]]; then
+        printf '%s\n' "$normalized"
+        return 0
+    fi
+
+    # For an invented/approximate path, only a unique tracked basename may
+    # resolve it. Never use domain keywords, grep heuristics, or Task prose to
+    # expand write authority.
+    local basename="${normalized##*/}"
+    local matches=()
+    local full
+    while IFS= read -r full; do
+        [[ -n "$full" ]] || continue
+        [[ "${full##*/}" == "$basename" ]] || continue
+        matches+=("$full")
+    done < <(git -C "$repo_root" ls-files 2>/dev/null)
+
+    if [[ ${#matches[@]} -eq 1 ]]; then
+        printf '%s\n' "${matches[0]}"
+    fi
+}
+
+
 tangle_build_repo_context_block() {
     local assigned_subtask="$1"
     local repo_root
@@ -1345,7 +1501,8 @@ tangle_build_repo_context_block() {
     cat <<EOF
 Repository context for this subtask:
 - The worktree is the source of truth. Do not invent repository layout from generic names.
-- Treat the decomposer's Files clause as approximate intent. Prefer the resolved files below when they conflict with invented paths.
+- The subtask's Files: clause is the only write authority. Use the resolved files below to locate a concrete target for an approximate declared path and to read supporting context.
+- Never edit a resolved file outside the subtask's declared Files: scope. Report a blocker instead.
 - If none of the resolved files fit, inspect the tracked file list and report the blocker.
 
 Tracked files, first 200:
@@ -1364,6 +1521,7 @@ tangle_scope_is_safe_relative_path() {
     # Reject scopes that are empty once trimmed, not merely empty: a
     # whitespace-only scope is non-empty here but names nothing.
     [[ -n "${normalized//[[:space:]]/}" ]] || return 1
+    [[ "$normalized" =~ ^[A-Za-z0-9_.@%+/-]+$ ]] || return 1
     case "$normalized" in
         /*|.|..|*\\*|*'*'*|*'?'*|*'['*|*']'*) return 1 ;;
     esac
@@ -1401,6 +1559,38 @@ tangle_scope_has_existing_repo_ancestor() {
             fi
         fi
     done
+    return 1
+}
+
+tangle_scope_has_symlink_component() {
+    local scope="$1" repo_root normalized component current
+    normalized="${scope#./}"
+    normalized="${normalized%/}"
+    repo_root=$(tangle_resolve_repo_root 2>/dev/null) || return 1
+    current="$repo_root"
+
+    while [[ -n "$normalized" ]]; do
+        component="${normalized%%/*}"
+        current="$current/$component"
+        [[ -L "$current" ]] && return 0
+        [[ "$normalized" == */* ]] || break
+        normalized="${normalized#*/}"
+    done
+    return 1
+}
+
+tangle_scope_has_ambiguous_basename() {
+    local scope="$1" repo_root normalized basename full count=0
+    normalized="${scope#./}"
+    normalized="${normalized%/}"
+    basename="${normalized##*/}"
+    [[ "$basename" == *.* ]] || return 1
+    repo_root=$(tangle_resolve_repo_root 2>/dev/null) || return 1
+    while IFS= read -r full; do
+        [[ "${full##*/}" == "$basename" ]] || continue
+        ((count++)) || true
+        [[ "$count" -gt 1 ]] && return 0
+    done < <(git -C "$repo_root" ls-files 2>/dev/null)
     return 1
 }
 
@@ -1509,6 +1699,38 @@ ${previous_decomposition}
     OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-reformat-validation" run_agent_sync "$tangle_decompose_fallback_agent" "$reformat_prompt" 0 "researcher" "tangle"
 }
 
+tangle_effective_write_scopes() {
+    local subtask="$1"
+    local scopes="${2:-}"
+    local effective_scopes=""
+
+    if [[ -z "$scopes" ]]; then
+        scopes=$(tangle_extract_write_scopes "$subtask")
+    fi
+    [[ -n "$scopes" ]] || return 0
+
+    while IFS= read -r scope; do
+        [[ -z "$scope" ]] && continue
+        if ! tangle_scope_is_safe_relative_path "$scope"; then
+            continue
+        fi
+        if tangle_scope_is_known_or_explicit_new_file "$scope"; then
+            effective_scopes="${effective_scopes}${scope}"$'\n'
+        else
+            local resolved_scopes
+            resolved_scopes=$(tangle_resolve_write_scope_files "$scope")
+            if [[ -n "$resolved_scopes" ]]; then
+                effective_scopes="${effective_scopes}${resolved_scopes}"$'\n'
+            else
+                effective_scopes="${effective_scopes}${scope}"$'\n'
+            fi
+        fi
+    done <<< "$scopes"
+
+    printf '%s\n' "$effective_scopes" | sed '/^$/d' | sort -u
+}
+
+
 tangle_validate_parallel_write_scopes() {
     local subtasks="$1"
     local task_index=0
@@ -1531,6 +1753,13 @@ tangle_validate_parallel_write_scopes() {
         ((coding_count++)) || true
         subtask=$(echo "$subtask" | sed 's/\[CODING\]\s*//; s/\[REASONING\]\s*//')
 
+        local files_clause_count
+        files_clause_count=$(tangle_structured_clause_count "$subtask" "Files")
+        if [[ "$files_clause_count" -gt 1 ]]; then
+            echo "coding subtask ${task_index} must contain exactly one Files clause"
+            return 1
+        fi
+
         local scopes
         scopes=$(tangle_extract_write_scopes "$subtask")
         if [[ -z "$scopes" ]]; then
@@ -1538,43 +1767,51 @@ tangle_validate_parallel_write_scopes() {
             return 1
         fi
 
-        local effective_scopes=""
-        while IFS= read -r scope; do
-            [[ -z "$scope" ]] && continue
-            if tangle_scope_is_known_or_explicit_new_file "$scope"; then
-                effective_scopes="${effective_scopes}${scope}
-"
-            else
-                local resolved_scopes
-                resolved_scopes=$(tangle_resolve_repo_context_files "$subtask")
-                if [[ -n "$resolved_scopes" ]]; then
-                    effective_scopes="${effective_scopes}${resolved_scopes}
-"
-                else
-                    effective_scopes="${effective_scopes}${scope}
-"
-                fi
+        local declared_scope
+        while IFS= read -r declared_scope; do
+            [[ -z "$declared_scope" ]] && continue
+            if ! tangle_scope_is_safe_relative_path "$declared_scope"; then
+                echo "coding subtask ${task_index} has unsafe write scope '${declared_scope}'"
+                return 1
+            fi
+            if tangle_scope_has_symlink_component "$declared_scope"; then
+                echo "coding subtask ${task_index} has write scope through a symlink '${declared_scope}'"
+                return 1
+            fi
+            if ! tangle_scope_is_known_or_explicit_new_file "$declared_scope" && \
+               tangle_scope_has_ambiguous_basename "$declared_scope"; then
+                echo "coding subtask ${task_index} has ambiguous write scope '${declared_scope}'"
+                return 1
             fi
         done <<< "$scopes"
-        effective_scopes=$(printf '%s
-' "$effective_scopes" | sed '/^$/d' | sort -u)
+
+        local effective_scopes
+        effective_scopes=$(tangle_effective_write_scopes "$subtask" "$scopes")
 
         while IFS= read -r scope; do
             [[ -z "$scope" ]] && continue
-            local i
-            for i in "${!existing_scopes[@]}"; do
-                [[ "${existing_tasks[$i]}" == "$task_index" ]] && continue
-                if tangle_scopes_overlap "$scope" "${existing_scopes[$i]}"; then
-                    echo "coding subtask ${task_index} effective write scope '${scope}' overlaps subtask ${existing_tasks[$i]} scope '${existing_scopes[$i]}'"
-                    return 1
-                fi
-            done
             existing_scopes+=("$scope")
             existing_tasks+=("$task_index")
         done <<< "$effective_scopes"
     done <<< "$subtasks"
 
     [[ $coding_count -eq 0 ]] && return 0
+
+    # Validate every declaration before classifying any overlap as repairable.
+    # Otherwise an early overlap can return before a later unsafe declaration
+    # is seen, allowing consolidation to rewrite malformed input.
+    local i j
+    for i in "${!existing_scopes[@]}"; do
+        for j in "${!existing_scopes[@]}"; do
+            [[ "$j" -ge "$i" ]] && break
+            [[ "${existing_tasks[$j]}" == "${existing_tasks[$i]}" ]] && continue
+            if tangle_scopes_overlap "${existing_scopes[$i]}" "${existing_scopes[$j]}"; then
+                echo "coding subtask ${existing_tasks[$i]} effective write scope '${existing_scopes[$i]}' overlaps subtask ${existing_tasks[$j]} scope '${existing_scopes[$j]}'"
+                return 1
+            fi
+        done
+    done
+
     return 0
 }
 
@@ -1592,24 +1829,10 @@ tangle_consolidate_overlapping_subtasks() {
         tangle_line_is_numbered_subtask "$line" || continue
         lines+=("$line")
         if [[ "$line" =~ \[CODING\] ]]; then
-            local subtask scopes effective_scopes=""
+            local subtask scopes effective_scopes
             subtask=$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//; s/^[[:space:]]+//')
             scopes=$(tangle_extract_write_scopes "$subtask")
-            while IFS= read -r scope; do
-                [[ -z "$scope" ]] && continue
-                if tangle_scope_is_known_or_explicit_new_file "$scope"; then
-                    effective_scopes="${effective_scopes}${scope}"$'\n'
-                else
-                    local resolved_scopes
-                    resolved_scopes=$(tangle_resolve_repo_context_files "$subtask")
-                    if [[ -n "$resolved_scopes" ]]; then
-                        effective_scopes="${effective_scopes}${resolved_scopes}"$'\n'
-                    else
-                        effective_scopes="${effective_scopes}${scope}"$'\n'
-                    fi
-                fi
-            done <<< "$scopes"
-            effective_scopes=$(printf '%s\n' "$effective_scopes" | sed '/^$/d' | sort -u)
+            effective_scopes=$(tangle_effective_write_scopes "$subtask" "$scopes")
             coding_lines+=("$line")
             coding_scopes+=("$effective_scopes")
             parent+=("$((${#parent[@]}))")
@@ -1673,9 +1896,13 @@ tangle_consolidate_overlapping_subtasks() {
             ((member_count++)) || true
             merged_scopes="${merged_scopes}${coding_scopes[$member]}"$'\n'
             local task_text
-            task_text=$(printf '%s\n' "${coding_lines[$member]}" | sed -nE 's/.*[[:space:]]Task:[[:space:]]*//p')
+            task_text=$(tangle_extract_structured_clause "${coding_lines[$member]}" "Task" 2>/dev/null \
+                | awk 'BEGIN { first=1 } { if (!first) printf " "; printf "%s", $0; first=0 } END { if (!first) print "" }' || true)
             if [[ -z "$task_text" ]]; then
-                task_text=$(printf '%s\n' "${coding_lines[$member]}" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//; s/[[:space:]]+[—-][[:space:]]+Files:.*$//')
+                task_text=$(printf '%s\n' "${coding_lines[$member]}" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//')
+                task_text="${task_text%% Files:*}"
+                task_text="${task_text%% - Files:*}"
+                task_text="${task_text%% — Files:*}"
             fi
             [[ -z "$merged_tasks" ]] || merged_tasks="${merged_tasks}; "
             merged_tasks="${merged_tasks}${task_text}"
@@ -2462,6 +2689,53 @@ tangle_cleanup_verification_context() {
     unset TANGLE_VERIFY_PREV_EXIT_TRAP TANGLE_VERIFY_PREV_INT_TRAP TANGLE_VERIFY_PREV_TERM_TRAP
 }
 
+tangle_saved_trap_command() {
+    local saved_trap="$1"
+    [[ -n "$saved_trap" ]] || return 0
+
+    # trap -p emits shell-quoted argv such as:
+    #   trap -- 'handler body' SIGINT
+    # Decode that shell-generated representation in this helper so parsing
+    # does not alter the signal handler's positional parameters.
+    eval "set -- $saved_trap"
+    if [[ "${1:-}" == "trap" && "${2:-}" == "--" && $# -ge 4 ]]; then
+        printf '%s\n' "${3:-}"
+    fi
+}
+
+
+tangle_handle_verification_signal() {
+    local signal="$1"
+    shift
+    local exit_code=1
+    local saved_signal_trap=""
+    local saved_signal_command=""
+    case "$signal" in
+        INT)
+            exit_code=130
+            saved_signal_trap="${TANGLE_VERIFY_PREV_INT_TRAP:-}"
+            ;;
+        TERM)
+            exit_code=143
+            saved_signal_trap="${TANGLE_VERIFY_PREV_TERM_TRAP:-}"
+            ;;
+    esac
+
+    # Capture the caller handler before cleanup restores/unsets saved trap
+    # state. Re-signalling the current shell from inside its active handler is
+    # not portable (notably on Bash 3.2/macOS), so invoke the saved handler
+    # explicitly after cleanup instead.
+    saved_signal_command=$(tangle_saved_trap_command "$saved_signal_trap")
+    tangle_cleanup_verification_context
+    if [[ -n "$saved_signal_command" ]]; then
+        # A caller trap may contain `return` or `exit`. Run it in a subshell so
+        # those control-flow statements cannot bypass the signal exit status.
+        ( eval "$saved_signal_command" ) || true
+    fi
+    exit "$exit_code"
+}
+
+
 tangle_verify() {
     local prompt="$1"
     local run_id="${OCTOPUS_VERIFY_RUN_ID:-$(date +%s)-$$}"
@@ -2509,7 +2783,9 @@ tangle_verify() {
     TANGLE_VERIFY_PREV_EXIT_TRAP=$(trap -p EXIT)
     TANGLE_VERIFY_PREV_INT_TRAP=$(trap -p INT)
     TANGLE_VERIFY_PREV_TERM_TRAP=$(trap -p TERM)
-    trap 'tangle_cleanup_verification_context' EXIT INT TERM
+    trap 'tangle_cleanup_verification_context' EXIT
+    trap 'tangle_handle_verification_signal INT "$@"' INT
+    trap 'tangle_handle_verification_signal TERM "$@"' TERM
 
     if declare -f octopus_agent_override >/dev/null 2>&1; then
         verify_agent=$(octopus_execution_profile_provider "tangle" "verify" "researcher" "agy")
@@ -3135,6 +3411,10 @@ Every [CODING] line must include a same-line Files: clause."
     fi
 
     if ! parallel_safety_reason=$(tangle_validate_parallel_write_scopes "$subtasks"); then
+        if [[ "$parallel_safety_reason" != *"overlaps subtask"* ]]; then
+            log ERROR "Unsafe parallel decomposition after reformat: ${parallel_safety_reason}; refusing direct fallback"
+            return 1
+        fi
         log WARN "Reformatted decomposition still overlaps (${parallel_safety_reason}); consolidating connected coding scopes"
         subtasks=$(tangle_consolidate_overlapping_subtasks "$subtasks")
         echo -e "${CYAN}Consolidated subtasks:${NC}"
@@ -3238,7 +3518,7 @@ Every [CODING] line must include a same-line Files: clause."
         if [[ "$TMUX_MODE" == "true" ]]; then
             # Use async+tmux spawning
             local pid
-            if ! pid=$(spawn_agent_async "$agent" "$subtask_prompt" "$task_id" "$role" "tangle" "$pane_title"); then
+            if ! pid=$(spawn_agent_async "$agent" "$subtask_prompt" "$task_id" "$role" "tangle" "$pane_title" </dev/null); then
                 log ERROR "Failed to spawn Tangle task $task_id"
                 octopus_tangle_cancel_active TERM
                 _octopus_tangle_restore_traps "$tangle_previous_int_trap" "$tangle_previous_term_trap"
@@ -3248,7 +3528,7 @@ Every [CODING] line must include a same-line Files: clause."
         else
             # Standard spawning
             local pid
-            if ! pid=$(spawn_agent_capture_pid "$agent" "$subtask_prompt" "$task_id" "$role" "tangle"); then
+            if ! pid=$(spawn_agent_capture_pid "$agent" "$subtask_prompt" "$task_id" "$role" "tangle" </dev/null); then
                 log ERROR "Failed to spawn Tangle task $task_id"
                 octopus_tangle_cancel_active TERM
                 _octopus_tangle_restore_traps "$tangle_previous_int_trap" "$tangle_previous_term_trap"
