@@ -290,7 +290,7 @@ wrap_cli_output() {
     fi
 
     case "$provider" in
-        codex*|gemini*|agy*|antigravity|perplexity*|cursor-agent*)
+        codex*|gemini*|agy*|antigravity|perplexity*|cursor-agent*|kimi*)
             local runtime_provider runtime_model
             runtime_provider=$(octo_provider_identity_from_agent_type "$provider")
             runtime_model=$(octo_extract_runtime_model "$output")

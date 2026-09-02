@@ -2,11 +2,12 @@
 # Moonshot Kimi Code CLI provider (standalone `kimi` binary).
 # No top-level set -e*: sourced libs must not alter parent shell options
 # (orchestrate.sh already sets `set -eo pipefail`).
-# Auth: $MOONSHOT_API_KEY or ~/.kimi-code/credentials/kimi-code.json (kimi login).
+# Auth: selected-provider credentials in $KIMI_CODE_HOME/config.toml (default
+# ~/.kimi-code/config.toml), including file-backed OAuth from `kimi login`.
 # Headless: kimi -p "<prompt>" --output-format text  (single-turn, prints+exits).
 # NB: --auto is mutually exclusive with -p ("Cannot combine --prompt with --auto").
 # Config errors (no model / unknown alias) exit 1, so the exit-code check below
-# is the whole contract — no stdout scanning needed. Verified on kimi 0.39.1.
+# is the whole contract — no stdout scanning needed. Verified on Kimi Code 0.40.1.
 
 _kimi_log(){ if declare -f log >/dev/null 2>&1; then log "$@"; else echo "[${1}] ${*:2}" >&2; fi; }
 
@@ -50,6 +51,235 @@ _kimi_handle_execute_signal(){
 # `kimi` is an unambiguous binary name — no identity regex needed (unlike cursor's `agent`).
 _is_kimi_binary(){ command -v kimi &>/dev/null; }
 
+kimi_data_root(){
+    if [[ -n "${KIMI_CODE_HOME:-}" ]]; then
+        printf '%s\n' "$KIMI_CODE_HOME"
+    else
+        printf '%s\n' "${HOME}/.kimi-code"
+    fi
+}
+
+kimi_config_file(){
+    printf '%s/config.toml\n' "$(kimi_data_root)"
+}
+
+# Parse only the credential-bearing subset of Kimi Code's TOML contract. The
+# parser follows default_model -> models.<alias>.provider -> providers.<name>
+# and emits a method label, never a credential value. Unsupported TOML shapes
+# fail closed and are left to the CLI's actionable startup diagnostics.
+_kimi_config_credential_record(){
+    local config
+    config="$(kimi_config_file)"
+    [[ -f "$config" ]] || return 1
+
+    awk '
+        function trim(value) {
+            sub(/^[ \t\r\n]+/, "", value)
+            sub(/[ \t\r\n]+$/, "", value)
+            return value
+        }
+        function string_value(line, value, quote, i, char, escaped, tail) {
+            string_ok = 0
+            sub(/^[^=]*=/, "", line)
+            value = trim(line)
+            quote = substr(value, 1, 1)
+            if (quote != "\"" && quote != "\047") return ""
+            escaped = 0
+            for (i = 2; i <= length(value); i++) {
+                char = substr(value, i, 1)
+                if (quote == "\"" && char == "\\" && !escaped) {
+                    escaped = 1
+                    continue
+                }
+                if (char == quote && !escaped) {
+                    tail = trim(substr(value, i + 1))
+                    if (tail != "" && substr(tail, 1, 1) != "#") return ""
+                    string_ok = 1
+                    return substr(value, 2, i - 2)
+                }
+                escaped = 0
+            }
+            return ""
+        }
+        function positive_integer(line, value) {
+            integer_ok = 0
+            sub(/^[^=]*=/, "", line)
+            value = trim(line)
+            sub(/[ \t]+#.*/, "", value)
+            value = trim(value)
+            if (value !~ /^[0-9]+$/ || value + 0 < 1) return ""
+            integer_ok = 1
+            return value
+        }
+        function first_component(value, rest, end) {
+            rest = trim(value)
+            if (substr(rest, 1, 1) == "\"") {
+                rest = substr(rest, 2)
+                end = index(rest, "\"")
+                if (end == 0) return ""
+                return substr(rest, 1, end - 1)
+            }
+            sub(/\..*$/, "", rest)
+            return rest
+        }
+        function component_suffix(value, rest, end) {
+            rest = trim(value)
+            if (substr(rest, 1, 1) == "\"") {
+                rest = substr(rest, 2)
+                end = index(rest, "\"")
+                if (end == 0) return "invalid"
+                rest = substr(rest, end + 1)
+            } else {
+                sub(/^[^.]+/, "", rest)
+            }
+            sub(/^\./, "", rest)
+            return rest
+        }
+        /^[ \t]*#/ || /^[ \t]*$/ { next }
+        /^[ \t]*\[\[/ {
+            header = trim($0)
+            if (header !~ /^\[\[[^]]+\]\][ \t]*(#.*)?$/) invalid = 1
+            kind = "other"; name = ""; suffix = ""
+            next
+        }
+        /^[ \t]*\[/ {
+            header = trim($0)
+            if (header !~ /^\[[^]]+\][ \t]*(#.*)?$/) { invalid = 1; next }
+            sub(/^\[/, "", header)
+            sub(/\][ \t]*(#.*)?$/, "", header)
+            if (table_seen[header]++) invalid = 1
+            kind = "other"; name = ""; suffix = ""
+            if (index(header, "models.") == 1) {
+                rest = substr(header, 8)
+                kind = "model"
+                name = first_component(rest)
+                suffix = component_suffix(rest)
+            } else if (index(header, "providers.") == 1) {
+                rest = substr(header, 11)
+                kind = "provider"
+                name = first_component(rest)
+                suffix = component_suffix(rest)
+            }
+            next
+        }
+        kind == "" && /^[ \t]*default_model[ \t]*=/ {
+            if (default_seen++) invalid = 1
+            default_model = string_value($0)
+            if (!string_ok || default_model == "") invalid = 1
+            next
+        }
+        kind == "model" && suffix == "" && /^[ \t]*provider[ \t]*=/ {
+            if (model_provider_seen[name]++) invalid = 1
+            model_provider[name] = string_value($0)
+            if (!string_ok || model_provider[name] == "") invalid = 1
+            next
+        }
+        kind == "model" && suffix == "" && /^[ \t]*model[ \t]*=/ {
+            if (model_id_seen[name]++) invalid = 1
+            model_id[name] = string_value($0)
+            if (!string_ok || model_id[name] == "") invalid = 1
+            next
+        }
+        kind == "model" && suffix == "" && /^[ \t]*max_context_size[ \t]*=/ {
+            if (model_context_seen[name]++) invalid = 1
+            model_context[name] = positive_integer($0)
+            if (!integer_ok) invalid = 1
+            next
+        }
+        kind == "provider" && suffix == "" && /^[ \t]*type[ \t]*=/ {
+            if (provider_type_seen[name]++) invalid = 1
+            provider_type[name] = string_value($0)
+            if (!string_ok || provider_type[name] == "") invalid = 1
+            next
+        }
+        kind == "provider" && suffix == "" && /^[ \t]*api_key[ \t]*=/ {
+            if (direct_key_seen[name]++) invalid = 1
+            value = string_value($0)
+            if (!string_ok) invalid = 1
+            if (value != "") direct_key[name] = 1
+            next
+        }
+        kind == "provider" && suffix == "env" && /^[ \t]*[A-Za-z_][A-Za-z0-9_]*_API_KEY[ \t]*=/ {
+            key = $0
+            sub(/^[ \t]*/, "", key)
+            sub(/[ \t]*=.*/, "", key)
+            if (env_key_seen[name, key]++) invalid = 1
+            value = string_value($0)
+            if (!string_ok) invalid = 1
+            if (value != "") env_key[name, key] = 1
+            next
+        }
+        kind == "provider" && suffix == "oauth" && /^[ \t]*storage[ \t]*=/ {
+            if (oauth_storage_seen[name]++) invalid = 1
+            oauth_storage[name] = string_value($0)
+            if (!string_ok || oauth_storage[name] == "") invalid = 1
+            next
+        }
+        kind == "provider" && suffix == "oauth" && /^[ \t]*key[ \t]*=/ {
+            if (oauth_key_seen[name]++) invalid = 1
+            oauth_key[name] = string_value($0)
+            if (!string_ok || oauth_key[name] == "") invalid = 1
+            next
+        }
+        END {
+            if (invalid || default_model == "") exit 1
+            provider = model_provider[default_model]
+            if (provider == "" || model_id[default_model] == "" || model_context[default_model] == "") exit 1
+            type = provider_type[provider]
+            if (type != "kimi" && type != "anthropic" && type != "openai" &&
+                type != "openai_responses" && type != "google-genai" && type != "vertexai") exit 1
+            if (direct_key[provider]) { print "config:api-key"; exit 0 }
+            if ((type == "kimi" && env_key[provider, "KIMI_API_KEY"]) ||
+                (type == "anthropic" && env_key[provider, "ANTHROPIC_API_KEY"]) ||
+                ((type == "openai" || type == "openai_responses") && env_key[provider, "OPENAI_API_KEY"]) ||
+                (type == "google-genai" && env_key[provider, "GOOGLE_API_KEY"]) ||
+                (type == "vertexai" && (env_key[provider, "GOOGLE_API_KEY"] || env_key[provider, "VERTEXAI_API_KEY"]))) {
+                print "config:env"
+                exit 0
+            }
+            if (oauth_storage[provider] == "file" && oauth_key[provider] != "") {
+                print "oauth-file:" oauth_key[provider]
+                exit 0
+            }
+            if (oauth_storage[provider] == "keyring" && oauth_key[provider] != "") {
+                print "oauth-keyring:" oauth_key[provider]
+                exit 0
+            }
+            exit 1
+        }
+    ' "$config"
+}
+
+_kimi_oauth_file_exists(){
+    local key="$1" storage_name
+    case "$key" in
+        kimi-code|oauth/kimi-code) storage_name="kimi-code" ;;
+        oauth/*) storage_name="${key#oauth/}" ;;
+        *) storage_name="$key" ;;
+    esac
+    [[ -n "$storage_name" && "$storage_name" != */* && "$storage_name" != .* ]] || return 1
+    [[ -s "$(kimi_data_root)/credentials/${storage_name}.json" ]]
+}
+
+kimi_configured_credential_method(){
+    local record
+    record="$(_kimi_config_credential_record 2>/dev/null)" || return 1
+    case "$record" in
+        config:api-key|config:env) printf '%s\n' "$record" ;;
+        oauth-file:*)
+            _kimi_oauth_file_exists "${record#oauth-file:}" || return 1
+            printf '%s\n' "kimi-session"
+            ;;
+        oauth-keyring:*)
+            # Current Kimi Code migrates legacy keyring tokens to the same
+            # file-backed store. A config reference alone is not proof of auth.
+            _kimi_oauth_file_exists "${record#oauth-keyring:}" || return 1
+            printf '%s\n' "kimi-session"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
 # A signed-in kimi with no configured provider refuses every prompt, so a model
 # is part of the availability contract, not a nicety.
 #
@@ -61,17 +291,15 @@ _is_kimi_binary(){ command -v kimi &>/dev/null; }
 # The value matters too: `default_model = ""` or a bare `=` is not a model, and
 # kimi fails resolution on it exactly as if the key were absent.
 #
-# Not verified here: that the pointer names a live `[models."<alias>"]` entry
-# with reachable provider credentials — kimi's own gate does check that, but it
-# needs the parsed config. A stale pointer costs one dispatch that exits
-# non-zero with a clear message, which spawn.sh already treats as a failure.
-# `kimi provider list --json` would be authoritative but costs ~1.4s a call,
-# far too slow for a path that runs per provider on every detection.
+# This helper checks only the top-level pointer. `kimi_is_available` combines it
+# with `_kimi_config_credential_record`, which verifies the selected model's
+# provider mapping and configured credential source without exposing values.
 #
 # OCTOPUS_KIMI_MODEL deliberately does not count: kimi resolves -m against this
 # same config, so a pin with no matching alias fails just as hard.
 kimi_has_model(){
-    local config="${HOME}/.kimi-code/config.toml"
+    local config
+    config="$(kimi_config_file)"
     [[ -f "$config" ]] || return 1
     awk '
         # Stop at the first table header: past it we are no longer top-level.
@@ -90,25 +318,12 @@ kimi_has_model(){
 
 kimi_is_available(){
     command -v kimi &>/dev/null || return 1
-    # Recover MOONSHOT_API_KEY from the shell profile in non-interactive runs
-    # (mirrors codex/grok/vibe) so fleet, health, and discovery agree.
-    if [[ -z "${MOONSHOT_API_KEY:-}" ]] && declare -f resolve_provider_env >/dev/null 2>&1; then
-        resolve_provider_env "MOONSHOT_API_KEY" 2>/dev/null || true
-    fi
-    [[ -n "${MOONSHOT_API_KEY:-}" ]] || [[ -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]] || return 1
-    kimi_has_model
+    kimi_has_model || return 1
+    kimi_configured_credential_method >/dev/null
 }
 
 kimi_auth_method(){
-    local auth="none"
-    if   [[ -n "${MOONSHOT_API_KEY:-}" ]];                                then auth="env:MOONSHOT_API_KEY"
-    elif [[ -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]];        then auth="kimi-session"
-    fi
-    # Signed in but unusable is its own state — callers must not treat it as ready.
-    if [[ "$auth" != "none" ]] && ! kimi_has_model; then
-        auth="${auth}-no-model"
-    fi
-    echo "$auth"
+    kimi_configured_credential_method 2>/dev/null || printf '%s\n' "none"
 }
 
 # kimi_execute AGENT_TYPE PROMPT [OUTFILE] — single-turn headless dispatch.
@@ -183,7 +398,7 @@ kimi_execute(){
     if [[ $exit_code -ne 0 ]]; then
         [[ $exit_code -eq 124 ]] && { _kimi_log WARN "kimi: timed out after ${timeout}s"; return 1; }
         if printf '%s\n%s' "$response" "$error_response" | grep -ciE 'unauthorized|forbidden|(401|403)|not authorized|invalid token|expired token|please .?login|login required' >/dev/null; then
-            _kimi_log ERROR "kimi: auth failure — run: kimi login (or set MOONSHOT_API_KEY)"; return 1
+            _kimi_log ERROR "kimi: auth failure — run kimi, then enter /login or update $(kimi_config_file)"; return 1
         fi
         _kimi_log ERROR "kimi: exit $exit_code"; return 1
     fi

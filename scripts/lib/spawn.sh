@@ -747,6 +747,7 @@ ${heuristic_ctx}"
         openrouter*) _provider_for_health="openrouter" ;;
         perplexity*) _provider_for_health="perplexity" ;;
         cursor-agent*) _provider_for_health="cursor-agent" ;;
+        kimi*) _provider_for_health="kimi" ;;
     esac
     if [[ -n "$_provider_for_health" ]] && declare -F check_provider_health >/dev/null 2>&1; then
         local _health_diag
@@ -1165,7 +1166,7 @@ ${heuristic_ctx}"
             # v8.7.0: Add trust marker for external CLI output
             # v9.22.1: Also wrap the Output block in nonce boundaries so downstream
             # synthesis prompts can identify provider-authored text as untrusted.
-            case "$agent_type" in codex*|gemini*|perplexity*|cursor-agent*)
+            case "$agent_type" in codex*|gemini*|perplexity*|cursor-agent*|kimi*)
                 if [[ "${OCTOPUS_SECURITY_V870:-true}" == "true" ]]; then
                     sed -i.bak '1s/^/<!-- trust=untrusted provider='"$agent_type"' -->\n/' "$result_file" 2>/dev/null || true
                     rm -f "${result_file}.bak"

@@ -93,6 +93,19 @@ check_deps() {
         warnings+=("qwen:Qwen CLI not installed (optional) — npm install -g @qwen-code/qwen-code; auth via QWEN_API_KEY or Coding-Plan")
     fi
 
+    # Kimi Code CLI (optional — config.toml provider credentials or /login)
+    if has_cmd kimi; then
+        local kimi_version
+        kimi_version="$(kimi --version 2>/dev/null || true)"
+        if [[ "$kimi_version" == "kimi, version "* ]]; then
+            warnings+=("kimi_legacy:Legacy kimi-cli detected — install current Kimi Code: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash. The installer renames the old executable to kimi-legacy; first launch offers data migration, or run kimi migrate manually. OAuth is not migrated, so run kimi and enter /login again.")
+        else
+            ok+=("kimi:Kimi Code CLI installed")
+        fi
+    else
+        warnings+=("kimi:Kimi Code CLI not installed (optional) — install: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash; then run kimi and enter /login")
+    fi
+
     # Cursor Agent CLI (optional — Grok 4.20 via Cursor subscription)
     if declare -f _is_cursor_agent_binary >/dev/null 2>&1 && _is_cursor_agent_binary; then
         ok+=("cursor-agent:Cursor Agent CLI installed")

@@ -127,7 +127,6 @@ _octo_provider_static_readiness() {
             atlascloud) [[ -n "${ATLASCLOUD_API_KEY:-}" ]] || resolve_provider_env ATLASCLOUD_API_KEY 2>/dev/null || true ;;
             grok) [[ -n "${XAI_API_KEY:-}" ]] || resolve_provider_env XAI_API_KEY 2>/dev/null || true ;;
             vibe) [[ -n "${MISTRAL_API_KEY:-}" ]] || resolve_provider_env MISTRAL_API_KEY 2>/dev/null || true ;;
-            kimi) [[ -n "${MOONSHOT_API_KEY:-}" ]] || resolve_provider_env MOONSHOT_API_KEY 2>/dev/null || true ;;
         esac
     fi
 
@@ -241,17 +240,19 @@ _octo_provider_static_readiness() {
             fi
             ;;
         kimi)
-            remediation="Install Kimi Code, then run: kimi login"
+            remediation="Install Kimi Code, run kimi, then enter /login."
             if command -v kimi >/dev/null 2>&1; then
-                if _octo_value_has_nonwhitespace "${MOONSHOT_API_KEY:-}" || [[ -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]]; then
-                    if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
-                        status="degraded"; reason_code="model-missing"
-                        remediation="Run: kimi, then /login, or set default_model in ~/.kimi-code/config.toml. OCTOPUS_KIMI_MODEL only picks among aliases kimi already declares, so it cannot stand in for that."
-                    else
-                        status="available"; reason_code="ready"; remediation=""
-                    fi
+                local kimi_config_path
+                kimi_config_path="$(kimi_config_file 2>/dev/null || printf '%s' "${KIMI_CODE_HOME:-${HOME}/.kimi-code}/config.toml")"
+                if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
+                    status="degraded"; reason_code="model-missing"
+                    remediation="Run kimi and enter /login, or configure default_model and its model/provider mapping in ${kimi_config_path}. OCTOPUS_KIMI_MODEL cannot create a missing Kimi model alias."
+                elif declare -f kimi_configured_credential_method >/dev/null 2>&1 && \
+                     kimi_configured_credential_method >/dev/null 2>&1; then
+                    status="available"; reason_code="ready"; remediation=""
                 else
-                    status="degraded"; reason_code="auth-missing"; remediation="Run: kimi login, or set MOONSHOT_API_KEY."
+                    status="degraded"; reason_code="auth-missing"
+                    remediation="Run kimi and enter /login, or configure credentials on the selected provider in ${kimi_config_path}. Shell-only API keys are not read automatically."
                 fi
             fi
             ;;

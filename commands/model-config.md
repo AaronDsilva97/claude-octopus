@@ -4,7 +4,7 @@ disable-model-invocation: true
 description: Configure AI provider models for Claude Octopus workflows
 version: 4.0.1
 category: configuration
-tags: [config, models, providers, codex, antigravity, spark, routing, trace, interactive]
+tags: [config, models, providers, codex, antigravity, kimi, spark, routing, trace, interactive]
 created: 2025-01-21
 updated: 2026-04-21
 ---
@@ -52,6 +52,7 @@ printf "perplexity:%s\n" "$([ -n "${PERPLEXITY_API_KEY:-}" ] && echo configured 
 printf "openrouter:%s\n" "$([ -n "${OPENROUTER_API_KEY:-}" ] && echo configured || echo missing)"
 printf "copilot:%s\n" "$(command -v copilot >/dev/null 2>&1 && echo installed || echo missing)"
 printf "qwen:%s\n" "$(command -v qwen >/dev/null 2>&1 && echo installed || echo missing)"
+printf "kimi:%s\n" "$(command -v kimi >/dev/null 2>&1 && echo installed || echo missing)"
 printf "ollama:%s\n" "$(command -v ollama >/dev/null 2>&1 && curl -sf --connect-timeout 1 --max-time 3 http://localhost:11434/api/tags >/dev/null 2>&1 && echo running || command -v ollama >/dev/null 2>&1 && echo installed || echo missing)"
 printf "opencode:%s\n" "$(command -v opencode >/dev/null 2>&1 && echo installed || echo missing)"
 echo "=== Config ==="
@@ -74,6 +75,7 @@ Providers                          Status
   🔵 Claude (Sonnet/Opus)          Built-in ✓
   🔴 Codex (GPT-5.6 Sol)          [Installed ✓ / Missing ✗]  → current: <model>
   🧭 Antigravity (`agy`)           [Installed ✓ / Missing ✗]  → current: <model>
+  🌙 Kimi Code                     [Installed ✓ / Missing ✗]  → current: <model alias>
   🟣 Perplexity                    [Configured ✓ / Not set]
   🟠 OpenRouter                    [Configured ✓ / Not set]
   ...other installed providers...
@@ -138,7 +140,9 @@ AskUserQuestion({
       // Only if openrouter configured:
       {label: "🟠 OpenRouter", description: "Current: <current_model> — routes to GLM, Kimi, DeepSeek"},
       // Only if opencode installed:
-      {label: "🟤 OpenCode", description: "Current: <current_model> — multi-provider router"}
+      {label: "🟤 OpenCode", description: "Current: <current_model> — multi-provider router"},
+      // Only if kimi installed:
+      {label: "🌙 Kimi Code", description: "Current: <current_model> — aliases are declared in KIMI_CODE_HOME/config.toml"}
     ]
   }]
 })
@@ -180,6 +184,11 @@ AskUserQuestion({
   }]
 })
 ```
+
+**Kimi Code example:** enter the exact alias already declared under
+`[models.<alias>]` in `$KIMI_CODE_HOME/config.toml` (default
+`~/.kimi-code/config.toml`). Run `kimi` and enter `/login` first if the selected
+provider has no configured API key or OAuth credential.
 
 After selection, apply the change:
 

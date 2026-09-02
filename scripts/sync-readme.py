@@ -31,6 +31,7 @@ PUBLIC_EXTERNAL_PROVIDERS = (
     ("OrcaRouter", "OrcaRouter API key"),
     ("OpenCode", "OpenCode CLI"),
     ("Grok", "xAI API key (Grok)"),
+    ("Kimi Code", "Kimi Code CLI"),
 )
 
 
@@ -292,19 +293,35 @@ def sync_main_readme(text: str, facts: dict[str, object]) -> str:
         text,
     )
     text = re.sub(
+        r"up to \d+ external integrations cross-checking each other",
+        f"up to {provider_count} external integrations cross-checking each other",
+        text,
+    )
+    text, provider_row_count = re.subn(
+        r"^\| \*\*Providers\*\* \| Claude only \| Claude only \|.*\|$",
+        f"| **Providers** | Claude only | Claude only | Claude host; {provider_names} |",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if provider_row_count != 1:
+        raise ValueError("README provider comparison row is missing or duplicated")
+    text = re.sub(
+        r"^### How \d+ External Providers Work Together$",
+        f"### How {provider_count} External Providers Work Together",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = re.sub(
+        r"Claude Octopus coordinates (?:[a-z]+|\d+) external provider integrations alongside",
+        f"Claude Octopus coordinates {provider_word} external provider integrations alongside",
+        text,
+    )
+    text = re.sub(
         r"Adds up to (?:[a-z]+|\d+) external provider integrations\.",
         f"Adds up to {provider_word} external provider integrations.",
         text,
     )
-    text = re.sub(
-        r"Up to \d+ external provider integrations \(.*?\) alongside the Claude Code host",
-        (
-            f"Up to {provider_count} external provider integrations "
-            f"({provider_names}) alongside the Claude Code host"
-        ),
-        text,
-    )
-
     release_body = (
         f"> 🆕 **v{version} — {summary}.**\n"
         ">\n"

@@ -1,6 +1,6 @@
 # 🐙 Claude Octopus
 
-Every AI model has blind spots. Claude Octopus supports ten external provider integrations — Codex, Antigravity CLI, Copilot, Qwen, Ollama, Perplexity, OpenRouter, OrcaRouter, OpenCode, and Grok — alongside the built-in Claude Code host, with consensus gates that flag disagreements before you ship.
+Every AI model has blind spots. Claude Octopus supports eleven external provider integrations — Codex, Antigravity CLI, Copilot, Qwen, Ollama, Perplexity, OpenRouter, OrcaRouter, OpenCode, Grok, and Kimi Code — alongside the built-in Claude Code host, with consensus gates that flag disagreements before you ship.
 
 **Claude-native first, Octopus for escalation.** Use Claude-native `/init`, `/review`, and `/security-review` when Claude is enough. Use Octopus when you want multiple model opinions, adversarial review, or stricter multi-LLM workflows.
 
@@ -18,7 +18,7 @@ Every AI model has blind spots. Claude Octopus supports ten external provider in
   <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
 </p>
 
-🐙 **Research, build, review, and ship — with ten external providers checking the host's work.** Claude-native handles the ordinary path. Octopus remains dormant until you explicitly run `/octo:*`, then handles the escalated path. A 75% consensus gate catches disagreements before they reach production.
+🐙 **Research, build, review, and ship — with eleven external providers checking the host's work.** Claude-native handles the ordinary path. Octopus remains dormant until you explicitly run `/octo:*`, then handles the escalated path. A 75% consensus gate catches disagreements before they reach production.
 
 🧠 **Remembers across sessions.** Integrates with [claude-mem](https://github.com/thedotmack/claude-mem) and [agentmemory](https://github.com/rohitg00/agentmemory) for persistent memory — past decisions, research, and context survive session boundaries.
 
@@ -28,7 +28,7 @@ Every AI model has blind spots. Claude Octopus supports ten external provider in
 
 🐙 **31 specialized personas** (role-specific AI agents like security-auditor, backend-architect), **53 commands** (slash commands you type), **62 skills** (reusable workflow modules). Explicit workflows select the experts they need; ordinary Claude requests do not activate Octopus.
 
-🐙 **Works with just Claude. Adds up to ten external provider integrations.** Zero external providers are needed to start. Add them one at a time — each becomes available when detected and runs only inside an explicit workflow.
+🐙 **Works with just Claude. Adds up to eleven external provider integrations.** Zero external providers are needed to start. Add them one at a time — each becomes available when detected and runs only inside an explicit workflow.
 
 💰 **Four providers cost nothing extra when you already have access.** Codex, Antigravity CLI, and Copilot use existing subscriptions or local auth. Ollama runs locally for free. Qwen now requires API-key or Coding-Plan auth; its free OAuth tier ended on 2026-04-15.
 
@@ -405,8 +405,8 @@ Or type `/octo:auto <what you want>` and the smart router picks for you. Plain-p
 
 | | Claude Code alone | [Superpowers](https://github.com/obra/superpowers) | Claude Octopus |
 |---|---|---|---|
-| **Core idea** | One model, your prompts | Structured methodology for one agent | Built-in Claude plus up to 10 external integrations cross-checking each other |
-| **Providers** | Claude only | Claude only | Claude host; Codex, Antigravity CLI, Copilot, Qwen, Ollama, Perplexity, OpenRouter, OpenCode, Grok |
+| **Core idea** | One model, your prompts | Structured methodology for one agent | Built-in Claude plus up to 11 external integrations cross-checking each other |
+| **Providers** | Claude only | Claude only | Claude host; Codex, Antigravity CLI, Copilot, Qwen, Ollama, Perplexity, OpenRouter, OrcaRouter, OpenCode, Grok, and Kimi Code |
 | **Workflow** | Ad-hoc | Spec → plan → subagent-driven dev | Discover → Define → Develop → Deliver (Double Diamond) |
 | **Strength** | Simple, no setup | Long autonomous runs with discipline | Multiple perspectives catching blind spots |
 | **Consensus gates** | No | No | Yes — 75% agreement threshold |
@@ -421,9 +421,9 @@ Or type `/octo:auto <what you want>` and the smart router picks for you. Plain-p
 
 ## How It Works
 
-### How 10 External Providers Work Together
+### How 11 External Providers Work Together
 
-Claude Octopus coordinates ten external provider integrations alongside the built-in Claude Code host. The optional `claude-sdk` route is a second Anthropic seat, so it is shown below but is not counted as a separate provider family.
+Claude Octopus coordinates eleven external provider integrations alongside the built-in Claude Code host. The optional `claude-sdk` route is a second Anthropic seat, so it is shown below but is not counted as a separate provider family.
 
 | Provider | Role |
 |----------|------|
@@ -437,6 +437,7 @@ Claude Octopus coordinates ten external provider integrations alongside the buil
 | ⚫ Ollama (Local) | Zero-cost local LLM — offline, privacy-sensitive, fallback |
 | 🟠 OpenCode | Alternate coding-agent integration and cross-checking seat |
 | ⚡ Grok (xAI, via cursor-agent) | Frontier-model second opinion — added as a first-class seat in v9.48 |
+| 🌙 Kimi Code | Standalone coding-agent seat using provider credentials and model aliases from `config.toml` |
 | 🔵 Claude (Anthropic, Opus 5 + Sonnet 5) | Architecture, strategy, security review, orchestration, consensus, final synthesis |
 | 🔵 Claude Agent SDK seat (`claude-sdk`) | Optional second Anthropic seat: Opus 5 with the 1M-token context window, independent of the host session (set `CLAUDE_SDK_API_KEY`) |
 

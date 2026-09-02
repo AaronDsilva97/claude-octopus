@@ -1821,7 +1821,7 @@ ${provider_ctx}"
     fi
 
     # v8.7.0: Wrap external CLI output with trust markers
-    case "$agent_type" in codex*|gemini*|agy*|antigravity|perplexity*|cursor-agent*)
+    case "$agent_type" in codex*|gemini*|agy*|antigravity|perplexity*|cursor-agent*|kimi*)
         output=$(wrap_cli_output "$agent_type" "$output") ;; esac
 
     # Check if output is suspiciously empty or placeholder

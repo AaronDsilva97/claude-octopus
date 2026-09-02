@@ -1071,18 +1071,13 @@ check_provider_health() {
                 echo "kimi: CLI not found in PATH" >&2
                 return 1
             fi
-            if [[ -z "${MOONSHOT_API_KEY:-}" ]] && declare -f resolve_provider_env >/dev/null 2>&1; then
-                resolve_provider_env "MOONSHOT_API_KEY" 2>/dev/null || true
-            fi
-            # Auth: env MOONSHOT_API_KEY or ~/.kimi-code/credentials (kimi login session)
-            if [[ -z "${MOONSHOT_API_KEY:-}" && ! -f "${HOME}/.kimi-code/credentials/kimi-code.json" ]]; then
-                echo "kimi: not authenticated (run: kimi login or set MOONSHOT_API_KEY)" >&2
+            if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
+                echo "kimi: no model configured (run kimi and enter /login, or configure default_model and its model/provider mapping in $(kimi_config_file); OCTOPUS_KIMI_MODEL cannot create a missing Kimi model alias)" >&2
                 return 1
             fi
-            # Auth alone is not enough: with no configured provider, every kimi -p
-            # aborts. Fail closed here rather than mid-workflow.
-            if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
-                echo "kimi: no model configured (run: kimi, then /login, or set default_model in ~/.kimi-code/config.toml; OCTOPUS_KIMI_MODEL only picks among aliases kimi already declares, so it cannot stand in for that)" >&2
+            if ! declare -f kimi_configured_credential_method >/dev/null 2>&1 || \
+               ! kimi_configured_credential_method >/dev/null 2>&1; then
+                echo "kimi: selected provider has no usable configured credentials (run kimi and enter /login, or update $(kimi_config_file); shell-only API keys are not read automatically)" >&2
                 return 1
             fi
             ;;

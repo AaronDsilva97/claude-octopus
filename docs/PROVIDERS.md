@@ -37,6 +37,18 @@ Plus, usually:
 - Unit test in `tests/unit/test-<provider>-provider.sh`
 - `docs/DEVELOPER.md` / README provider tables
 
+## Kimi Code integration
+
+Kimi Code exercises all seven wiring points: `kimi` identity/runtime rows in
+`provider-registry.sh`; the `kimi` command arm and `kimi-exec.sh` stdin shim;
+model alias resolution through `OCTOPUS_KIMI_MODEL`; an isolated environment
+that preserves `KIMI_CODE_HOME`; config-aware detection and health checks; and
+real sync/background dispatch regressions. Its readiness contract follows
+`default_model` to the model's provider in `$KIMI_CODE_HOME/config.toml`
+(default `~/.kimi-code/config.toml`) and checks that provider's `api_key`,
+provider-local `env` credential, or configured OAuth storage. An API key that
+exists only in the parent shell is not Kimi Code authentication.
+
 ## Traps (each has bitten a real PR)
 
 1. **Case glob ordering.** More-specific aliases must precede broader globs (for example, `claude-sdk*` before `claude*`). A late arm behind an earlier glob is silently unreachable; there is no error.
@@ -53,7 +65,7 @@ Plus, usually:
 codex, commandcode, claude, claude-sdk (Agent SDK seat), agy (Antigravity,
 Google seat), perplexity, opencode, openrouter, orcarouter, atlascloud,
 openai-compatible, openai-tools, openai-compatible-agent, cursor-agent, grok,
-qwen, ollama, copilot, and vibe.
+qwen, ollama, copilot, vibe, and kimi.
 
 Retired `gemini` and `gemini-*` IDs are accepted only as compatibility aliases and canonicalize to `agy`. They are not executable providers, are never probed, and are not written to new configuration.
 

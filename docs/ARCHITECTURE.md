@@ -6,7 +6,7 @@ This document explains how Claude Octopus orchestrates multiple AI providers and
 
 ## Overview
 
-Claude Octopus coordinates **ten external AI integrations** alongside its built-in Claude host to give you multi-perspective analysis. The diagram shows the representative execution path; the full roster follows it.
+Claude Octopus coordinates **eleven external AI integrations** alongside its built-in Claude host to give you multi-perspective analysis. The diagram shows the representative execution path; the full roster follows it.
 
 ```
     +------------------+
@@ -43,6 +43,7 @@ Claude Octopus coordinates **ten external AI integrations** alongside its built-
 | **Qwen** *(optional)* | `qwen -p` | Qwen3-Coder | `QWEN_API_KEY` or Coding-Plan auth |
 | **OpenCode** *(optional)* | `opencode run` | Multi-provider router | Your OpenCode auth |
 | **Grok** *(optional)* | OpenAI-compatible API | Grok models | Your `XAI_API_KEY` |
+| **Kimi Code** *(optional)* | `kimi -p` | Model alias selected from Kimi Code `config.toml` | Provider credential or OAuth login configured in Kimi Code |
 
 > **Note:** Models are as of July 2026. The orchestrate.sh script uses the latest supported models. Only Claude is required — all others are optional and auto-detected.
 
@@ -79,6 +80,7 @@ Role defaults follow the accepted [frontier model routing strategy](./MODEL-ROUT
 | **OrcaRouter** | Policy-enforced gateway routing | Governed fallback dispatch and independent model perspectives |
 | **Ollama** *(optional)* | Zero-cost, offline, privacy | Brainstorming, fallback, air-gapped environments |
 | **Qwen** *(optional)* | Qwen3-Coder via API-key or Coding-Plan auth, Chinese language support | Research and code review when Qwen credentials are configured |
+| **Kimi Code** *(optional)* | Independent coding-agent execution with config-scoped credentials | Implementation and review through the standalone Kimi Code CLI |
 
 ---
 

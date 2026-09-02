@@ -15,6 +15,8 @@ source "$PROJECT_ROOT/scripts/lib/run-contract.sh"
 source "$PROJECT_ROOT/scripts/lib/error-tracking.sh"
 # shellcheck source=/dev/null
 source "$PROJECT_ROOT/scripts/lib/agent-sync.sh"
+# shellcheck source=/dev/null
+source "$PROJECT_ROOT/scripts/lib/validation.sh"
 
 fixture_provider="$TEST_TMP_DIR/fixture-provider.sh"
 cat > "$fixture_provider" <<'EOF'
@@ -24,7 +26,7 @@ attempt=0
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >> "$FIXTURE_CALLS"
 case "$FIXTURE_SCENARIO" in
-    success|exact-seat) printf '%s\n' 'Substantive provider result.' ;;
+    success|exact-seat|kimi-success) printf '%s\n' 'Substantive provider result.' ;;
     agy-pin)
         printf '%s\n' "${OCTOPUS_AGY_MODEL:-missing}" > "$FIXTURE_ROOT/executed-agy-model"
         printf '%s\n' 'Substantive AGY result.'
@@ -101,7 +103,6 @@ run_with_timeout() { shift; "$@"; }
 stop_quota_watcher() { :; }
 update_agent_status() { :; }
 octo_estimate_tokens_for_file() { printf '%s\n' 0; }
-wrap_cli_output() { printf '%s\n' "$2"; }
 write_agent_status() {
     printf '%s|%s|%s|%s|%s\n' "$1" "$2" "$5" "$7" "$8" >> "$FIXTURE_ROOT/legacy-statuses"
 }
@@ -189,6 +190,15 @@ assert_scenario exact-seat 0 1 \
 assert_scenario agy-pin 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \
     contributed eligible '' 'agy:Gemini 3.1 Pro (High)'
+
+run_fixture kimi-success kimi-research
+test_case "synchronous Kimi output crosses the real untrusted-output boundary"
+if grep -q '<external-cli-output provider="kimi-research".*trust="untrusted">' \
+       "$TEST_TMP_DIR/kimi-success/stdout"; then
+    test_pass
+else
+    test_fail "real run_agent_sync returned unwrapped Kimi output"
+fi
 assert_scenario auth-fail 1 0 planned,starting,failed failed none \
     'Provider unavailable: fixture authentication rejected'
 assert_scenario health-fail-qwen 1 0 planned,starting,failed failed none \
