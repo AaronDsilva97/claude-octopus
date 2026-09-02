@@ -116,6 +116,20 @@ if assert_contains "$output" "agy:available" "legacy gemini token should authori
     test_pass
 fi
 
+test_case "build-fleet fails closed when provider allowlist library is missing"
+missing_root="$TEST_TMP_DIR/build-fleet-missing-allowlist"
+mkdir -p "$missing_root/helpers" "$missing_root/lib"
+cp "$BUILD_FLEET" "$missing_root/helpers/build-fleet.sh"
+set +e
+missing_output=$(bash "$missing_root/helpers/build-fleet.sh" review standard "review target" 2>&1)
+missing_rc=$?
+set -e
+if [[ "$missing_rc" -ne 0 ]] && [[ "$missing_output" == *"required provider allowlist library"* ]]; then
+    test_pass
+else
+    test_fail "build-fleet did not fail closed without provider-allowlist.sh: rc=$missing_rc output=$missing_output"
+fi
+
 test_case "build-fleet excludes disallowed providers"
 fleet=$(PATH="$mock_bin:/usr/bin:/bin" OCTO_ALLOWED_PROVIDERS="claude gemini" "$BUILD_FLEET" review standard "review target" 2>/dev/null)
 if assert_contains "$fleet" "agy|" "legacy gemini token should make AGY eligible" &&

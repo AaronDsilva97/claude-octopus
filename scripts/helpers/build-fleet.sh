@@ -19,8 +19,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-source "${SCRIPT_DIR}/../lib/cursor-agent.sh" 2>/dev/null || true
-source "${SCRIPT_DIR}/../lib/provider-allowlist.sh" 2>/dev/null || true
+PROVIDER_ALLOWLIST_LIB="${SCRIPT_DIR}/../lib/provider-allowlist.sh"
+if [[ ! -r "$PROVIDER_ALLOWLIST_LIB" ]]; then
+    printf 'ERROR: required provider allowlist library is not readable: %s\n' "$PROVIDER_ALLOWLIST_LIB" >&2
+    exit 1
+fi
+if ! source "$PROVIDER_ALLOWLIST_LIB"; then
+    printf 'ERROR: failed to load required provider allowlist library: %s\n' "$PROVIDER_ALLOWLIST_LIB" >&2
+    exit 1
+fi
 source "${SCRIPT_DIR}/../lib/provider-registry.sh"
 source "${SCRIPT_DIR}/../lib/provider-policy.sh"
 source "${SCRIPT_DIR}/../lib/agent-spec.sh"

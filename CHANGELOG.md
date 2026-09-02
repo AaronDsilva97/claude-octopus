@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Make review-fleet construction fail closed when the provider allowlist library cannot be loaded, and remove the unused optional cursor-agent library load.
+
 ## [10.1.0] - 2026-08-30
 
 ### Removed
