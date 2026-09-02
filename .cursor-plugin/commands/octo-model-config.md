@@ -182,7 +182,9 @@ AskUserQuestion({
 **Kimi Code example:** enter the exact alias already declared under
 `[models.<alias>]` in `$KIMI_CODE_HOME/config.toml` (default
 `~/.kimi-code/config.toml`). Run `kimi` and enter `/login` first if the selected
-provider has no configured API key or OAuth credential.
+provider has no configured API key or OAuth credential. For a legacy
+keyring-only session, launch `kimi` once with the same `KIMI_CODE_HOME` to
+migrate it to file-backed OAuth before using it through Octopus.
 
 After selection, apply the change:
 

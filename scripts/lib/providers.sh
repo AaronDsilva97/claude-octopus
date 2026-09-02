@@ -1077,7 +1077,23 @@ check_provider_health() {
             fi
             if ! declare -f kimi_configured_credential_method >/dev/null 2>&1 || \
                ! kimi_configured_credential_method >/dev/null 2>&1; then
-                echo "kimi: selected provider has no usable configured credentials (run kimi and enter /login, or update $(kimi_config_file); shell-only API keys are not read automatically)" >&2
+                case "$(kimi_credential_issue 2>/dev/null || true)" in
+                    keyring-migration-required)
+                        echo "kimi: legacy keyring session needs a one-time migration (launch kimi once with the same KIMI_CODE_HOME, then retry; if needed, enter /login again)" >&2
+                        ;;
+                    config-invalid)
+                        echo "kimi: invalid config (repair $(kimi_config_file); a complete default model and selected provider mapping are required)" >&2
+                        ;;
+                    parser-unavailable)
+                        echo "kimi: config parser unavailable (reinstall or update Kimi Code so its bundled Python TOML parser is available)" >&2
+                        ;;
+                    oauth-invalid)
+                        echo "kimi: OAuth session is missing or malformed (run kimi and enter /login again)" >&2
+                        ;;
+                    *)
+                        echo "kimi: selected provider has no usable configured credentials (run kimi and enter /login, or update $(kimi_config_file); shell-only API keys are not read automatically)" >&2
+                        ;;
+                esac
                 return 1
             fi
             ;;

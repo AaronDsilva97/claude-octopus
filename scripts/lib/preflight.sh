@@ -251,8 +251,29 @@ _octo_provider_static_readiness() {
                      kimi_configured_credential_method >/dev/null 2>&1; then
                     status="available"; reason_code="ready"; remediation=""
                 else
-                    status="degraded"; reason_code="auth-missing"
-                    remediation="Run kimi and enter /login, or configure credentials on the selected provider in ${kimi_config_path}. Shell-only API keys are not read automatically."
+                    status="degraded"
+                    case "$(kimi_credential_issue 2>/dev/null || true)" in
+                        keyring-migration-required)
+                            reason_code="auth-migration-required"
+                            remediation="Kimi's legacy keyring session needs a one-time migration. Launch kimi once with the same KIMI_CODE_HOME, then retry; if migration cannot complete, enter /login again."
+                            ;;
+                        config-invalid)
+                            reason_code="config-invalid"
+                            remediation="Repair ${kimi_config_path}; Kimi requires valid TOML with a complete default model and selected provider mapping."
+                            ;;
+                        parser-unavailable)
+                            reason_code="config-parser-unavailable"
+                            remediation="Reinstall or update Kimi Code so its bundled Python TOML parser is available, then retry."
+                            ;;
+                        oauth-invalid)
+                            reason_code="auth-invalid"
+                            remediation="The OAuth session referenced by ${kimi_config_path} is missing or malformed. Run kimi and enter /login again."
+                            ;;
+                        *)
+                            reason_code="auth-missing"
+                            remediation="Run kimi and enter /login, or configure credentials on the selected provider in ${kimi_config_path}. Shell-only API keys are not read automatically."
+                            ;;
+                    esac
                 fi
             fi
             ;;

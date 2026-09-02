@@ -63,209 +63,64 @@ kimi_config_file(){
     printf '%s/config.toml\n' "$(kimi_data_root)"
 }
 
-# Parse only the credential-bearing subset of Kimi Code's TOML contract. The
-# parser follows default_model -> models.<alias>.provider -> providers.<name>
-# and emits a method label, never a credential value. Unsupported TOML shapes
-# fail closed and are left to the CLI's actionable startup diagnostics.
+_kimi_config_python(){
+    local binary shebang interpreter env_name
+    if [[ -n "${_OCTO_KIMI_CONFIG_PYTHON:-}" ]]; then
+        interpreter="$_OCTO_KIMI_CONFIG_PYTHON"
+    else
+        binary="$(command -v kimi 2>/dev/null)" || return 1
+        [[ -f "$binary" ]] || return 1
+        IFS= read -r shebang < "$binary" || return 1
+        case "$shebang" in
+            '#!/usr/bin/env '*)
+                env_name="${shebang#\#!/usr/bin/env }"
+                env_name="${env_name#-S }"
+                env_name="${env_name%% *}"
+                interpreter="$(command -v "$env_name" 2>/dev/null)" || return 1
+                ;;
+            '#!'*)
+                interpreter="${shebang#\#!}"
+                interpreter="${interpreter%% *}"
+                ;;
+            *) return 1 ;;
+        esac
+    fi
+    [[ -x "$interpreter" ]] || return 1
+    "$interpreter" -c 'import tomllib' >/dev/null 2>&1 || return 1
+    printf '%s\n' "$interpreter"
+}
+
+_kimi_run_config_check(){
+    local interpreter lib_dir helper
+    interpreter="$(_kimi_config_python)" || return 1
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
+    helper="${lib_dir}/../helpers/kimi-config-check.py"
+    [[ -r "$helper" ]] || return 1
+    "$interpreter" "$helper" "$@" 2>/dev/null
+}
+
+# Parse the complete TOML document, then emit only a credential method label.
+# The parser runtime comes from Kimi's own launcher; no ambient Python is a
+# provider dependency. Missing or unusable parser runtimes fail closed.
 _kimi_config_credential_record(){
     local config
     config="$(kimi_config_file)"
     [[ -f "$config" ]] || return 1
-
-    awk '
-        function trim(value) {
-            sub(/^[ \t\r\n]+/, "", value)
-            sub(/[ \t\r\n]+$/, "", value)
-            return value
-        }
-        function string_value(line, value, quote, i, char, escaped, tail) {
-            string_ok = 0
-            sub(/^[^=]*=/, "", line)
-            value = trim(line)
-            quote = substr(value, 1, 1)
-            if (quote != "\"" && quote != "\047") return ""
-            escaped = 0
-            for (i = 2; i <= length(value); i++) {
-                char = substr(value, i, 1)
-                if (quote == "\"" && char == "\\" && !escaped) {
-                    escaped = 1
-                    continue
-                }
-                if (char == quote && !escaped) {
-                    tail = trim(substr(value, i + 1))
-                    if (tail != "" && substr(tail, 1, 1) != "#") return ""
-                    string_ok = 1
-                    return substr(value, 2, i - 2)
-                }
-                escaped = 0
-            }
-            return ""
-        }
-        function positive_integer(line, value) {
-            integer_ok = 0
-            sub(/^[^=]*=/, "", line)
-            value = trim(line)
-            sub(/[ \t]+#.*/, "", value)
-            value = trim(value)
-            if (value !~ /^[0-9]+$/ || value + 0 < 1) return ""
-            integer_ok = 1
-            return value
-        }
-        function first_component(value, rest, end) {
-            rest = trim(value)
-            if (substr(rest, 1, 1) == "\"") {
-                rest = substr(rest, 2)
-                end = index(rest, "\"")
-                if (end == 0) return ""
-                return substr(rest, 1, end - 1)
-            }
-            sub(/\..*$/, "", rest)
-            return rest
-        }
-        function component_suffix(value, rest, end) {
-            rest = trim(value)
-            if (substr(rest, 1, 1) == "\"") {
-                rest = substr(rest, 2)
-                end = index(rest, "\"")
-                if (end == 0) return "invalid"
-                rest = substr(rest, end + 1)
-            } else {
-                sub(/^[^.]+/, "", rest)
-            }
-            sub(/^\./, "", rest)
-            return rest
-        }
-        /^[ \t]*#/ || /^[ \t]*$/ { next }
-        /^[ \t]*\[\[/ {
-            header = trim($0)
-            if (header !~ /^\[\[[^]]+\]\][ \t]*(#.*)?$/) invalid = 1
-            kind = "other"; name = ""; suffix = ""
-            next
-        }
-        /^[ \t]*\[/ {
-            header = trim($0)
-            if (header !~ /^\[[^]]+\][ \t]*(#.*)?$/) { invalid = 1; next }
-            sub(/^\[/, "", header)
-            sub(/\][ \t]*(#.*)?$/, "", header)
-            if (table_seen[header]++) invalid = 1
-            kind = "other"; name = ""; suffix = ""
-            if (index(header, "models.") == 1) {
-                rest = substr(header, 8)
-                kind = "model"
-                name = first_component(rest)
-                suffix = component_suffix(rest)
-            } else if (index(header, "providers.") == 1) {
-                rest = substr(header, 11)
-                kind = "provider"
-                name = first_component(rest)
-                suffix = component_suffix(rest)
-            }
-            next
-        }
-        kind == "" && /^[ \t]*default_model[ \t]*=/ {
-            if (default_seen++) invalid = 1
-            default_model = string_value($0)
-            if (!string_ok || default_model == "") invalid = 1
-            next
-        }
-        kind == "model" && suffix == "" && /^[ \t]*provider[ \t]*=/ {
-            if (model_provider_seen[name]++) invalid = 1
-            model_provider[name] = string_value($0)
-            if (!string_ok || model_provider[name] == "") invalid = 1
-            next
-        }
-        kind == "model" && suffix == "" && /^[ \t]*model[ \t]*=/ {
-            if (model_id_seen[name]++) invalid = 1
-            model_id[name] = string_value($0)
-            if (!string_ok || model_id[name] == "") invalid = 1
-            next
-        }
-        kind == "model" && suffix == "" && /^[ \t]*max_context_size[ \t]*=/ {
-            if (model_context_seen[name]++) invalid = 1
-            model_context[name] = positive_integer($0)
-            if (!integer_ok) invalid = 1
-            next
-        }
-        kind == "provider" && suffix == "" && /^[ \t]*type[ \t]*=/ {
-            if (provider_type_seen[name]++) invalid = 1
-            provider_type[name] = string_value($0)
-            if (!string_ok || provider_type[name] == "") invalid = 1
-            next
-        }
-        kind == "provider" && suffix == "" && /^[ \t]*api_key[ \t]*=/ {
-            if (direct_key_seen[name]++) invalid = 1
-            value = string_value($0)
-            if (!string_ok) invalid = 1
-            if (value != "") direct_key[name] = 1
-            next
-        }
-        kind == "provider" && suffix == "env" && /^[ \t]*[A-Za-z_][A-Za-z0-9_]*_API_KEY[ \t]*=/ {
-            key = $0
-            sub(/^[ \t]*/, "", key)
-            sub(/[ \t]*=.*/, "", key)
-            if (env_key_seen[name, key]++) invalid = 1
-            value = string_value($0)
-            if (!string_ok) invalid = 1
-            if (value != "") env_key[name, key] = 1
-            next
-        }
-        kind == "provider" && suffix == "oauth" && /^[ \t]*storage[ \t]*=/ {
-            if (oauth_storage_seen[name]++) invalid = 1
-            oauth_storage[name] = string_value($0)
-            if (!string_ok || oauth_storage[name] == "") invalid = 1
-            next
-        }
-        kind == "provider" && suffix == "oauth" && /^[ \t]*key[ \t]*=/ {
-            if (oauth_key_seen[name]++) invalid = 1
-            oauth_key[name] = string_value($0)
-            if (!string_ok || oauth_key[name] == "") invalid = 1
-            next
-        }
-        END {
-            if (invalid || default_model == "") exit 1
-            provider = model_provider[default_model]
-            if (provider == "" || model_id[default_model] == "" || model_context[default_model] == "") exit 1
-            type = provider_type[provider]
-            if (type != "kimi" && type != "anthropic" && type != "openai" &&
-                type != "openai_responses" && type != "google-genai" && type != "vertexai") exit 1
-            if (direct_key[provider]) { print "config:api-key"; exit 0 }
-            if ((type == "kimi" && env_key[provider, "KIMI_API_KEY"]) ||
-                (type == "anthropic" && env_key[provider, "ANTHROPIC_API_KEY"]) ||
-                ((type == "openai" || type == "openai_responses") && env_key[provider, "OPENAI_API_KEY"]) ||
-                (type == "google-genai" && env_key[provider, "GOOGLE_API_KEY"]) ||
-                (type == "vertexai" && (env_key[provider, "GOOGLE_API_KEY"] || env_key[provider, "VERTEXAI_API_KEY"]))) {
-                print "config:env"
-                exit 0
-            }
-            if (oauth_storage[provider] == "file" && oauth_key[provider] != "") {
-                print "oauth-file:" oauth_key[provider]
-                exit 0
-            }
-            if (oauth_storage[provider] == "keyring" && oauth_key[provider] != "") {
-                print "oauth-keyring:" oauth_key[provider]
-                exit 0
-            }
-            exit 1
-        }
-    ' "$config"
+    _kimi_run_config_check config-record "$config"
 }
 
 _kimi_oauth_file_exists(){
-    local key="$1" storage_name
-    case "$key" in
-        kimi-code|oauth/kimi-code) storage_name="kimi-code" ;;
-        oauth/*) storage_name="${key#oauth/}" ;;
-        *) storage_name="$key" ;;
-    esac
+    local storage_name="$1"
     [[ -n "$storage_name" && "$storage_name" != */* && "$storage_name" != .* ]] || return 1
-    [[ -s "$(kimi_data_root)/credentials/${storage_name}.json" ]]
+    _kimi_run_config_check oauth-file-valid \
+        "$(kimi_data_root)/credentials/${storage_name}.json"
 }
 
 kimi_configured_credential_method(){
     local record
     record="$(_kimi_config_credential_record 2>/dev/null)" || return 1
     case "$record" in
-        config:api-key|config:env) printf '%s\n' "$record" ;;
+        config:api-key) printf '%s\n' "$record" ;;
         oauth-file:*)
             _kimi_oauth_file_exists "${record#oauth-file:}" || return 1
             printf '%s\n' "kimi-session"
@@ -277,6 +132,31 @@ kimi_configured_credential_method(){
             printf '%s\n' "kimi-session"
             ;;
         *) return 1 ;;
+    esac
+}
+
+kimi_credential_issue(){
+    local record
+    record="$(_kimi_config_credential_record 2>/dev/null)" || {
+        if _kimi_config_python >/dev/null 2>&1; then
+            printf '%s\n' "config-invalid"
+        else
+            printf '%s\n' "parser-unavailable"
+        fi
+        return 0
+    }
+    case "$record" in
+        oauth-keyring:*)
+            if ! _kimi_oauth_file_exists "${record#oauth-keyring:}"; then
+                printf '%s\n' "keyring-migration-required"
+            fi
+            ;;
+        oauth-file:*)
+            if ! _kimi_oauth_file_exists "${record#oauth-file:}"; then
+                printf '%s\n' "oauth-invalid"
+            fi
+            ;;
+        none) printf '%s\n' "auth-missing" ;;
     esac
 }
 

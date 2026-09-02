@@ -31,6 +31,11 @@ source "$PROJECT_ROOT/scripts/lib/parallel.sh" 2>/dev/null || true
 
 test_suite "Moonshot Kimi Code CLI Provider"
 
+# Production discovers the Python runtime bundled with the installed Kimi Code
+# launcher. Unit fixtures replace that launcher with shell mocks, so point the
+# parser at the test runner's Python explicitly.
+export _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
+
 # Stub log() — kimi.sh/model-resolver.sh call it outside orchestrate.sh.
 log() { :; }
 
@@ -140,7 +145,7 @@ test_kimi_env_isolation() {
 
 test_kimi_config_credentials() {
     test_case "readiness follows default model to provider api_key in config.toml"
-    local tmp_bin old_path old_home old_root old_key had_root had_key auth rc
+    local tmp_bin old_path old_home old_root old_key had_root had_key auth rc rc_whitespace
     tmp_bin="$TEST_TMP_DIR/kimi-bin-config-auth"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
     old_path="$PATH"; old_home="$HOME"; old_root="${KIMI_CODE_HOME-}"; old_key="${MOONSHOT_API_KEY-}"
@@ -156,23 +161,62 @@ model = "k3"
 max_context_size = 1048576
 [providers."managed:kimi-code"]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
     rc=0; kimi_is_available >/dev/null 2>&1 || rc=$?
     auth="$(kimi_auth_method)"
+    sed 's/fixture-not-a-secret/   /' "$HOME/.kimi-code/config.toml" > "$HOME/.kimi-code/config.next"
+    mv "$HOME/.kimi-code/config.next" "$HOME/.kimi-code/config.toml"
+    rc_whitespace=0
+    kimi_is_available >/dev/null 2>&1 || rc_whitespace=$?
     PATH="$old_path"; HOME="$old_home"
     if [[ "$had_root" == set ]]; then KIMI_CODE_HOME="$old_root"; else unset KIMI_CODE_HOME; fi
     _kimi_restore_key "$had_key" "$old_key"
-    if [[ "$rc" -eq 0 && "$auth" == "config:api-key" ]]; then
+    if [[ "$rc" -eq 0 && "$auth" == "config:api-key" && "$rc_whitespace" -ne 0 ]]; then
         test_pass
     else
-        test_fail "expected config-backed readiness and config:api-key, got rc=$rc auth=$auth"
+        test_fail "expected config-backed readiness and config:api-key, got rc=$rc auth=$auth whitespace=$rc_whitespace"
     fi
 }
 
-test_kimi_config_env_credentials() {
-    test_case "provider-local env table credentials are parsed without shell export"
+test_kimi_discovers_bundled_parser_from_launcher() {
+    test_case "config validation discovers Python from the Kimi launcher"
+    local tmp_bin root old_path python method rc
+    local _OCTO_KIMI_CONFIG_PYTHON=""
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-parser-discovery"
+    root="$TEST_TMP_DIR/kimi-parser-discovery"
+    python="$(command -v python3)"
+    mkdir -p "$tmp_bin" "$root"
+    printf '#!%s\nraise SystemExit(0)\n' "$python" > "$tmp_bin/kimi"
+    chmod +x "$tmp_bin/kimi"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    old_path="$PATH"
+    PATH="$tmp_bin:$PATH"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    rc=0
+    method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc=$?
+    PATH="$old_path"
+    if [[ "$rc" -eq 0 && "$method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected launcher-derived parser readiness, got rc=$rc method=$method"
+    fi
+}
+
+test_kimi_config_env_is_not_credential() {
+    test_case "provider-local env does not masquerade as a Kimi credential"
     local tmp_bin old_path old_home auth rc
     tmp_bin="$TEST_TMP_DIR/kimi-bin-config-env"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
@@ -187,6 +231,7 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = ""
 [providers.kimi.env]
 KIMI_API_KEY = "fixture-not-a-secret"
@@ -195,16 +240,17 @@ TOML
     rc=0; kimi_is_available >/dev/null 2>&1 || rc=$?
     auth="$(kimi_auth_method)"
     PATH="$old_path"; HOME="$old_home"
-    if [[ "$rc" -eq 0 && "$auth" == "config:env" ]]; then
+    if [[ "$rc" -ne 0 && "$auth" == "none" ]]; then
         test_pass
     else
-        test_fail "expected provider-local env readiness, got rc=$rc auth=$auth"
+        test_fail "expected provider-local env to remain unauthenticated, got rc=$rc auth=$auth"
     fi
 }
 
 test_kimi_rejects_incomplete_selected_records() {
-    test_case "readiness rejects incomplete selected model and provider records"
+    test_case "readiness rejects schema-invalid selected model and provider records"
     local root rc_missing_type rc_missing_model rc_missing_context
+    local rc_missing_base_url rc_missing_api_key rc_invalid_type
     root="$TEST_TMP_DIR/kimi-incomplete-records"
     mkdir -p "$root"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
@@ -216,6 +262,7 @@ provider = "kimi"
 model = "k3"
 max_context_size = 1048576
 [providers.kimi]
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc_missing_type=0
@@ -228,6 +275,7 @@ provider = "kimi"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc_missing_model=0
@@ -240,20 +288,63 @@ provider = "kimi"
 model = "k3"
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc_missing_context=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_missing_context=$?
 
-    if [[ "$rc_missing_type" -ne 0 && "$rc_missing_model" -ne 0 && "$rc_missing_context" -ne 0 ]]; then
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_missing_base_url=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_missing_base_url=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+TOML
+    rc_missing_api_key=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_missing_api_key=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "openai"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_invalid_type=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_invalid_type=$?
+
+    if [[ "$rc_missing_type" -ne 0 && "$rc_missing_model" -ne 0 && \
+          "$rc_missing_context" -ne 0 && "$rc_missing_base_url" -ne 0 && \
+          "$rc_missing_api_key" -ne 0 && "$rc_invalid_type" -ne 0 ]]; then
         test_pass
     else
-        test_fail "expected incomplete records to fail, got type=$rc_missing_type model=$rc_missing_model context=$rc_missing_context"
+        test_fail "expected invalid records to fail, got type=$rc_missing_type model=$rc_missing_model context=$rc_missing_context base-url=$rc_missing_base_url api-key=$rc_missing_api_key provider-type=$rc_invalid_type"
     fi
 }
 
-test_kimi_rejects_wrong_provider_env_key() {
-    test_case "provider-local env authentication is restricted by provider type"
+test_kimi_rejects_provider_env_credentials() {
+    test_case "provider-local env is not treated as Kimi or OpenAI authentication"
     local root rc_unrelated rc_kimi rc_openai_wrong rc_openai
     root="$TEST_TMP_DIR/kimi-provider-env-key"
     mkdir -p "$root"
@@ -267,6 +358,8 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = ""
 [providers.kimi.env]
 UNRELATED_API_KEY = "fixture-not-a-secret"
 TOML
@@ -278,7 +371,7 @@ TOML
     rc_kimi=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_kimi=$?
 
-    sed 's/type = "kimi"/type = "openai"/' "$root/config.toml" > "$root/config.next"
+    sed 's/type = "kimi"/type = "openai_legacy"/' "$root/config.toml" > "$root/config.next"
     mv "$root/config.next" "$root/config.toml"
     rc_openai_wrong=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_openai_wrong=$?
@@ -288,19 +381,22 @@ TOML
     rc_openai=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_openai=$?
 
-    if [[ "$rc_unrelated" -ne 0 && "$rc_kimi" -eq 0 &&
-          "$rc_openai_wrong" -ne 0 && "$rc_openai" -eq 0 ]]; then
+    if [[ "$rc_unrelated" -ne 0 && "$rc_kimi" -ne 0 &&
+          "$rc_openai_wrong" -ne 0 && "$rc_openai" -ne 0 ]]; then
         test_pass
     else
-        test_fail "expected type-specific env keys, got unrelated=$rc_unrelated kimi=$rc_kimi openai-wrong=$rc_openai_wrong openai=$rc_openai"
+        test_fail "expected config env values to remain unauthenticated, got unrelated=$rc_unrelated kimi=$rc_kimi openai-wrong=$rc_openai_wrong openai=$rc_openai"
     fi
 }
 
 test_kimi_rejects_malformed_or_duplicate_toml() {
     test_case "readiness fails closed on malformed and duplicate TOML assignments"
-    local root rc_bare rc_boolean rc_trailing rc_duplicate
+    local root rc_bare rc_boolean rc_trailing rc_duplicate rc_document
+    local rc_quoted_duplicate rc_table_duplicate rc_parser_missing parser_issue
+    local _OCTO_KIMI_CONFIG_PYTHON
     root="$TEST_TMP_DIR/kimi-malformed-config"
     mkdir -p "$root"
+    _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
 
     cat > "$root/config.toml" <<'TOML'
@@ -311,6 +407,7 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = fixture-not-a-secret
 TOML
     rc_bare=0
@@ -332,8 +429,75 @@ TOML
     rc_duplicate=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_duplicate=$?
 
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+this is not valid TOML
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_document=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_document=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+"default_model" = "other"
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_quoted_duplicate=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_quoted_duplicate=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "kimi"
+[models."custom"]
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_table_duplicate=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_table_duplicate=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    _OCTO_KIMI_CONFIG_PYTHON="$root/does-not-exist"
+    rc_parser_missing=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_parser_missing=$?
+    parser_issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+
     if [[ "$rc_bare" -ne 0 && "$rc_boolean" -ne 0 && "$rc_trailing" -ne 0 && "$rc_duplicate" -ne 0 ]]; then
-        test_pass
+        if [[ "$rc_document" -ne 0 && "$rc_quoted_duplicate" -ne 0 && \
+              "$rc_table_duplicate" -ne 0 && "$rc_parser_missing" -ne 0 && \
+              "$parser_issue" == "parser-unavailable" ]]; then
+            test_pass
+        else
+            test_fail "expected full-document and parser fail-closed rejection, got document=$rc_document quoted=$rc_quoted_duplicate table=$rc_table_duplicate parser=$rc_parser_missing issue=$parser_issue"
+        fi
     else
         test_fail "expected malformed config rejection, got bare=$rc_bare boolean=$rc_boolean trailing=$rc_trailing duplicate=$rc_duplicate"
     fi
@@ -353,6 +517,7 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 [[hooks]]
 event = "PreToolUse"
@@ -388,15 +553,16 @@ model = "k3"
 max_context_size = 1048576
 [providers."managed:kimi-code"]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = ""
 [providers."managed:kimi-code".oauth]
 storage = "file"
 key = "oauth/kimi-code"
 TOML
-    printf '%s\n' '{"fixture":"present"}' > "$KIMI_CODE_HOME/credentials/oauth/kimi-code.json"
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$KIMI_CODE_HOME/credentials/oauth/kimi-code.json"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
     rc_nested=0; kimi_is_available >/dev/null 2>&1 || rc_nested=$?
-    printf '%s\n' '{"fixture":"present"}' > "$KIMI_CODE_HOME/credentials/kimi-code.json"
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$KIMI_CODE_HOME/credentials/kimi-code.json"
     rc_flat=0; kimi_is_available >/dev/null 2>&1 || rc_flat=$?
     auth="$(kimi_auth_method)"
     PATH="$old_path"; HOME="$old_home"
@@ -408,11 +574,77 @@ TOML
     fi
 }
 
+test_kimi_oauth_requires_usable_json_object() {
+    test_case "OAuth readiness requires a readable usable token object without exposing it"
+    local root rc_unreadable rc_invalid rc_array rc_empty rc_partial rc_whitespace
+    local rc_bad_expiry rc_valid method issue_invalid
+    local _OCTO_KIMI_CONFIG_PYTHON
+    root="$TEST_TMP_DIR/kimi-oauth-validation"
+    mkdir -p "$root/credentials"
+    _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "managed:kimi-code"
+model = "k3"
+max_context_size = 1048576
+[providers."managed:kimi-code"]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = ""
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code"
+TOML
+
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/kimi-code.json"
+    chmod 000 "$root/credentials/kimi-code.json"
+    rc_unreadable=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_unreadable=$?
+    chmod 600 "$root/credentials/kimi-code.json"
+    printf '%s\n' 'not-json' > "$root/credentials/kimi-code.json"
+    rc_invalid=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_invalid=$?
+    issue_invalid="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+    printf '%s\n' '[]' > "$root/credentials/kimi-code.json"
+    rc_array=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_array=$?
+    printf '%s\n' '{}' > "$root/credentials/kimi-code.json"
+    rc_empty=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_empty=$?
+    printf '%s\n' '{"access_token":"PR987_TOKEN_SENTINEL"}' > "$root/credentials/kimi-code.json"
+    rc_partial=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_partial=$?
+    printf '%s\n' '{"access_token":"   ","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/kimi-code.json"
+    rc_whitespace=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_whitespace=$?
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":"not-a-number","scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/kimi-code.json"
+    rc_bad_expiry=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_bad_expiry=$?
+    printf '%s\n' '{"access_token":"PR987_TOKEN_SENTINEL","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/kimi-code.json"
+    rc_valid=0
+    method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc_valid=$?
+
+    if [[ "$rc_unreadable" -ne 0 && "$rc_invalid" -ne 0 && \
+          "$issue_invalid" == "oauth-invalid" && "$rc_array" -ne 0 && \
+          "$rc_empty" -ne 0 && "$rc_partial" -ne 0 && \
+          "$rc_whitespace" -ne 0 && "$rc_bad_expiry" -ne 0 && "$rc_valid" -eq 0 && \
+          "$method" == "kimi-session" && \
+          "$method" != *PR987_TOKEN_SENTINEL* ]]; then
+        test_pass
+    else
+        test_fail "expected OAuth object validation, got unreadable=$rc_unreadable invalid=$rc_invalid issue=$issue_invalid array=$rc_array empty=$rc_empty partial=$rc_partial whitespace=$rc_whitespace expiry=$rc_bad_expiry valid=$rc_valid method=$method"
+    fi
+}
+
 test_kimi_keyring_reference_requires_migrated_file() {
     test_case "a keyring OAuth declaration is not readiness without a migrated token file"
-    local root rc_missing rc_file method
+    local root rc_missing rc_file method issue readiness health health_rc
+    local _OCTO_KIMI_CONFIG_PYTHON
     root="$TEST_TMP_DIR/kimi-keyring-oauth"
     mkdir -p "$root/credentials"
+    _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
     cat > "$root/config.toml" <<'TOML'
 default_model = "custom"
@@ -422,19 +654,36 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = ""
 [providers.kimi.oauth]
 storage = "keyring"
 key = "oauth/kimi-code"
 TOML
     rc_missing=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_missing=$?
-    printf '%s\n' '{"fixture":"present"}' > "$root/credentials/kimi-code.json"
+    issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+    readiness="$(PROJECT_ROOT="$PROJECT_ROOT" KIMI_CODE_HOME="$root" \
+        _OCTO_KIMI_CONFIG_PYTHON="$_OCTO_KIMI_CONFIG_PYTHON" /bin/bash -c '
+            source "$PROJECT_ROOT/scripts/lib/preflight.sh"
+            _octo_provider_static_readiness kimi
+        ')"
+    health_rc=0
+    health="$(PROJECT_ROOT="$PROJECT_ROOT" KIMI_CODE_HOME="$root" \
+        _OCTO_KIMI_CONFIG_PYTHON="$_OCTO_KIMI_CONFIG_PYTHON" /bin/bash -c '
+            source "$PROJECT_ROOT/scripts/lib/providers.sh"
+            check_provider_health kimi
+        ' 2>&1)" || health_rc=$?
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/kimi-code.json"
     rc_file=0
     method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc_file=$?
-    if [[ "$rc_missing" -ne 0 && "$rc_file" -eq 0 && "$method" == "kimi-session" ]]; then
+    if [[ "$rc_missing" -ne 0 && "$issue" == "keyring-migration-required" && \
+          "$readiness" == degraded\|auth-migration-required\|*"one-time migration"* && \
+          "$health_rc" -ne 0 && "$health" == *"one-time migration"* && \
+          "$rc_file" -eq 0 && "$method" == "kimi-session" ]]; then
         test_pass
     else
-        test_fail "expected keyring declaration to require the migrated file, got missing=$rc_missing file=$rc_file method=$method"
+        test_fail "expected actionable keyring migration state, got missing=$rc_missing issue=$issue readiness=$readiness health_rc=$health_rc health=$health file=$rc_file method=$method"
     fi
 }
 
@@ -454,6 +703,7 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = ""
 TOML
     MOONSHOT_API_KEY="ambient-fixture-value"
@@ -482,6 +732,7 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     output="$(HOME="$home" PATH="$tmp_bin:$PATH" OCTO_ALLOWED_PROVIDERS=kimi /bin/bash -c '
@@ -521,6 +772,7 @@ model = "k3"
 max_context_size = 1048576
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc=0
@@ -568,6 +820,8 @@ test_kimi_user_guidance_contracts() {
        grep -q 'OCTOPUS_KIMI_MODEL' "$PROJECT_ROOT/scripts/helpers/octo-model-config.sh" && \
        grep -q 'printf "kimi:%s' "$PROJECT_ROOT/commands/model-config.md" && \
        grep -q 'Kimi Code integration' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
+       grep -q 'bundled Python runtime' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
+       grep -q 'one-time migration' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
        grep -q 'Kimi Code CLI' "$PROJECT_ROOT/scripts/sync-readme.py"; then
         test_pass
     else
@@ -952,6 +1206,7 @@ model = "kimi-k2.5"
 max_context_size = 262144
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc_default=0; kimi_is_available >/dev/null 2>&1 || rc_default=$?
@@ -987,6 +1242,7 @@ model = "kimi-k2.5"
 max_context_size = 262144
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc_set=0; kimi_is_available >/dev/null 2>&1 || rc_set=$?
@@ -1046,6 +1302,7 @@ model = "kimi-k2.5"
 max_context_size = 262144
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     rc_ready=0; kimi_is_available >/dev/null 2>&1 || rc_ready=$?
@@ -1061,6 +1318,7 @@ model = "kimi-k2.5"
 max_context_size = 262144
 [providers.kimi]
 type = "kimi"
+base_url = "https://fixture.invalid/v1"
 api_key = ""
 TOML
     rc_noauth=0; kimi_is_available >/dev/null 2>&1 || rc_noauth=$?
@@ -1113,12 +1371,14 @@ test_kimi_dispatch_shim
 test_kimi_dispatch_wires_model
 test_kimi_env_isolation
 test_kimi_config_credentials
-test_kimi_config_env_credentials
+test_kimi_discovers_bundled_parser_from_launcher
+test_kimi_config_env_is_not_credential
 test_kimi_rejects_incomplete_selected_records
-test_kimi_rejects_wrong_provider_env_key
+test_kimi_rejects_provider_env_credentials
 test_kimi_rejects_malformed_or_duplicate_toml
 test_kimi_accepts_unrelated_array_tables
 test_kimi_custom_root_oauth
+test_kimi_oauth_requires_usable_json_object
 test_kimi_keyring_reference_requires_migrated_file
 test_kimi_ambient_key_is_not_auth
 test_kimi_static_preflight_uses_config
