@@ -17,6 +17,7 @@ _council_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_council_registry_dir}/agent-spec.sh" 2>/dev/null || true
 source "${_council_registry_dir}/provider-registry.sh" 2>/dev/null || true
 source "${_council_registry_dir}/provider-policy.sh" 2>/dev/null || true
+source "${_council_registry_dir}/session-id.sh" 2>/dev/null || true
 COUNCIL_PROVIDER_POLICY_VALID="true"
 COUNCIL_DEFAULT_PROVIDERS="$(octo_council_default_providers)" || COUNCIL_PROVIDER_POLICY_VALID="false"
 COUNCIL_MAX_COST=""
@@ -102,6 +103,7 @@ Options:
   --output-dir <path>
 
 Budget values are USD decimal numbers only, for example: 2, 2.00, 0.50.
+Default runs are isolated per session; set OCTOPUS_COUNCIL_SHARED_POOL=1 to share the default pool.
 EOF
 }
 
@@ -2869,10 +2871,45 @@ council_write_run_status() {
     return 0
 }
 
+council_session_slug() {
+    # A stable, filesystem-safe per-session key so concurrent governed sessions on
+    # one machine do not share a councils/ pool. Prefer the host session id;
+    # fall back to the worktree/cwd basename (governed sessions run one worktree
+    # each), then the pid.
+    local key
+    key="$(octo_resolve_session_id "" 2>/dev/null || true)"
+    [[ -z "$key" ]] && key="$(basename "$(pwd -P 2>/dev/null)" 2>/dev/null)"
+    # Use the stable top-level shell pid. BASHPID changes when this function is
+    # called through command substitution on Bash 4+, producing a new pool per call.
+    [[ -z "$key" || "$key" == "/" || "$key" == "." ]] && key="$$"
+    # Sanitizing alone is lossy: distinct ids that differ only in unsafe chars
+    # (e.g. "a/b" vs "a?b") would collapse to the same slug and share a pool.
+    # Append a checksum of the RAW key to disambiguate them. This is best-effort
+    # collision mitigation, not a guarantee: a real Claude session id is a UUID
+    # that fits the 48-char cap and is unique, and the cwd/pid fallbacks make a
+    # same-machine collision astronomically unlikely — but a 32-bit cksum over a
+    # capped prefix is not provably injective.
+    local safe hash
+    safe="$(printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-48)"
+    hash="$(printf '%s' "$key" | cksum | cut -d' ' -f1)"
+    printf '%s-%s' "$safe" "$hash"
+}
+
 council_create_run_dir() {
     local parent="$COUNCIL_OUTPUT_DIR"
     if [[ -z "$parent" ]]; then
         parent="${WORKSPACE_DIR:-${HOME}/.claude-octopus}/councils"
+        # Per-session isolation. Concurrent governed sessions on one machine
+        # otherwise share this single councils/ pool: a sibling session's runs
+        # then appear as "the newest run", its run-status.json misleads this
+        # session's diagnostics (the reported cross-session confusion), and
+        # foreign/duplicate dirs collide. Namespace the DEFAULT pool by a
+        # best-effort session slug so normal sessions select their own runs. An
+        # explicit --output-dir is honored unchanged; OCTOPUS_COUNCIL_SHARED_POOL=1
+        # restores the flat shared pool.
+        if [[ "${OCTOPUS_COUNCIL_SHARED_POOL:-}" != "1" ]]; then
+            parent="${parent}/session-$(council_session_slug)"
+        fi
     fi
 
     mkdir -p "$parent" || return 1

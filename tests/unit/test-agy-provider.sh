@@ -853,8 +853,10 @@ test_agy_spawn_bypasses_timeout_wrapper() {
 test_agy_sync_bypasses_timeout_wrapper() {
     test_case "sync dispatch enforces timeout wrapper for agy"
 
+    local sync_block
+    sync_block="$(sed -n '/^run_agent_sync() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/agent-sync.sh")"
     if grep -q 'agent_type.*agy' "$PROJECT_ROOT/scripts/lib/agent-sync.sh" && \
-       sed -n '/^run_agent_sync() {/,/^}/p' "$PROJECT_ROOT/scripts/lib/agent-sync.sh" | grep -q 'run_with_timeout'; then
+       [[ "$sync_block" == *"run_with_timeout"* ]]; then
         test_pass
     else
         test_fail "agent-sync.sh should wrap agy in run_with_timeout"
@@ -1048,6 +1050,7 @@ MOCK_AGY
         OCTO_ROOT="$PROJECT_ROOT" \
         OCTOPUS_AGY_MODEL='gemini-test' \
         OCTOPUS_AGY_HEALTH_TIMEOUT=1 \
+        OCTOPUS_PROVIDER_LIVE_TIMEOUT=1 \
         PATH="$tmp_bin:/usr/bin:/bin" \
             bash "$PROJECT_ROOT/scripts/doctor.sh" providers --live --json
     )"
