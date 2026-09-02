@@ -170,10 +170,11 @@ EOF
     if [[ "$child_alive" == true ]]; then kill -KILL "$child_pid" 2>/dev/null || true; fi
 
     if [[ "$rc" -eq 124 && -n "$root_pid" && -n "$child_pid" &&
-          "$root_alive" == false && "$child_alive" == false && "$elapsed_ms" -lt 20000 ]]; then
+          "$root_alive" == false && "$child_alive" == false &&
+          "$elapsed_ms" -ge 9000 && "$elapsed_ms" -lt 20000 ]]; then
         test_pass
     else
-        test_fail "expected rc=124 and a dead root/TERM-resistant child within 20s; got rc=$rc root=${root_pid:-missing}/$root_alive child=${child_pid:-missing}/$child_alive elapsed=${elapsed_ms}ms"
+        test_fail "expected rc=124, a 10s TERM grace, and dead processes within 20s; got rc=$rc root=${root_pid:-missing}/$root_alive child=${child_pid:-missing}/$child_alive elapsed=${elapsed_ms}ms"
     fi
 }
 

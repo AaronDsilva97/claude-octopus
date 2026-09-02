@@ -164,7 +164,8 @@ _run_with_timeout_preserving_process_group() {
 
             # Match timeout -k 10 semantics: give the provider subtree the full
             # 10-second TERM grace period before escalating remaining processes.
-            for _octo_i in $(seq 1 100); do
+            _octo_grace_deadline=$((SECONDS + 10))
+            while (( SECONDS < _octo_grace_deadline )); do
                 _octo_any_alive=false
                 kill -0 "$child_pid" 2>/dev/null && _octo_any_alive=true
                 for _octo_pid in "${_octo_descendants[@]}"; do
@@ -292,14 +293,17 @@ _octo_timeout_job_is_running() {
 
 _octo_timeout_stop_process_group() {
     local process_group="$1" initial_signal="$2" allow_term_grace="$3"
-    local grace_tick
+    local grace_deadline
     [[ "$process_group" =~ ^[1-9][0-9]*$ && "$process_group" != "1" ]] || return 0
 
     kill -"$initial_signal" -- "-$process_group" 2>/dev/null || true
     if [[ "$allow_term_grace" == "true" ]]; then
         # Match timeout -k 10: allow the provider group ten seconds to perform
         # normal TERM cleanup before forcing out resistant descendants.
-        for ((grace_tick=0; grace_tick<100; grace_tick++)); do
+        # Bound the grace by Bash's built-in wall clock. Counting external sleep
+        # processes can stretch a nominal ten-second grace on a busy macOS runner.
+        grace_deadline=$((SECONDS + 10))
+        while (( SECONDS < grace_deadline )); do
             _octo_timeout_process_group_exists "$process_group" || break
             sleep 0.1
         done
