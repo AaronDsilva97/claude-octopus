@@ -1011,57 +1011,135 @@ MOCK_AGY
     fi
 }
 
-test_agy_doctor_version_probe_is_bounded() {
-    test_case "AGY live doctor bounds a stalled version lookup"
+test_agy_doctor_catalog_timeout_is_bounded() {
+    test_case "AGY live doctor bounds a stalled catalog and cleans its process tree"
 
-    local tmp_bin="$TEST_TMP_DIR/agy-doctor-version-bin"
-    local tmp_home="$TEST_TMP_DIR/agy-doctor-version-home"
-    local output started elapsed
+    local tmp_bin="$TEST_TMP_DIR/agy-doctor-timeout-bin"
+    local tmp_home="$TEST_TMP_DIR/agy-doctor-timeout-home"
+    local started_marker="$TEST_TMP_DIR/agy-doctor-timeout.started"
+    local completed_marker="$TEST_TMP_DIR/agy-doctor-timeout.completed"
+    local parent_pid_marker="$TEST_TMP_DIR/agy-doctor-timeout.parent-pid"
+    local child_pid_marker="$TEST_TMP_DIR/agy-doctor-timeout.child-pid"
+    local mutation_bash_env="$TEST_TMP_DIR/agy-doctor-timeout-unbounded.bashenv"
+    local doctor_path="$tmp_bin:/usr/bin:/bin"
+    # Two seconds leaves room for a loaded macOS runner to start the fixture
+    # and publish both PIDs before the portable helper hard-kills the group.
+    local probe_timeout_secs=2
+    local timeout_upper_ms=$((probe_timeout_secs * 1000 + 14000))
+    local output="" started_ms elapsed_ms doctor_rc=0
+    local parent_pid="" child_pid="" parent_alive="no" child_alive="no"
+    local timeout_runner="" timeout_runner_path="" expected_timeout_rc=0
+    local poll_attempt=0
     mkdir -p "$tmp_bin" "$tmp_home"
     cat > "$tmp_bin/agy" <<'MOCK_AGY'
 #!/usr/bin/env bash
-case "${1:-}" in
-    --version)
-        sleep 5
-        exit 0
-        ;;
-    models)
-        printf '%s\t%s\n' 'gemini-test' 'Gemini Test'
-        exit 0
-        ;;
-esac
-while (( $# > 0 )); do
-    if [[ "$1" == "--print" && $# -ge 2 ]]; then
-        printf '%s\n' 'OCTOPUS_AGY_HEALTH_OK'
-        printf '%s\n' 'LOCAL_PROVIDER_DISPATCH_WORKS'
-        exit 0
+if [[ "${1:-}" == "models" ]]; then
+    if [[ ! -e "${AGY_DOCTOR_TIMEOUT_STARTED:?}" ]]; then
+        : > "$AGY_DOCTOR_TIMEOUT_STARTED"
+        printf '%s\n' "$$" > "${AGY_DOCTOR_TIMEOUT_PARENT_PID:?}"
+        trap '' TERM
+        sleep 20 &
+        printf '%s\n' "$!" > "${AGY_DOCTOR_TIMEOUT_CHILD_PID:?}"
+        wait "$!"
+        : > "${AGY_DOCTOR_TIMEOUT_COMPLETED:?}"
     fi
-    shift
-done
+    printf '%s\t%s\n' 'gemini-test' 'Gemini Test'
+    exit 0
+fi
 exit 2
 MOCK_AGY
     chmod +x "$tmp_bin/agy"
 
-    # Keep the wall-clock assertion scoped to the mocked AGY provider. Host
-    # CLIs can add unrelated live/auth work to the full doctor invocation.
-    started=$(date +%s)
+    # Mutation seam for proving that this regression test rejects an unbounded
+    # doctor path. It affects only this test fixture; production has no bypass.
+    cat > "$mutation_bash_env" <<'UNBOUNDED_BASH_ENV'
+unset BASH_ENV
+source "${OCTO_ROOT:?}/scripts/lib/providers.sh"
+_octo_run_bare_probe_with_timeout() {
+    shift 3
+    "$@"
+}
+UNBOUNDED_BASH_ENV
+
+    # The fixture PATH selects GNU timeout on Ubuntu and the Perl fallback on
+    # macOS. Measure an external runner's hard-kill status instead of assuming
+    # that every timeout implementation reports it alike.
+    if timeout_runner_path="$(PATH="$doctor_path" command -v gtimeout 2>/dev/null)"; then
+        timeout_runner="gtimeout:$timeout_runner_path"
+    elif timeout_runner_path="$(PATH="$doctor_path" command -v timeout 2>/dev/null)"; then
+        timeout_runner="timeout:$timeout_runner_path"
+    elif PATH="$doctor_path" command -v setsid >/dev/null 2>&1; then
+        timeout_runner="portable-setsid"
+        expected_timeout_rc=137
+    elif PATH="$doctor_path" command -v perl >/dev/null 2>&1; then
+        timeout_runner="portable-perl"
+        expected_timeout_rc=137
+    else
+        timeout_runner="unavailable"
+    fi
+    if [[ -n "$timeout_runner_path" ]]; then
+        /bin/bash -c '"$1" -s KILL 1 /bin/sleep 20 >/dev/null 2>&1' \
+            _ "$timeout_runner_path" >/dev/null 2>&1 || expected_timeout_rc=$?
+    fi
+
+    started_ms="$(python3 -c 'import time; print(int(time.monotonic() * 1000))')"
     output="$(
         HOME="$tmp_home" \
         OCTO_ROOT="$PROJECT_ROOT" \
         OCTOPUS_AGY_MODEL='gemini-test' \
-        OCTOPUS_AGY_HEALTH_TIMEOUT=1 \
-        OCTOPUS_PROVIDER_LIVE_TIMEOUT=1 \
-        PATH="$tmp_bin:/usr/bin:/bin" \
+        OCTOPUS_AGY_HEALTH_TIMEOUT="$probe_timeout_secs" \
+        OCTOPUS_PROVIDER_LIVE_TIMEOUT="$probe_timeout_secs" \
+        AGY_DOCTOR_TIMEOUT_STARTED="$started_marker" \
+        AGY_DOCTOR_TIMEOUT_COMPLETED="$completed_marker" \
+        AGY_DOCTOR_TIMEOUT_PARENT_PID="$parent_pid_marker" \
+        AGY_DOCTOR_TIMEOUT_CHILD_PID="$child_pid_marker" \
+        BASH_ENV="$([[ "${OCTOPUS_TEST_AGY_DOCTOR_UNBOUNDED:-0}" == "1" ]] && \
+            printf '%s' "$mutation_bash_env")" \
+        PATH="$doctor_path" \
             bash "$PROJECT_ROOT/scripts/doctor.sh" providers --live --json
-    )"
-    elapsed=$(( $(date +%s) - started ))
+    )" || doctor_rc=$?
+    elapsed_ms=$(( $(python3 -c 'import time; print(int(time.monotonic() * 1000))') - started_ms ))
 
-    if [[ "$elapsed" -le 4 ]] && \
-       jq -e '.results[] | select(.name == "agy-live-dispatch" and .status == "pass")' \
-           <<< "$output" >/dev/null; then
+    parent_pid="$(cat "$parent_pid_marker" 2>/dev/null || true)"
+    child_pid="$(cat "$child_pid_marker" 2>/dev/null || true)"
+
+    # A killed descendant can remain briefly visible as a reparented zombie.
+    # Give the host init process a bounded chance to reap it before diagnosing
+    # a leak. The final checks still kill any genuinely surviving fixture.
+    for ((poll_attempt = 0; poll_attempt < 20; poll_attempt++)); do
+        parent_alive="no"
+        child_alive="no"
+        if [[ -n "$parent_pid" ]] && kill -0 "$parent_pid" 2>/dev/null; then
+            parent_alive="yes"
+        fi
+        if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null; then
+            child_alive="yes"
+        fi
+        [[ "$parent_alive" == "no" && "$child_alive" == "no" ]] && break
+        /bin/sleep 0.1
+    done
+    [[ "$parent_alive" == "yes" ]] && kill -KILL "$parent_pid" 2>/dev/null || true
+    [[ "$child_alive" == "yes" ]] && kill -KILL "$child_pid" 2>/dev/null || true
+
+    if [[ "$doctor_rc" -eq 0 && -e "$started_marker" && ! -e "$completed_marker" && \
+          -n "$parent_pid" && -n "$child_pid" && \
+          "$parent_alive" == "no" && "$child_alive" == "no" && \
+          ( "$expected_timeout_rc" -eq 124 || "$expected_timeout_rc" -eq 137 ) && \
+          "$elapsed_ms" -lt "$timeout_upper_ms" ]] && \
+       jq -e --arg timeout_exit "exit $expected_timeout_rc" '
+           .summary.exit_code == 0 and
+           ([.results[] | select(
+               .name == "agy-live-catalog" and
+               .status == "warn" and
+               (.message | contains($timeout_exit))
+           )] | length) == 1 and
+           ([.results[] | select(
+               .name == "agy-live-model" or .name == "agy-live-dispatch"
+           )] | length) == 0
+       ' <<< "$output" >/dev/null; then
         test_pass
     else
-        test_fail "stalled agy --version was not bounded (elapsed=${elapsed}s): $output"
+        test_fail "stalled AGY catalog did not time out cleanly: rc=$doctor_rc runner=$timeout_runner expected_timeout_rc=$expected_timeout_rc elapsed=${elapsed_ms}ms upper=${timeout_upper_ms}ms started=$([[ -e "$started_marker" ]] && echo yes || echo no) completed=$([[ -e "$completed_marker" ]] && echo yes || echo no) parent_pid=${parent_pid:-missing} parent_alive=$parent_alive child_pid=${child_pid:-missing} child_alive=$child_alive output=$output"
     fi
 }
 
@@ -1558,7 +1636,7 @@ test_agy_check_providers
 test_agy_doctor_provider_check
 test_agy_doctor_live_probe
 test_agy_doctor_auth_remediation
-test_agy_doctor_version_probe_is_bounded
+test_agy_doctor_catalog_timeout_is_bounded
 test_agy_auth_guidance_uses_real_cli_flow
 test_agy_setup_visibility
 test_agy_status_visibility
