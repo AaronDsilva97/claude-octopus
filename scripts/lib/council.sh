@@ -57,6 +57,7 @@ COUNCIL_ABORTED_FOR_COST=""
 COUNCIL_DIVERSITY_REPLACED=""
 COUNCIL_DIVERSITY_WARNING=""
 COUNCIL_TIMEOUT_WARNINGS=""
+COUNCIL_BLIND_SEATS=""
 COUNCIL_LAST_DISPATCH_TIMEOUT_PROVENANCE=""
 COUNCIL_BENCHMARK_FRESHNESS_WEIGHT=""
 COUNCIL_COST_CHECK_ESTIMATED=""
@@ -1897,7 +1898,45 @@ council_response_is_substantive() {
         return 1
     fi
 
+    # 3) A "blind" seat — a verdict returned without reading the artifact (a
+    #    refusal-only permission error / no file access) — reviewed nothing and must
+    #    never count toward the quorum. council_response_is_blind matches a strict
+    #    SUPERSET of case 2, so a reply like
+    #    "Permission denied. VERDICT: REVISE" would otherwise slip past cases 1-2 and
+    #    be scored as a substantive responder. Fold it in here so the single
+    #    substantive gate the quorum tally keys on and the advice-phase `blind` label
+    #    agree; the advice phase still re-tests is_blind to label it distinctly.
+    if council_response_is_blind "$f"; then
+        return 1
+    fi
+
     return 0
+}
+
+council_response_is_blind() {
+    # A "blind" seat returned a verdict WITHOUT reading the artifact — it was
+    # dispatched without file-read tools (e.g. permissionMode "plan") and says so.
+    # This is a specific, high-confidence subset of the non-substantive set: the
+    # provider explicitly reports it could not reach the file/permission, rather
+    # than a host self-dispatch stub. Surfacing it (vs a generic "degenerate")
+    # lets the operator switch that provider's mode/model after the FIRST blind
+    # round instead of eating several. Brevity-gated so a long real review that
+    # merely quotes such a phrase is never flagged.
+    local f="$1"
+    [[ -f "$f" ]] || return 1
+    local nlen
+    nlen="$(tr -d '[:space:]' < "$f" | wc -c | tr -d '[:space:]')"
+    (( nlen < 1600 )) || return 1
+    if grep -ciE "(cannot|could not|couldn'?t|unable to|can'?t)[[:space:]]+(access|read|open|locate|find|view|retrieve)[^.]{0,60}(file|plan|prd|diff|patch|artifact|document|spec)|no[[:space:]]+(file|read)[[:space:]]+access" "$f" >/dev/null; then
+        return 0
+    fi
+
+    # A bare permission error is only conclusive when it is the whole response,
+    # apart from an optional verdict. In review prose, the same phrase can describe
+    # code behavior or a finding and is not evidence that the reviewer was blind.
+    tr '\n' ' ' < "$f" \
+        | tr -s '[:space:]' ' ' \
+        | grep -ciE '^[[:space:]]*(permission[[:space:]-]*((is[[:space:]-]+)?denied|restriction|error)|access[[:space:]-]*((is[[:space:]-]+)?denied))[[:space:][:punct:]]*(verdict:[[:space:]]*(approve|revise|block)[[:space:][:punct:]]*)?$' >/dev/null
 }
 
 council_response_verdict() {
@@ -2013,6 +2052,17 @@ council_note_seat_timeout() {
 }${line}"
 }
 
+council_note_blind_seat() {
+    # Record a provider that returned a verdict without reading the artifact, so
+    # summary.json (blind_seats) and the end-of-run warnings name it immediately.
+    # De-duplicated so one provider blind across many rounds is listed once.
+    local provider="$1"
+    case " $COUNCIL_BLIND_SEATS " in
+        *" $provider "*) ;;
+        *) COUNCIL_BLIND_SEATS="${COUNCIL_BLIND_SEATS:+$COUNCIL_BLIND_SEATS }$provider" ;;
+    esac
+}
+
 council_chair_is_host_native() {
     # The chair can be the active host runtime (e.g. Claude Code running the
     # council). A host-native chair cannot self-dispatch, so it never produces a
@@ -2037,6 +2087,7 @@ council_run_advice_phase() {
     COUNCIL_RESPONDING_MODEL_FAMILIES=""
     COUNCIL_SEAT_RECORDS_JSON="[]"
     COUNCIL_TIMEOUT_WARNINGS=""
+    COUNCIL_BLIND_SEATS=""
     local dissenting_providers="" dissenting_model_families=""
 
     local index=0 member persona slug output_path seat mprovider mprovider_spec verdict
@@ -2100,8 +2151,15 @@ council_run_advice_phase() {
                 # A timed-out/truncated review without a final verdict is preserved
                 # for diagnosis, but cannot count as a response or approver.
                 seat_status="no-response"
+            elif council_response_is_blind "$output_path"; then
+                # Returned a verdict without reading the artifact (no file tools /
+                # permission). Label it distinctly and surface which provider, so
+                # the operator can switch its mode after ROUND ONE, not round six.
+                # Still excluded from quorum (not "responded").
+                seat_status="blind"
+                council_note_blind_seat "$mprovider"
             else
-                seat_status="degenerate"   # produced bytes but reviewed nothing (host stub / "cannot access")
+                seat_status="degenerate"   # produced bytes but reviewed nothing (host stub)
             fi
         else
             rm -f "$output_path"
@@ -2996,6 +3054,7 @@ council_write_summary_json() {
         --arg responding_providers "${COUNCIL_RESPONDING_PROVIDERS:+${COUNCIL_RESPONDING_PROVIDERS# }}" \
         --arg distinct_approving_providers "${COUNCIL_DISTINCT_APPROVING_PROVIDERS:-0}" \
         --arg approving_providers "${COUNCIL_APPROVING_PROVIDERS:-}" \
+        --arg blind_seats "${COUNCIL_BLIND_SEATS:-}" \
         --arg distinct_model_families "${COUNCIL_DISTINCT_MODEL_FAMILIES:-0}" \
         --arg responding_model_families "${COUNCIL_RESPONDING_MODEL_FAMILIES:+${COUNCIL_RESPONDING_MODEL_FAMILIES# }}" \
         --arg distinct_approving_model_families "${COUNCIL_DISTINCT_APPROVING_MODEL_FAMILIES:-0}" \
@@ -3049,6 +3108,7 @@ council_write_summary_json() {
             responding_model_families: $responding_model_families,
             distinct_approving_model_families: ($distinct_approving_model_families | tonumber),
             approving_model_families: $approving_model_families,
+            blind_seats: ($blind_seats | split(" ") | map(select(length > 0))),
             met: ($quorum_met == "true")
           },
           providers: $providers,
@@ -3131,6 +3191,10 @@ council_print_run_warnings() {
         while IFS= read -r _tw; do
             [[ -n "$_tw" ]] && echo "Council warning: $_tw"
         done <<< "$COUNCIL_TIMEOUT_WARNINGS"
+    fi
+
+    if [[ -n "${COUNCIL_BLIND_SEATS:-}" ]]; then
+        echo "Council warning: blind seat(s) returned a verdict without reading the artifact and were excluded from quorum: ${COUNCIL_BLIND_SEATS} — switch that provider's mode/model (e.g. give it file-read tools) or inline the artifact into the prompt. See summary.json quorum.blind_seats."
     fi
 }
 

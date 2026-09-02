@@ -19,6 +19,17 @@
 - Refuse Codex plugin updates from inside the Codex session using the loaded
   version. This prevents cache replacement from deleting hook and skill paths
   that remain bound to the running session.
+- Council now surfaces "blind" seats — a provider that returns a verdict without
+  reading the artifact (dispatched without file-read tools, and saying so:
+  "cannot read the files", "permission restriction"). Artifact-access failures
+  were previously reported only as generic `degenerate` responses, while
+  standalone permission or access refusals could still count as substantive and
+  enter quorum. Operators therefore discovered a silently single-vendor council
+  reactively, several ~17-minute rounds in. Blind seats now get a distinct
+  `blind` status, are listed in
+  `summary.json` under `quorum.blind_seats`, and trigger an end-of-run warning
+  naming the provider — so the seat's mode/model can be switched after the first
+  blind round. (The default per-seat dispatch mode is unchanged.)
 
 ## [10.1.0] - 2026-08-30
 

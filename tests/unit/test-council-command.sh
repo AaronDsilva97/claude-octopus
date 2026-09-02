@@ -2091,6 +2091,84 @@ test_council_advice_marks_timed_out_seat() {
     fi
 }
 
+test_council_advice_marks_blind_seat() {
+    test_case "advice phase flags a seat that verdicts without reading the artifact as blind, excludes it from quorum, and surfaces it"
+    load_council_lib || return 1
+
+    # Unit: the read-failure signature is blind; a grounded review is not.
+    local bd; bd="$(mktemp -d "$TEST_TMP_DIR/council-blindunit.XXXXXX")"
+    printf 'I cannot read the files due to a permission restriction.\n\nVERDICT: REVISE\n' > "$bd/blind.md"
+    printf '## Review\n\nsrc/app.ts:42 is missing the guard; otherwise sound.\n\nVERDICT: APPROVE\n' > "$bd/real.md"
+    # The CodeRabbit fixture: a permission-only refusal that never names the
+    # artifact. It matches is_blind (permission-denied shape) but slips past the
+    # narrower is_substantive read-failure pattern — so the SHARED gate must
+    # still reject it, or it counts toward quorum as a responder (Finding 1).
+    printf 'Permission denied. VERDICT: REVISE\n' > "$bd/perm.md"
+    printf 'Access denied. VERDICT: REVISE\n' > "$bd/access.md"
+    printf 'Permission is denied. VERDICT: REVISE\n' > "$bd/perm-is.md"
+    printf 'Access is denied. VERDICT: REVISE\n' > "$bd/access-is.md"
+    local blind_yes=n blind_no=n perm_blind=n perm_not_substantive=n access_blind=n access_not_substantive=n perm_is_blind=n access_is_blind=n
+    council_response_is_blind "$bd/blind.md" && blind_yes=y
+    council_response_is_blind "$bd/real.md" || blind_no=y
+    council_response_is_blind "$bd/perm.md" && perm_blind=y
+    council_response_is_substantive "$bd/perm.md" || perm_not_substantive=y
+    council_response_is_blind "$bd/access.md" && access_blind=y
+    council_response_is_substantive "$bd/access.md" || access_not_substantive=y
+    council_response_is_blind "$bd/perm-is.md" && perm_is_blind=y
+    council_response_is_blind "$bd/access-is.md" && access_is_blind=y
+
+    # Integration: a permission-only refusal (the Finding-1 case) is classified
+    # "blind", excluded from the responder/quorum set, recorded in
+    # COUNCIL_BLIND_SEATS, and warned about — NOT scored as a responder.
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/council-blind.XXXXXX")"; mkdir -p "$d/responses"
+    COUNCIL_RUN_DIR="$d"
+    COUNCIL_ROSTER_JSON='[{"persona":"security-auditor","seat":"member","provider":"agy","provider_org":"google","model":"gemini"}]'
+    COUNCIL_FIXTURE=""
+    COUNCIL_BLIND_SEATS=""
+    council_dispatch_member_detached() { printf 'Access is denied. VERDICT: REVISE\n' > "$3"; return 0; }
+    council_run_chair_fallback() { :; }
+
+    council_run_advice_phase >/dev/null 2>&1 || true
+    council_note_blind_seat agy
+    council_note_blind_seat agy
+
+    local status blind responding output
+    status="$(jq -r '.[0].status' <<< "$COUNCIL_SEAT_RECORDS_JSON" 2>/dev/null)"
+    blind="$COUNCIL_BLIND_SEATS"
+    responding="$COUNCIL_RESPONDING_PROVIDERS"
+    output="$(council_print_run_warnings)"
+
+    unset -f council_dispatch_member_detached council_run_chair_fallback
+
+    if [[ "$blind_yes" == "y" && "$blind_no" == "y" \
+          && "$perm_blind" == "y" && "$perm_not_substantive" == "y" \
+          && "$access_blind" == "y" && "$access_not_substantive" == "y" \
+          && "$perm_is_blind" == "y" && "$access_is_blind" == "y" && "$blind" == "agy" \
+          && "$status" == "blind" && "$blind" == *"agy"* && "$responding" != *"agy"* \
+          && "$output" == *"blind seat"* && "$output" == *"agy"* ]]; then
+        test_pass
+    else
+        test_fail "blind detection wrong: unit(blind=$blind_yes real_not_blind=$blind_no perm_blind=$perm_blind perm_not_substantive=$perm_not_substantive access_blind=$access_blind access_not_substantive=$access_not_substantive) status='$status' blind=[$blind] responding=[$responding] output=[$output]"
+        return 1
+    fi
+}
+
+test_council_permission_denied_finding_is_substantive() {
+    test_case "a short grounded review may mention permission denied without being blind"
+    load_council_lib || return 1
+
+    local d; d="$(mktemp -d "$TEST_TMP_DIR/council-permission-finding.XXXXXX")"
+    printf 'The permission denied branch in src/auth.sh:42 returns the wrong status code.\n\nVERDICT: REVISE\n' > "$d/review.md"
+
+    if ! council_response_is_blind "$d/review.md" &&
+       council_response_is_substantive "$d/review.md"; then
+        test_pass
+    else
+        test_fail "grounded permission-denied finding was misclassified as blind"
+        return 1
+    fi
+}
+
 test_council_advice_does_not_infer_timeout_from_provider_rc() {
     test_case "advice phase keeps provider-returned 137 as no-response without a timeout hint"
     load_council_lib || return 1
@@ -2523,6 +2601,7 @@ test_council_seats_array_makes_quorum_inspectable() {
                           or (.status == "responded" and .verdict == "APPROVE")))
         and (.quorum.distinct_approving_providers
              == ([.seats[] | select(.counted_as_approver) | .provider] | unique | length))
+        and (.quorum.blind_seats | type == "array")
     ' "$s" >/dev/null; then
         test_pass
     else
@@ -2548,6 +2627,8 @@ test_council_synthesis_timeout_overrides_seat_cap
 test_council_live_response_uses_synthesis_timeout_for_chair
 test_council_rc_is_timeout_requires_watchdog_provenance
 test_council_advice_marks_timed_out_seat
+test_council_advice_marks_blind_seat
+test_council_permission_denied_finding_is_substantive
 test_council_advice_does_not_infer_timeout_from_provider_rc
 test_council_seat_timeout_rejects_zero_and_nonnumeric
 test_council_response_has_verdict_salvage
