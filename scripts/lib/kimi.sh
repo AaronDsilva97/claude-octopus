@@ -10,13 +10,6 @@
 
 _kimi_log(){ if declare -f log >/dev/null 2>&1; then log "$@"; else echo "[${1}] ${*:2}" >&2; fi; }
 
-_kimi_run_with_timeout(){
-    local t="$1"; shift
-    if command -v gtimeout &>/dev/null; then gtimeout "$t" "$@"; return $?; fi
-    if command -v timeout  &>/dev/null; then timeout  "$t" "$@"; return $?; fi
-    "$@"
-}
-
 # `kimi` is an unambiguous binary name — no identity regex needed (unlike cursor's `agent`).
 _is_kimi_binary(){ command -v kimi &>/dev/null; }
 
@@ -90,8 +83,30 @@ kimi_execute(){
     local model="${OCTOPUS_KIMI_MODEL:-default}"
     local -a cmd=(kimi -p "$prompt" --output-format text)
     [[ -n "$model" && "$model" != "default" ]] && cmd+=(--model "$model")
-    local response exit_code
-    response=$(_kimi_run_with_timeout "$timeout" "${cmd[@]}" 2>/dev/null) && exit_code=0 || exit_code=$?
+    # Normal dispatch is already bounded by spawn.sh. Direct callers can source
+    # kimi.sh on its own, so load that same portable watchdog on demand rather
+    # than maintaining a second provider-specific timeout implementation.
+    if ! declare -f run_with_timeout >/dev/null 2>&1; then
+        local kimi_lib_dir
+        kimi_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || {
+            _kimi_log ERROR "kimi: shared timeout unavailable"
+            return 1
+        }
+        source "${kimi_lib_dir}/heartbeat.sh" 2>/dev/null || {
+            _kimi_log ERROR "kimi: shared timeout unavailable"
+            return 1
+        }
+    fi
+    # File-backed capture prevents a provider descendant from keeping command
+    # substitution open after the main process has exited.
+    local response response_file exit_code
+    response_file="$(umask 077 && mktemp "${TMPDIR:-/tmp}/octo-kimi-response.XXXXXX")" || {
+        _kimi_log ERROR "kimi: could not create response capture"
+        return 1
+    }
+    run_with_timeout "$timeout" "${cmd[@]}" >"$response_file" 2>/dev/null && exit_code=0 || exit_code=$?
+    response="$(< "$response_file")"
+    rm -f "$response_file"
     if [[ $exit_code -ne 0 ]]; then
         [[ $exit_code -eq 124 ]] && { _kimi_log WARN "kimi: timed out after ${timeout}s"; return 1; }
         if printf '%s' "$response" | grep -ciE 'unauthorized|forbidden|(401|403)|not authorized|invalid token|expired token|please .?login|login required' >/dev/null; then

@@ -8,7 +8,8 @@
 #   4. providers.json kimi model resolves and kimi-exec.sh emits --model;
 #      "default" emits no --model.
 #   5. kimi_execute propagates a non-zero exit even with stdout.
-#   6. kimi_is_available requires the binary AND auth AND a model kimi itself
+#   6. the Kimi request timeout still works without GNU/BSD timeout.
+#   7. kimi_is_available requires the binary AND auth AND a model kimi itself
 #      declares — an octo-side pin alone is not proof of readiness.
 set -euo pipefail
 
@@ -183,7 +184,41 @@ test_kimi_exit_propagation() {
     fi
 }
 
-# ── 8. an octo-side model pin is not proof of readiness ──────────────────────
+# ── 8. request timeout uses the shared portable watchdog ─────────────────────
+test_kimi_portable_timeout() {
+    test_case "kimi_execute enforces its timeout without GNU/BSD timeout"
+    local tmp_bin started_file old_path rc started_ms elapsed_ms
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-timeout"
+    started_file="$TEST_TMP_DIR/kimi-timeout-started"
+    _kimi_mock_bin "$tmp_bin" 'printf "started\n" > "${KIMI_TIMEOUT_STARTED:?}"; /bin/sleep 4; printf "late response\n"'
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+    export KIMI_TIMEOUT_STARTED="$started_file"
+
+    # Force the shared timeout implementation down its macOS-compatible
+    # watchdog path while leaving the rest of PATH available to that watchdog.
+    command() {
+        if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+
+    started_ms="$(python3 -c 'import time; print(int(time.monotonic() * 1000))')"
+    rc=0
+    OCTOPUS_KIMI_TIMEOUT=1 kimi_execute kimi "probe" >/dev/null 2>&1 || rc=$?
+    elapsed_ms=$(( $(python3 -c 'import time; print(int(time.monotonic() * 1000))') - started_ms ))
+
+    unset -f command
+    unset KIMI_TIMEOUT_STARTED
+    PATH="$old_path"
+    if [[ -s "$started_file" && "$rc" -ne 0 && "$elapsed_ms" -lt 3000 ]]; then
+        test_pass
+    else
+        test_fail "expected a started, bounded non-zero result, got rc=$rc after ${elapsed_ms}ms"
+    fi
+}
+
+# ── 9. an octo-side model pin is not proof of readiness ──────────────────────
 test_kimi_pin_is_not_readiness() {
     test_case "OCTOPUS_KIMI_MODEL does not substitute for kimi's own default_model"
     local tmp_bin old_path old_home old_key had_key rc_pin_only rc_default
@@ -210,7 +245,7 @@ test_kimi_pin_is_not_readiness() {
     fi
 }
 
-# ── 8b. default_model must have a value, not just a key ──────────────────────
+# ── 9b. default_model must have a value, not just a key ──────────────────────
 test_kimi_empty_default_model() {
     test_case "default_model with an empty value is not readiness"
     local tmp_bin old_path old_home old_key had_key rc_empty rc_bare rc_set
@@ -236,7 +271,7 @@ test_kimi_empty_default_model() {
     fi
 }
 
-# ── 8c. the dispatch command is one the real CLI would accept ────────────────
+# ── 9c. the dispatch command is one the real CLI would accept ────────────────
 test_kimi_dispatch_command_is_valid() {
     test_case "dispatch's kimi command survives the real CLI's argument contract"
     local tmp_bin old_path out rc cmd
@@ -263,7 +298,7 @@ test_kimi_dispatch_command_is_valid() {
     fi
 }
 
-# ── 9. availability requires binary AND auth AND a configured model ───────────
+# ── 10. availability requires binary AND auth AND a configured model ──────────
 test_kimi_detection() {
     test_case "kimi_is_available requires the kimi binary, auth, and a model"
     local tmp_bin old_path old_home old_key had_key rc_ready rc_nomodel rc_noauth
@@ -301,6 +336,7 @@ test_kimi_config_runtime_model
 test_kimi_default_no_model
 test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
+test_kimi_portable_timeout
 test_kimi_pin_is_not_readiness
 test_kimi_empty_default_model
 test_kimi_dispatch_command_is_valid
