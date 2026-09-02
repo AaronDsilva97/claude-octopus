@@ -190,6 +190,14 @@ _octopus_profile_env_key() {
   printf '%s' "${1:-}" | tr '[:lower:]-' '[:upper:]_' | sed -E 's/[^A-Z0-9_]+/_/g; s/^_+//; s/_+$//'
 }
 
+_octopus_profile_env_value() {
+  local env_name="${1:-}" value=""
+  [[ -n "$env_name" && "$env_name" != *[!A-Z0-9_]* ]] || return 1
+  eval "value=\${${env_name}-}"
+  printf '%s
+' "$value"
+}
+
 octopus_explicit_provider_override() {
   local phase="$1" operation="$2" phase_key operation_key env_name value
   phase_key="$(_octopus_profile_env_key "$phase")"
@@ -197,17 +205,17 @@ octopus_explicit_provider_override() {
 
   if [[ -n "$phase_key" && -n "$operation_key" ]]; then
     env_name="OCTOPUS_${phase_key}_${operation_key}_AGENT"
-    value="${!env_name:-}"
+    value="$(_octopus_profile_env_value "$env_name" 2>/dev/null || true)"
     [[ -n "$value" ]] && { printf '%s\n' "$value"; return 0; }
   fi
   if [[ -n "$phase_key" ]]; then
     env_name="OCTOPUS_${phase_key}_AGENT"
-    value="${!env_name:-}"
+    value="$(_octopus_profile_env_value "$env_name" 2>/dev/null || true)"
     [[ -n "$value" ]] && { printf '%s\n' "$value"; return 0; }
   fi
   if [[ -n "$operation_key" ]]; then
     env_name="OCTOPUS_${operation_key}_AGENT"
-    value="${!env_name:-}"
+    value="$(_octopus_profile_env_value "$env_name" 2>/dev/null || true)"
     [[ -n "$value" ]] && { printf '%s\n' "$value"; return 0; }
   fi
   return 1

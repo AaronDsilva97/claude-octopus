@@ -116,6 +116,11 @@ expected="codex commandcode claude claude-sdk agy perplexity opencode openrouter
 actual="$(octo_provider_ids)"
 if [[ "$actual" == "$expected" ]]; then test_pass; else test_fail "canonical provider inventory drift: $actual"; fi
 
+test_case "cross-vendor model gateways are explicit registry metadata"
+expected="commandcode opencode openrouter orcarouter atlascloud openai-compatible openai-tools openai-compatible-agent cursor-agent ollama copilot"
+actual="$(octo_provider_ids model-gateway)"
+if [[ "$actual" == "$expected" ]]; then test_pass; else test_fail "model gateway inventory drift: $actual"; fi
+
 test_case "registry self-validation enforces baseline and documented omissions"
 if octo_provider_validate_contracts; then test_pass; else test_fail "registry governance contract failed"; fi
 

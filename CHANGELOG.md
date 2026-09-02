@@ -43,6 +43,7 @@
   missing synthesis is surfaced via a new `summary.json quorum.chair_synthesis_available`
   flag and an end-of-run warning, and the run stops before synthesis with a clear
   message directing the operator to the per-seat verdicts in `responses/`.
+- Harden provider/model routing and OpenAI-compatible reasoning handling: canonicalize route-provider aliases, let cross-provider legacy role routes fall through to matching phase routes, preserve Bash 3.2-compatible execution-profile overrides, normalize `xhigh`/`max` reasoning to `high`, and only drop `reasoning_effort` when the API specifically rejects that field.
 
 ## [10.1.0] - 2026-08-30
 

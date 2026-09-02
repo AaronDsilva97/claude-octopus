@@ -37,22 +37,28 @@ export CLAUDE_CODE_SESSION=""
 export SUPPORTS_OPUS_4_7="${SUPPORTS_OPUS_4_7:-false}"
 source "${PLUGIN_DIR}/scripts/lib/model-resolver.sh"
 
-TESTS_RUN=0
-TESTS_PASSED=0
-
 assert_eq() {
-    TESTS_RUN=$((TESTS_RUN + 1))
     local actual="$1"
     local expected="$2"
     local desc="$3"
+    test_case "$desc"
     if [[ "$actual" == "$expected" ]]; then
-        echo -e "${GREEN}✓${NC} $desc (got: $actual)"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
+        test_pass
     else
-        echo -e "${RED}✗${NC} $desc (expected: $expected, got: $actual)"
-        exit 1
+        test_fail "expected=[$expected] got=[$actual]"
+        return 0
     fi
 }
+
+logged_load_error=""
+log() { logged_load_error="$1:$2"; }
+_model_resolver_load_error "catalog unavailable"
+assert_eq "$logged_load_error" "ERROR:catalog unavailable" "Load failures use the project logger when available"
+unset -f log
+fallback_load_error="$(_model_resolver_load_error "catalog unavailable" 2>&1)"
+assert_eq "$fallback_load_error" "model-resolver: catalog unavailable" "Load failures retain a bootstrap stderr fallback"
+log() { :; }
+export -f log
 
 # Clear model resolution caches (in-memory + persistent file)
 # Must be called between tests that change env vars or config files
@@ -207,6 +213,175 @@ cat > "$CONFIG_FILE" << EOF
 EOF
 assert_eq "$(resolve_octopus_model "commandcode" "commandcode-research" "research" "researcher")" "minimaxai/minimax-m3" "Cross-provider literal role falls through to matching phase"
 
+# Regression: object-route provider aliases are canonicalized before comparison.
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "agy": { "default": "agy-default" } },
+  "routing": {
+    "phases": {
+      "research": { "provider": "antigravity", "model": "agy-alias-phase" }
+    }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "agy" "agy" "research" "")" "agy-alias-phase" "Literal object phase routing canonicalizes provider aliases"
+
+# Regression: a cross-provider legacy role route must not mask a matching
+# literal object phase route for the provider being resolved.
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "commandcode": { "default": "deepseek/deepseek-v4-pro" } },
+  "routing": {
+    "roles": { "researcher": "claude:sonnet" },
+    "phases": {
+      "research": { "provider": "commandcode", "model": "minimaxai/minimax-m3" }
+    }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "commandcode" "commandcode-research" "research" "researcher")" "minimaxai/minimax-m3" "Cross-provider legacy role falls through to matching object phase"
+
+# Regression: a bare provider alias keeps role-provider precedence over a
+# legacy phase model route, while model-like gpt-* values remain model routes.
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "agy": { "default": "agy-default" } },
+  "routing": {
+    "roles": { "researcher": "gemini" },
+    "phases": { "research": "agy-phase-model" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "agy" "agy-research" "research" "researcher")" "agy-default" "Bare gemini alias preserves matching role-provider precedence"
+
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "codex": { "default": "gpt-default" } },
+  "routing": {
+    "roles": { "logic-reviewer": "gpt-5.5" },
+    "phases": { "review": "gpt-phase-model" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "codex" "codex" "review" "logic-reviewer")" "gpt-5.5" "Bare gpt model keeps role precedence over a phase route"
+
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "commandcode": { "default": "deepseek/deepseek-v4-pro" } },
+  "routing": {
+    "roles": { "logic-reviewer": "deepseek/deepseek-v4-pro" },
+    "phases": { "review": "minimaxai/minimax-m3" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "commandcode" "commandcode" "review" "logic-reviewer")" "deepseek/deepseek-v4-pro" "Command Code gateway keeps a vendor-qualified bare role over its phase route"
+
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "openrouter": { "default": "openai/gpt-5.5" } },
+  "routing": {
+    "roles": { "logic-reviewer": "anthropic/claude-sonnet-4" },
+    "phases": { "review": "openai/gpt-5.5" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "openrouter" "openrouter" "review" "logic-reviewer")" "anthropic/claude-sonnet-4" "OpenRouter gateway keeps a cross-vendor bare role over its phase route"
+
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "qwen": { "default": "qwen3-coder" } },
+  "routing": {
+    "roles": { "logic-reviewer": "qwen3-coder" },
+    "phases": { "review": "qwen3-max" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "qwen" "qwen" "review" "logic-reviewer")" "qwen3-coder" "Qwen keeps its native bare role over a phase route"
+
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "perplexity": { "default": "sonar-pro" } },
+  "routing": {
+    "roles": { "researcher": "sonar-pro" },
+    "phases": { "research": "sonar" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "perplexity" "perplexity" "research" "researcher")" "sonar-pro" "Perplexity keeps its native bare role over a phase route"
+
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "perplexity": { "default": "sonar-pro" } },
+  "routing": {
+    "roles": { "researcher": "gpt-5.5" },
+    "phases": { "research": "sonar-pro" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "perplexity" "perplexity" "research" "researcher")" "sonar-pro" "Perplexity rejects a known cross-vendor bare role in favor of its phase route"
+
+for default_provider in grok vibe; do
+    clear_model_cache
+    cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": { "$default_provider": { "default": "default" } },
+  "routing": {
+    "roles": { "logic-reviewer": "default" },
+    "phases": { "review": "${default_provider}-phase" }
+  }
+}
+EOF
+    assert_eq "$(resolve_octopus_model "$default_provider" "$default_provider" "review" "logic-reviewer")" "default" "$default_provider keeps its provider-local default role sentinel over a phase route"
+done
+
+test_case "catalogued native models resolve to their registry organization"
+catalog_family_mismatches=""
+while IFS= read -r catalog_model; do
+    [[ -n "$catalog_model" ]] || continue
+    catalog_provider="$(get_model_capability "$catalog_model" provider)"
+    octo_provider_has_capability "$catalog_provider" model-gateway && continue
+    catalog_org="$(octo_provider_org "$catalog_provider")"
+    route_family="$(_octo_route_value_model_family "$catalog_model")"
+    if [[ "$route_family" != "$catalog_org" ]]; then
+        catalog_family_mismatches="${catalog_family_mismatches}${catalog_model}:${route_family}->${catalog_org} "
+    fi
+done < <(octo_model_ids)
+if [[ -z "$catalog_family_mismatches" ]]; then
+    test_pass
+else
+    test_fail "model catalog family drift: $catalog_family_mismatches"
+fi
+
+# Registry wildcard aliases are data, not shell globs. A matching filesystem
+# entry must not replace the literal gpt* alias before its base is compared.
+alias_glob_dir="$TEST_TMP_DIR/provider-alias-glob"
+mkdir -p "$alias_glob_dir"
+: > "$alias_glob_dir/gpt-collision"
+previous_pwd="$PWD"
+cd "$alias_glob_dir"
+alias_glob_result="$(_octo_canonical_known_provider_name "gpt")"
+cd "$previous_pwd"
+assert_eq "$alias_glob_result" "codex" "Provider wildcard aliases ignore matching filesystem entries"
+
 # Test 6: Recursive reference (codex:spark)
 clear_model_cache
 cat > "$CONFIG_FILE" << EOF
@@ -221,6 +396,22 @@ cat > "$CONFIG_FILE" << EOF
 }
 EOF
 assert_eq "$(resolve_octopus_model "codex" "codex" "deliver")" "config-spark" "Recursive reference"
+
+# Recursive provider references must use the canonical provider for the lookup,
+# not only for the cross-provider comparison.
+clear_model_cache
+cat > "$CONFIG_FILE" << EOF
+{
+  "version": "3.0",
+  "providers": {
+    "codex": { "default": "config-default", "spark": "config-spark" }
+  },
+  "routing": {
+    "phases": { "deliver": "openai:spark" }
+  }
+}
+EOF
+assert_eq "$(resolve_octopus_model "codex" "codex" "deliver")" "config-spark" "Recursive provider alias uses canonical model namespace"
 
 # Test 7: Tier mapping
 clear_model_cache

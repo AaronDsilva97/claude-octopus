@@ -11,9 +11,20 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _model_resolver_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${_model_resolver_lib_dir}/provider-registry.sh" || { echo "model-resolver: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
+_model_resolver_load_error() {
+    local message="$1"
+    if declare -f log >/dev/null 2>&1; then
+        log ERROR "$message" || printf 'model-resolver: %s\n' "$message" >&2
+    else
+        printf 'model-resolver: %s\n' "$message" >&2
+    fi
+}
+source "${_model_resolver_lib_dir}/provider-registry.sh" || { _model_resolver_load_error "failed to load provider-registry.sh"; return 1 2>/dev/null || exit 1; }
 if ! declare -f octo_model_cache_file >/dev/null 2>&1; then
     source "${_model_resolver_lib_dir}/model-cache-path.sh" 2>/dev/null || true
+fi
+if ! declare -f get_model_catalog >/dev/null 2>&1; then
+    source "${_model_resolver_lib_dir}/models.sh" || { _model_resolver_load_error "failed to load models.sh"; return 1 2>/dev/null || exit 1; }
 fi
 if ! declare -f _is_cursor_agent_binary >/dev/null 2>&1; then
     source "${_model_resolver_lib_dir}/cursor-agent.sh" 2>/dev/null || true
@@ -199,12 +210,79 @@ validate_model_name_for_provider() {
     esac
 }
 
+_octo_canonical_known_provider_name() {
+    local requested normalized id aliases command org caps alias alias_base
+    local -a aliases_list
+    requested="${1:-}"
+    normalized="$(octo_provider_normalize "$requested")"
+    [[ -n "$normalized" ]] || return 1
+
+    # Routing values are ambiguous: a bare string can be either a provider or
+    # a model. Accept canonical IDs and exact aliases (plus the exact base of a
+    # wildcard alias), but do not let wildcard aliases such as gpt* classify a
+    # concrete model like gpt-5.5 as a provider route.
+    while IFS='|' read -r id aliases command org caps; do
+        if [[ "$normalized" == "$id" ]]; then
+            printf '%s\n' "$id"
+            return 0
+        fi
+        aliases_list=()
+        if [[ -n "$aliases" ]]; then
+            IFS=',' read -r -a aliases_list <<< "$aliases"
+            for alias in "${aliases_list[@]}"; do
+                [[ -n "$alias" ]] || continue
+                case "$alias" in
+                    *'*')
+                        alias_base="${alias%\*}"
+                        [[ "$normalized" == "$alias_base" ]] || continue
+                        ;;
+                    *)
+                        [[ "$normalized" == "$alias" ]] || continue
+                        ;;
+                esac
+                printf '%s\n' "$id"
+                return 0
+            done
+        fi
+    done <<EOF
+$(octo_provider_registry_rows)
+EOF
+
+    # Preserve the legacy provider variant accepted before registry-backed
+    # classification was introduced.
+    if [[ "$normalized" == "agy-research" ]]; then
+        printf '%s\n' "agy"
+        return 0
+    fi
+    return 1
+}
+
 _octo_is_known_provider_name() {
-    case "$1" in
-        codex|claude|perplexity|qwen|copilot|opencode|ollama|openrouter|orcarouter|cursor-agent|commandcode|vibe|agy|agy-research|antigravity)
-            return 0 ;;
-        *)
-            return 1 ;;
+    _octo_canonical_known_provider_name "${1:-}" >/dev/null 2>&1
+}
+
+_octo_route_value_model_family() {
+    local model="${1:-}" target_provider="${2:-}" catalog_provider=""
+    if [[ "$model" == "default" && -n "$target_provider" ]]; then
+        octo_provider_org "$target_provider" 2>/dev/null || printf '%s\n' unknown
+        return 0
+    fi
+    if is_known_model "$model"; then
+        catalog_provider="$(get_model_capability "$model" provider 2>/dev/null || true)"
+        if [[ -n "$catalog_provider" && "$catalog_provider" != "unknown" ]]; then
+            octo_provider_org "$catalog_provider" 2>/dev/null || printf '%s\n' unknown
+            return 0
+        fi
+    fi
+    case "${1:-}" in
+        claude-*|anthropic/*) printf '%s\n' anthropic ;;
+        gpt-*|o[134]-*|codex*|openai/*) printf '%s\n' openai ;;
+        gemini-*|agy-*|google/*) printf '%s\n' google ;;
+        qwen*|alibaba/*) printf '%s\n' alibaba ;;
+        grok-*|xai/*|x-ai/*) printf '%s\n' xai ;;
+        mistral-*|mistral/*|mistralai/*) printf '%s\n' mistral ;;
+        sonar*|perplexity/*) printf '%s\n' perplexity ;;
+        *) printf '%s\n' unknown ;;
     esac
 }
 
@@ -387,9 +465,12 @@ resolve_octopus_model() {
             local role_route_type=""
             local role_route_provider=""
             local role_route_model=""
+            local role_route_value=""
             local phase_route_provider=""
             local phase_route_model=""
             local role_route_blocks_phase="false"
+            local role_route_model_family=""
+            local role_route_provider_org=""
 
             if [[ -n "$role" ]]; then
                 role_route_json=$(echo "$config_data" | jq -c --arg role "$role" '.routing.roles[$role] // empty' 2>/dev/null)
@@ -398,6 +479,9 @@ resolve_octopus_model() {
                     if [[ "$role_route_type" == "object" ]]; then
                         role_route_provider=$(echo "$role_route_json" | jq -r '.provider // empty' 2>/dev/null)
                         role_route_model=$(echo "$role_route_json" | jq -r '.model // empty' 2>/dev/null)
+                        if [[ -n "$role_route_provider" ]]; then
+                            role_route_provider="$(octo_provider_canonical "$role_route_provider" 2>/dev/null || printf '%s' "$role_route_provider")"
+                        fi
                         if [[ -z "$role_route_provider" || "$role_route_provider" == "$canonical_provider" ]]; then
                             role_route_blocks_phase="true"
                             if [[ -n "$role_route_model" ]]; then
@@ -406,8 +490,26 @@ resolve_octopus_model() {
                             fi
                         fi
                     else
-                        # Legacy string routes retain their existing alias/provider semantics.
-                        role_route_blocks_phase="true"
+                        # A legacy role route only blocks the phase route when it
+                        # applies to the provider currently being resolved.
+                        role_route_value=$(echo "$role_route_json" | jq -r '.' 2>/dev/null)
+                        if [[ "$role_route_value" == *:* ]]; then
+                            role_route_provider="${role_route_value%%:*}"
+                            role_route_provider="$(octo_provider_canonical "$role_route_provider" 2>/dev/null || printf '%s' "$role_route_provider")"
+                            [[ "$role_route_provider" == "$canonical_provider" ]] && role_route_blocks_phase="true"
+                        elif _octo_is_known_provider_name "$role_route_value"; then
+                            role_route_provider="$(octo_provider_canonical "$role_route_value" 2>/dev/null || printf '%s' "$role_route_value")"
+                            [[ "$role_route_provider" == "$canonical_provider" ]] && role_route_blocks_phase="true"
+                        else
+                            role_route_model_family="$(_octo_route_value_model_family "$role_route_value" "$canonical_provider")"
+                            role_route_provider_org="$(octo_provider_org "$canonical_provider" 2>/dev/null || true)"
+                            role_route_blocks_phase="true"
+                            if ! octo_provider_has_capability "$canonical_provider" model-gateway &&
+                               [[ "$role_route_model_family" != "unknown" &&
+                                  "$role_route_model_family" != "$role_route_provider_org" ]]; then
+                                role_route_blocks_phase="false"
+                            fi
+                        fi
                     fi
                 fi
             fi
@@ -417,6 +519,9 @@ resolve_octopus_model() {
                 if [[ -n "$phase_route_json" && "$phase_route_json" != "null" ]] && [[ "$(echo "$phase_route_json" | jq -r 'type' 2>/dev/null)" == "object" ]]; then
                     phase_route_provider=$(echo "$phase_route_json" | jq -r '.provider // empty' 2>/dev/null)
                     phase_route_model=$(echo "$phase_route_json" | jq -r '.model // empty' 2>/dev/null)
+                    if [[ -n "$phase_route_provider" ]]; then
+                        phase_route_provider="$(octo_provider_canonical "$phase_route_provider" 2>/dev/null || printf '%s' "$phase_route_provider")"
+                    fi
                     if [[ ( -z "$phase_route_provider" || "$phase_route_provider" == "$canonical_provider" ) && -n "$phase_route_model" ]]; then
                         resolved_model="$phase_route_model"
                         [[ -n "$_trace" ]] && echo "[model-trace] Tier 3 (literal phase route): $resolved_model ← SELECTED" >&2
@@ -448,16 +553,19 @@ resolve_octopus_model() {
                     elif _octo_is_known_provider_name "$routed"; then
                         role_route_provider="$routed"
                     fi
-                    if [[ -n "$role_route_provider" && "$role_route_provider" != "$provider" ]]; then
+                    if [[ -n "$role_route_provider" ]]; then
+                        role_route_provider="$(octo_provider_canonical "$role_route_provider" 2>/dev/null || printf '%s' "$role_route_provider")"
+                    fi
+                    if [[ -n "$role_route_provider" && "$role_route_provider" != "$canonical_provider" ]]; then
                         [[ -n "$_trace" ]] && echo "[model-trace] Tier 3 (role routing): SKIP (role route $routed targets $role_route_provider, resolving for $provider); checking phase route" >&2
                         routed=""
-                    elif [[ -z "$role_route_provider" && -n "$phase_routed" && "$phase_routed" != "null" ]]; then
+                    elif [[ -z "$role_route_provider" && "$role_route_blocks_phase" != "true" && -n "$phase_routed" && "$phase_routed" != "null" ]]; then
                         [[ -n "$_trace" ]] && echo "[model-trace] Tier 3 (role routing): SKIP (bare role route $routed is unscoped and phase route exists); checking phase route" >&2
                         routed=""
                     fi
                 fi
             fi
-            if [[ -z "$routed" || "$routed" == "null" ]] && [[ -n "$phase_routed" && "$phase_routed" != "null" ]]; then
+            if [[ -z "$routed" || "$routed" == "null" ]] && [[ "$role_route_blocks_phase" != "true" ]] && [[ -n "$phase_routed" && "$phase_routed" != "null" ]]; then
                 routed="$phase_routed"
             fi
 
@@ -468,12 +576,14 @@ resolve_octopus_model() {
                 if [[ "$routed" == *:* ]]; then
                     local ref_provider="${routed%%:*}"
                     local ref_type="${routed#*:}"
-                    if [[ "$ref_provider" != "$provider" ]]; then
+                    local canonical_ref_provider
+                    canonical_ref_provider="$(octo_provider_canonical "$ref_provider" 2>/dev/null || printf '%s' "$ref_provider")"
+                    if [[ "$canonical_ref_provider" != "$canonical_provider" ]]; then
                         # Route targets a different provider — skip for this resolution
                         [[ -n "$_trace" ]] && echo "[model-trace] Tier 3 (phase/role routing): SKIP (route $routed targets $ref_provider, resolving for $provider)" >&2
                         routed=""
                     else
-                        if ! resolved_model=$(resolve_octopus_model "$ref_provider" "$ref_type" "" ""); then
+                        if ! resolved_model=$(resolve_octopus_model "$canonical_ref_provider" "$ref_type" "" ""); then
                             return 1
                         fi
                     fi

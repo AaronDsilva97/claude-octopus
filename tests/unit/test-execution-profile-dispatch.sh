@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$ROOT/tests/helpers/test-framework.sh"
+test_suite "execution profile dispatch"
 export PLUGIN_DIR="$ROOT"
 export OCTOPUS_PLATFORM=Linux
 export OPENAI_COMPAT_BASE_URL=https://example.invalid/v1
@@ -15,8 +17,16 @@ source "$ROOT/scripts/lib/execution-profile.sh"
 source "$ROOT/scripts/lib/dispatch.sh"
 get_agent_model(){ case "$1" in codex*) echo gpt-5.6;; claude*) echo sonnet;; openai-*) echo deepseek-ai/DeepSeek-V4-Pro;; *) echo model;; esac; }
 validate_model_name(){ return 0; }
-assert_contains(){ [[ "$1" == *"$2"* ]] || { echo "FAIL missing [$2] in [$1]" >&2; exit 1; }; }
-assert_not_contains(){ [[ "$1" != *"$2"* ]] || { echo "FAIL unexpected [$2] in [$1]" >&2; exit 1; }; }
+assert_contains() {
+  local haystack="$1" needle="$2"
+  test_case "contains: $needle"
+  if [[ "$haystack" == *"$needle"* ]]; then test_pass; else test_fail "missing [$needle] in [$haystack]"; return 0; fi
+}
+assert_not_contains() {
+  local haystack="$1" needle="$2"
+  test_case "does not contain: $needle"
+  if [[ "$haystack" != *"$needle"* ]]; then test_pass; else test_fail "unexpected [$needle] in [$haystack]"; return 0; fi
+}
 export OCTOPUS_REASONING_POLICY=strict
 export OCTOPUS_CODEX_REASONING=medium
 cmd=$(get_agent_command codex council logic-reviewer)
@@ -51,4 +61,4 @@ export OCTOPUS_PROBE_TECHNICAL_IMPLEMENTATION_ANALYSIS_REASONING=medium
 cmd=$(get_agent_command codex probe "Technical implementation analysis")
 assert_contains "$cmd" 'model_reasoning_effort="medium"'
 unset OCTOPUS_PROBE_TECHNICAL_IMPLEMENTATION_ANALYSIS_REASONING
-printf "PASS test-execution-profile-dispatch\n"
+test_summary

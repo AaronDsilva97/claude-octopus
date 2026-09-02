@@ -1,20 +1,127 @@
-import importlib.util, json
-from unittest.mock import patch
+#!/usr/bin/env python3
+import importlib.util
+import io
+import json
+import urllib.error
 from pathlib import Path
-path=Path(__file__).resolve().parents[2]/"scripts/helpers/openai-compatible-agent.py"
-spec=importlib.util.spec_from_file_location("agent",path)
-mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+from unittest.mock import patch
+
+path = Path(__file__).resolve().parents[2] / "scripts/helpers/openai-compatible-agent.py"
+spec = importlib.util.spec_from_file_location("agent", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+
 class Resp:
-    def __enter__(self): return self
-    def __exit__(self,*a): return False
-    def read(self): return b'{"choices":[{"message":{"content":"ok"}}]}'
-seen=[]
-def fake(req,timeout=None):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+
+seen = []
+
+
+def fake(req, timeout=None):
+    del timeout
     seen.append(json.loads(req.data.decode()))
     return Resp()
-with patch.object(mod.urllib.request,"urlopen",side_effect=fake):
-    mod.api_call("https://example.test","k","m",{},[{"role":"user","content":"x"}],reasoning_effort="medium")
-    mod.api_call("https://example.test","k","m",{},[{"role":"user","content":"x"}])
-assert seen[0]["reasoning_effort"]=="medium",seen
-assert "reasoning_effort" not in seen[1],seen
+
+
+with patch.object(mod.urllib.request, "urlopen", side_effect=fake):
+    mod.api_call(
+        "https://example.test",
+        "k",
+        "m",
+        {},
+        [{"role": "user", "content": "x"}],
+        reasoning_effort="medium",
+    )
+    mod.api_call(
+        "https://example.test",
+        "k",
+        "m",
+        {},
+        [{"role": "user", "content": "x"}],
+    )
+
+assert seen[0]["reasoning_effort"] == "medium", seen
+assert "reasoning_effort" not in seen[1], seen
+assert mod.normalize_reasoning_effort("xhigh") == "high"
+assert mod.normalize_reasoning_effort("max") == "high"
+assert mod.normalize_reasoning_effort("medium") == "medium"
+
+# A field-named value error must not be mistaken for rejection of the field and
+# retried without it.
+for generic_body in (
+    b'{"error":"invalid reasoning_effort value"}',
+    b'{"error":"unsupported value for reasoning_effort"}',
+    b'{"error":"unsupported field: reasoning_effort_mode"}',
+):
+    error = urllib.error.HTTPError(
+        "https://example.test/chat/completions",
+        400,
+        "bad request",
+        {},
+        io.BytesIO(generic_body),
+    )
+    with patch.object(mod.urllib.request, "urlopen", side_effect=error) as mocked:
+        try:
+            mod.api_call(
+                "https://example.test",
+                "k",
+                "m",
+                {},
+                [{"role": "user", "content": "x"}],
+                reasoning_effort="medium",
+                reasoning_policy="best_effort",
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("generic reasoning error unexpectedly triggered fallback")
+    assert mocked.call_count == 1, (generic_body, mocked.call_count)
+
+# A 400 response that explicitly rejects the reasoning_effort field retries
+# once without that field when best-effort reasoning is enabled.
+field_error = urllib.error.HTTPError(
+    "https://example.test/chat/completions",
+    400,
+    "bad request",
+    {},
+    io.BytesIO(b'{"error":"unsupported field: reasoning_effort"}'),
+)
+fallback_seen = []
+
+
+def fake_reasoning_fallback(req, timeout=None):
+    del timeout
+    fallback_seen.append(json.loads(req.data.decode()))
+    if len(fallback_seen) == 1:
+        raise field_error
+    return Resp()
+
+
+with patch.object(
+    mod.urllib.request, "urlopen", side_effect=fake_reasoning_fallback
+) as mocked:
+    result = mod.api_call(
+        "https://example.test",
+        "k",
+        "m",
+        {},
+        [{"role": "user", "content": "x"}],
+        reasoning_effort="medium",
+        reasoning_policy="best_effort",
+    )
+
+assert result["choices"][0]["message"]["content"] == "ok", result
+assert mocked.call_count == 2, mocked.call_count
+assert fallback_seen[0]["reasoning_effort"] == "medium", fallback_seen
+assert "reasoning_effort" not in fallback_seen[1], fallback_seen
+
 print("PASS test-openai-reasoning-payload")

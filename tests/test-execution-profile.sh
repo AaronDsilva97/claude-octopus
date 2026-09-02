@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/tests/helpers/test-framework.sh"
+test_suite "execution profile"
 source "$ROOT/scripts/lib/execution-profile.sh"
-TMP=$(mktemp -d)
-trap "rm -rf $TMP" EXIT
+TMP="$TEST_TMP_DIR/execution-profile"
+mkdir -p "$TMP"
 CFG="$TMP/providers.json"
 cat > "$CFG" <<JSON
 {
@@ -26,7 +28,16 @@ cat > "$CFG" <<JSON
 }
 JSON
 export OCTOPUS_PROVIDERS_CONFIG="$CFG"
-assert_eq(){ [[ "$1" == "$2" ]] || { echo "FAIL expected=$2 got=$1" >&2; exit 1; }; }
+assert_eq() {
+  local actual="$1" expected="$2" desc="${3:-expected $2}"
+  test_case "$desc"
+  if [[ "$actual" == "$expected" ]]; then
+    test_pass
+  else
+    test_fail "expected=[$expected] got=[$actual]"
+    return 0
+  fi
+}
 assert_eq "$(octopus_profile_provider council logic-reviewer fallback)" codex
 assert_eq "$(octopus_profile_model council logic-reviewer)" gpt-5.6
 assert_eq "$(octopus_profile_provider council quick-checker fallback)" codex
@@ -49,10 +60,13 @@ rc=$?
 set -e
 assert_eq "$rc" 2
 assert_eq "$(octopus_reasoning_cli_fragment gemini high best_effort)" ""
+OCTOPUS_COUNCIL_LOGIC_REVIEWER_AGENT=codex:local-shell-override
+assert_eq "$(octopus_explicit_provider_override council logic-reviewer)" codex:local-shell-override "unexported shell override remains visible"
+unset OCTOPUS_COUNCIL_LOGIC_REVIEWER_AGENT
 export OCTOPUS_LOGIC_REVIEWER_REASONING=high
 assert_eq "$(octopus_resolve_reasoning_level codex council logic-reviewer)" high
 unset OCTOPUS_LOGIC_REVIEWER_REASONING
 export OCTOPUS_COUNCIL_LOGIC_REVIEWER_REASONING=low
 assert_eq "$(octopus_resolve_reasoning_level codex council logic-reviewer)" low
 unset OCTOPUS_COUNCIL_LOGIC_REVIEWER_REASONING
-printf "PASS test-execution-profile\n"
+test_summary

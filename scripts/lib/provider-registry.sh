@@ -3,7 +3,8 @@
 # Source-safe and Bash 3.2 compatible: no associative arrays, no shell options.
 #
 # Columns: id|aliases|command|organization|capabilities
-# Capabilities describe which shared interfaces should expose the provider.
+# Capabilities describe which shared interfaces should expose the provider and
+# stable routing traits such as whether it accepts cross-vendor model IDs.
 # Every provider must implement the universal baseline below. Optional capability
 # omissions must be documented in octo_provider_limitations_rows().
 
@@ -13,23 +14,23 @@ OCTO_PROVIDER_OPTIONAL_CAPABILITIES="council health detect"
 octo_provider_registry_rows() {
     cat <<'EOF'
 codex|openai,gpt*|codex|openai|model-config,council,health,detect,dispatch,env
-commandcode|command-code*|command-code|commandcode|model-config,council,health,detect,dispatch,env
+commandcode|command-code*|command-code|commandcode|model-config,council,health,detect,dispatch,env,model-gateway
 claude|anthropic,sonnet*,opus*|claude|anthropic|model-config,council,health,detect,dispatch,env
 claude-sdk|claude-agent*|claude-agent|anthropic|model-config,health,detect,dispatch,env
 agy|antigravity*,gemini,gemini-*|agy|google|model-config,council,health,detect,dispatch,env
 perplexity||perplexity|perplexity|model-config,health,detect,dispatch,env
-opencode||opencode|opencode|model-config,council,detect,dispatch,env
-openrouter||openrouter|openrouter|model-config,council,health,detect,dispatch,env
-orcarouter||orcarouter|orcarouter|model-config,council,health,detect,dispatch,env
-atlascloud|atlas,atlas-cloud|atlascloud|atlascloud|model-config,health,detect,dispatch,env
-openai-compatible||openai-compatible|openai-compatible|model-config,council,detect,dispatch,env
-openai-tools||openai-compatible|openai-compatible|model-config,council,dispatch,env
-openai-compatible-agent||openai-compatible|openai-compatible|model-config,dispatch,env
-cursor-agent|cursor|cursor-agent|cursor|model-config,health,detect,dispatch,env
+opencode||opencode|opencode|model-config,council,detect,dispatch,env,model-gateway
+openrouter||openrouter|openrouter|model-config,council,health,detect,dispatch,env,model-gateway
+orcarouter||orcarouter|orcarouter|model-config,council,health,detect,dispatch,env,model-gateway
+atlascloud|atlas,atlas-cloud|atlascloud|atlascloud|model-config,health,detect,dispatch,env,model-gateway
+openai-compatible||openai-compatible|openai-compatible|model-config,council,detect,dispatch,env,model-gateway
+openai-tools||openai-compatible|openai-compatible|model-config,council,dispatch,env,model-gateway
+openai-compatible-agent||openai-compatible|openai-compatible|model-config,dispatch,env,model-gateway
+cursor-agent|cursor|cursor-agent|cursor|model-config,health,detect,dispatch,env,model-gateway
 grok|xai|grok|xai|model-config,health,detect,dispatch,env
 qwen||qwen|alibaba|model-config,council,health,detect,dispatch,env
-ollama|local|ollama|local|model-config,health,detect,dispatch,env
-copilot|github-copilot|copilot|github|model-config,health,detect,dispatch,env
+ollama|local|ollama|local|model-config,health,detect,dispatch,env,model-gateway
+copilot|github-copilot|copilot|github|model-config,health,detect,dispatch,env,model-gateway
 vibe||vibe|mistral|model-config,health,detect,dispatch,env
 EOF
 }
