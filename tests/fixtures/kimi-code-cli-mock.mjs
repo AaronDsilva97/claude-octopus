@@ -294,6 +294,10 @@ function main(argv) {
     if (argv[2] === '--json') {
       process.stdout.write(`${JSON.stringify({ providers: camelize(providers), models: camelize(models) })}\n`);
     } else {
+      if (Object.keys(providers).length === 0) {
+        process.stdout.write('No providers configured.\n');
+        return 0;
+      }
       for (const [providerId, provider] of Object.entries(providers)) {
         const count = Object.values(models).filter((model) => model.provider === providerId).length;
         process.stdout.write(`${providerId}  type=${provider.type ?? ''}  models=${count}  source=inline\n`);

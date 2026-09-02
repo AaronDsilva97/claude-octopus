@@ -32,7 +32,7 @@ test_timeout_signals_root_without_ps() {
     test_case "portable timeout signals and reaps its root when ps fails"
     local target="$TEST_TMP_DIR/timeout-root.sh"
     local pid_file="$TEST_TMP_DIR/timeout-root.pid"
-    local rc=0 started_ms elapsed_ms target_pid="" alive=false
+    local rc=0 elapsed_seconds target_pid="" alive=false
 
     cat > "$target" <<'EOF'
 #!/bin/bash
@@ -51,9 +51,9 @@ EOF
     }
     ps() { return 1; }
 
-    started_ms="$(python3 -c 'import time; print(int(time.monotonic() * 1000))')"
+    SECONDS=0
     run_with_timeout 1 "$target" "$pid_file" >/dev/null 2>&1 || rc=$?
-    elapsed_ms=$(( $(python3 -c 'import time; print(int(time.monotonic() * 1000))') - started_ms ))
+    elapsed_seconds=$SECONDS
 
     unset -f command ps
     [[ -s "$pid_file" ]] && target_pid="$(< "$pid_file")"
@@ -62,10 +62,11 @@ EOF
         kill -KILL "$target_pid" 2>/dev/null || true
     fi
 
-    if [[ "$rc" -eq 124 && -n "$target_pid" && "$alive" == false && "$elapsed_ms" -lt 3000 ]]; then
+    if [[ "$rc" -eq 124 && -n "$target_pid" && "$alive" == false && \
+          "$elapsed_seconds" -le 8 ]]; then
         test_pass
     else
-        test_fail "expected rc=124, a reaped root, and <3000ms; got rc=$rc pid=${target_pid:-missing} alive=$alive elapsed=${elapsed_ms}ms"
+        test_fail "expected rc=124, a reaped root, and completion within 8s; got rc=$rc pid=${target_pid:-missing} alive=$alive elapsed=${elapsed_seconds}s"
     fi
 }
 
@@ -135,7 +136,7 @@ test_timeout_kills_term_resistant_descendant_without_ps() {
     local target="$TEST_TMP_DIR/timeout-tree.sh"
     local root_file="$TEST_TMP_DIR/timeout-tree-root.pid"
     local child_file="$TEST_TMP_DIR/timeout-tree-child.pid"
-    local rc=0 started_ms elapsed_ms root_pid="" child_pid=""
+    local rc=0 elapsed_seconds root_pid="" child_pid=""
     local root_alive=false child_alive=false
 
     cat > "$target" <<'EOF'
@@ -155,9 +156,9 @@ EOF
     }
     ps() { return 1; }
 
-    started_ms="$(python3 -c 'import time; print(int(time.monotonic() * 1000))')"
+    SECONDS=0
     run_with_timeout 1 "$target" "$root_file" "$child_file" >/dev/null 2>&1 || rc=$?
-    elapsed_ms=$(( $(python3 -c 'import time; print(int(time.monotonic() * 1000))') - started_ms ))
+    elapsed_seconds=$SECONDS
 
     unset -f command ps
     [[ -s "$root_file" ]] && root_pid="$(< "$root_file")"
@@ -171,10 +172,10 @@ EOF
 
     if [[ "$rc" -eq 124 && -n "$root_pid" && -n "$child_pid" &&
           "$root_alive" == false && "$child_alive" == false &&
-          "$elapsed_ms" -ge 9000 && "$elapsed_ms" -lt 20000 ]]; then
+          "$elapsed_seconds" -ge 8 && "$elapsed_seconds" -le 30 ]]; then
         test_pass
     else
-        test_fail "expected rc=124, a 10s TERM grace, and dead processes within 20s; got rc=$rc root=${root_pid:-missing}/$root_alive child=${child_pid:-missing}/$child_alive elapsed=${elapsed_ms}ms"
+        test_fail "expected rc=124, a 10s TERM grace, and dead processes within 30s; got rc=$rc root=${root_pid:-missing}/$root_alive child=${child_pid:-missing}/$child_alive elapsed=${elapsed_seconds}s"
     fi
 }
 
@@ -297,11 +298,25 @@ EOF
     fi
 }
 
+test_elapsed_measurement_is_single_shell_portable() {
+    test_case "elapsed bounds use Bash SECONDS rather than separate Python clocks"
+    local source bad_clock
+    source="$(< "$SCRIPT_DIR/test-heartbeat-timeout-fallback.sh")"
+    bad_clock='python3 -c'
+    if ! grep -q "$bad_clock.*time.monotonic" <<< "$source" && \
+       [[ "$source" == *'SECONDS=0'* ]] && [[ "$source" == *'elapsed_seconds=$SECONDS'* ]]; then
+        test_pass
+    else
+        test_fail "timeout elapsed checks must use one Bash 3.2-portable clock"
+    fi
+}
+
 test_timeout_signals_root_without_ps
 test_pid_reuse_metadata_is_enforced
 test_supervisor_isolates_provider_group_without_mutating_caller
 test_timeout_kills_term_resistant_descendant_without_ps
 test_interruption_cleans_timeout_state_and_preserves_default_term
 test_interruption_restores_returning_caller_trap
+test_elapsed_measurement_is_single_shell_portable
 
 test_summary

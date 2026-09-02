@@ -45,18 +45,24 @@ model alias resolution through `OCTOPUS_KIMI_MODEL`; an isolated environment
 that preserves `KIMI_CODE_HOME` and the documented `KIMI_MODEL_*` override
 family; config-aware detection and health checks; and
 real sync/background dispatch regressions. Its readiness contract follows
-`default_model` to the model's provider in `$KIMI_CODE_HOME/config.toml`
-(default `~/.kimi-code/config.toml`) and checks that provider's `api_key`,
-provider-local `env` credential, configured OAuth storage, or a complete
-`KIMI_MODEL_NAME` plus `KIMI_MODEL_API_KEY` override. Bare `KIMI_API_KEY` in
-the parent shell is not Kimi Code authentication.
+`default_model` in `$KIMI_CODE_HOME/config.toml` (default
+`~/.kimi-code/config.toml`). It resolves that model's provider in Kimi's order:
+the model's `provider_id`, the model's `provider`, then top-level
+`default_provider`. Models without a provider can instead define a flat
+`base_url` and `protocol`. Model-level `api_key` or OAuth takes precedence over
+provider-level `api_key`, provider-local `env` credentials, or OAuth. A
+complete `KIMI_MODEL_NAME` plus `KIMI_MODEL_API_KEY` override is also accepted.
+Bare `KIMI_API_KEY` in the parent shell is not Kimi Code authentication.
 
 Readiness validates the complete TOML document with Kimi Code's own runtime and
-built-in `doctor` command. This works with both the native executable and the
-Node launcher without requiring a separate Python installation. If the
-validator cannot run, the provider fails closed and asks the user to reinstall
-or update Kimi Code. Legacy keyring-only OAuth is not reported as ready; run
-`kimi` with the same `KIMI_CODE_HOME` and enter `/login` again.
+built-in `doctor` command, then uses `provider list --json` for provider and
+model records. Because that JSON omits top-level defaults, the bundled helper
+reads only `default_model` and `default_provider` from the already validated
+document. This works with both the native executable and the Node launcher
+without requiring a separate Python installation. If validation cannot run,
+the provider fails closed and asks the user to reinstall or update Kimi Code.
+Legacy keyring-only OAuth is not reported as ready; run `kimi` with the same
+`KIMI_CODE_HOME` and enter `/login` again.
 
 Kimi Code 0.40.1 documents Vertex ADC, but its shipped default headless runtime
 rejects an ADC-only provider before dispatch. Octopus therefore fails that

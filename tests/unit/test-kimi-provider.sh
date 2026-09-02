@@ -542,6 +542,128 @@ TOML
     fi
 }
 
+test_kimi_model_level_auth_precedes_provider_auth() {
+    test_case "model-level API key and OAuth credentials drive readiness before provider auth"
+    local root api_rc=0 oauth_rc=0 api_method oauth_method
+    root="$TEST_TMP_DIR/kimi-model-level-auth"
+    mkdir -p "$root/credentials"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "openai"
+model = "gpt-fixture"
+max_context_size = 1048576
+api_key = "PR987_MODEL_KEY_SENTINEL"
+[providers.openai]
+type = "openai"
+base_url = "https://fixture.invalid/v1"
+[providers.openai.oauth]
+storage = "file"
+key = "oauth/provider-session"
+TOML
+    api_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || api_rc=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "openai"
+model = "gpt-fixture"
+max_context_size = 1048576
+[models.selected.oauth]
+storage = "file"
+key = "oauth/model-session"
+[providers.openai]
+type = "openai"
+base_url = "https://fixture.invalid/v1"
+api_key = "PR987_PROVIDER_KEY_SENTINEL"
+TOML
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/model-session.json"
+    oauth_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || oauth_rc=$?
+
+    if [[ "$api_rc" -eq 0 && "$api_method" == "config:api-key" && \
+          "$oauth_rc" -eq 0 && "$oauth_method" == "kimi-session" && \
+          "$api_method$oauth_method" != *PR987_* ]]; then
+        test_pass
+    else
+        test_fail "expected model auth precedence without secret output, got api=$api_rc/$api_method oauth=$oauth_rc/$oauth_method"
+    fi
+}
+
+test_kimi_default_provider_and_flat_model_readiness() {
+    test_case "default_provider inheritance and flat model credentials match Kimi runtime"
+    local root inherited_rc=0 flat_key_rc=0 flat_oauth_rc=0 explicit_rc=0
+    local inherited_method flat_key_method flat_oauth_method explicit_method
+    root="$TEST_TMP_DIR/kimi-model-resolution-shapes"
+    mkdir -p "$root/credentials"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+
+    cat > "$root/config.toml" <<'TOML'
+default_provider = "openai"
+default_model = "selected"
+[models.selected]
+model = "gpt-fixture"
+max_context_size = 1048576
+[models.unselected]
+model = "other-fixture"
+max_context_size = 1048576
+[providers.openai]
+type = "openai"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    inherited_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || inherited_rc=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+model = "gpt-fixture"
+protocol = "openai"
+base_url = "https://fixture.invalid/v1"
+api_key = "PR987_FLAT_KEY_SENTINEL"
+max_context_size = 1048576
+TOML
+    flat_key_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || flat_key_rc=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+model = "gpt-fixture"
+protocol = "openai"
+base_url = "https://fixture.invalid/v1"
+max_context_size = 1048576
+[models.selected.oauth]
+storage = "file"
+key = "oauth/flat-session"
+TOML
+    printf '%s\n' '{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":4102444800,"scope":"fixture","token_type":"Bearer","expires_in":3600}' > "$root/credentials/flat-session.json"
+    flat_oauth_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || flat_oauth_rc=$?
+
+    cat > "$root/config.toml" <<'TOML'
+default_provider = "unused"
+default_model = "selected"
+[models.selected]
+provider = "openai"
+model = "gpt-fixture"
+max_context_size = 1048576
+[providers.openai]
+type = "openai"
+api_key = "fixture-not-a-secret"
+TOML
+    explicit_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || explicit_rc=$?
+
+    if [[ "$inherited_rc" -eq 0 && "$inherited_method" == "config:api-key" && \
+          "$flat_key_rc" -eq 0 && "$flat_key_method" == "config:api-key" && \
+          "$flat_oauth_rc" -eq 0 && "$flat_oauth_method" == "kimi-session" && \
+          "$explicit_rc" -eq 0 && "$explicit_method" == "config:api-key" && \
+          "$flat_key_method$flat_oauth_method" != *PR987_* ]]; then
+        test_pass
+    else
+        test_fail "expected inherited/flat/explicit readiness, got inherited=$inherited_rc/$inherited_method flat-key=$flat_key_rc/$flat_key_method flat-oauth=$flat_oauth_rc/$flat_oauth_method explicit=$explicit_rc/$explicit_method"
+    fi
+}
+
 test_kimi_rejects_malformed_or_duplicate_toml() {
     test_case "readiness fails closed on malformed and duplicate TOML assignments"
     local root rc_bare rc_boolean rc_trailing rc_duplicate rc_document
@@ -696,7 +818,7 @@ TOML
 
 test_kimi_rejects_dangling_unselected_provider_reference() {
     test_case "readiness rejects an unselected model whose provider does not exist"
-    local root rc issue
+    local root rc rc_inherited issue
     root="$TEST_TMP_DIR/kimi-dangling-unselected-provider"
     mkdir -p "$root"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
@@ -716,11 +838,27 @@ api_key = "fixture-not-a-secret"
 TOML
     rc=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc=$?
+    cat > "$root/config.toml" <<'TOML'
+default_provider = "missing"
+default_model = "selected"
+[models.selected]
+provider = "selected"
+model = "model"
+max_context_size = 1048576
+[models.unselected]
+model = "other"
+max_context_size = 1048576
+[providers.selected]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_inherited=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_inherited=$?
     issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
-    if [[ "$rc" -ne 0 && "$issue" == "config-invalid" ]]; then
+    if [[ "$rc" -ne 0 && "$rc_inherited" -ne 0 && "$issue" == "config-invalid" ]]; then
         test_pass
     else
-        test_fail "expected dangling unselected provider rejection, got rc=$rc issue=$issue"
+        test_fail "expected explicit/inherited dangling rejection, got explicit=$rc inherited=$rc_inherited issue=$issue"
     fi
 }
 
@@ -1844,6 +1982,8 @@ test_kimi_rejects_incomplete_selected_records
 test_kimi_accepts_matching_provider_env_credentials
 test_kimi_accepts_current_provider_types_and_capabilities
 test_kimi_accepts_current_v2_model_reference_shape
+test_kimi_model_level_auth_precedes_provider_auth
+test_kimi_default_provider_and_flat_model_readiness
 test_kimi_rejects_malformed_or_duplicate_toml
 test_kimi_validates_unselected_records
 test_kimi_rejects_dangling_unselected_provider_reference
