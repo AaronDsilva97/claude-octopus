@@ -10,11 +10,71 @@ disable-model-invocation: true
 ## Key Behavior
 
 - **Creates plans** - Captures intent, analyzes requirements, generates weighted execution strategy
-- **Saves to files** - Stores plan (`.claude/session-plan.md`) and intent contract (`.claude/session-intent.md`)
+- **Saves to files** - Stores each plan and intent contract in a unique run directory under the project-owned `.octo/plans/` namespace, or under octo-owned session storage when there is no project
 - **Doesn't execute** - Plans are saved for review; execution requires user confirmation
 - **Optional execution** - Can load `/octo:embrace` after explicit user approval or execute later
 
 ## 🤖 INSTRUCTIONS FOR CLAUDE
+
+### MANDATORY: Detect Plan Mode Write Conflict Before Starting
+
+**THIS CHECK RUNS FIRST — before intent capture, before any artifact write.**
+
+Native plan mode blocks all Write/Edit tool calls until `ExitPlanMode` is
+called. If you are currently in plan mode (you entered it earlier this session
+or the harness placed you in it), attempting to write `${OCTO_PLAN_DIR}/session-intent.md`
+or `${OCTO_PLAN_DIR}/session-plan.md` will silently fail, producing a degraded native
+plan instead of a full octo multi-provider plan.
+
+**If you are in plan mode when /octo:plan is invoked, you MUST:**
+
+1. Emit this exact warning as the very first output:
+
+   ```text
+   ⚠️  OCTO PLAN DEGRADED — Plan Mode Write Conflict
+
+   Native plan mode is active. Octo cannot save its planning artifacts
+   (session-intent.md, session-plan.md) while plan mode
+   restricts writes. You are getting display-only output — this is NOT
+   a full octo multi-provider plan.
+
+   To get the full octo plan:
+     1. Exit or cancel native plan mode
+     2. Re-run /octo:plan
+
+   Continuing with plan visualization only (no artifacts saved)…
+   ```
+
+2. Skip Step 2 (Create Intent Contract) and Step 5 (Save the Plan) entirely.
+   Do not attempt these writes — they will silently fail.
+3. Complete Steps 1, 3, 4, and 6 so the user sees the visualization.
+4. Repeat the re-run reminder at the end of Step 6.
+
+**Do NOT silently fall through to generic native planning. The user invoked
+/octo:plan deliberately. A visible degradation warning is mandatory.**
+
+---
+
+### Resolve Plan Storage Location
+
+**After confirming native plan mode is not active, resolve one unique run
+directory before creating either artifact. Every other step in this command
+reads or writes `${OCTO_PLAN_DIR}/session-intent.md` and
+`${OCTO_PLAN_DIR}/session-plan.md`. Never substitute a bare
+`.claude/session-intent.md` or `.claude/session-plan.md` literal:**
+
+```bash
+PLAN_STORAGE="${CLAUDE_PLUGIN_ROOT:-${HOME}/.claude-octopus/plugin}/scripts/plan-storage.sh"
+OCTO_PLAN_DIR="$("$PLAN_STORAGE" create "$PWD")" || {
+  echo "Unable to resolve safe plan artifact storage" >&2
+  exit 1
+}
+echo "Plan artifacts will be saved to: ${OCTO_PLAN_DIR}"
+```
+
+The resolver hard-blocks the global `~/.claude/` directory, detects git and marker-file project roots, creates a unique directory for every invocation, and records that directory for the current host session and workspace. Running `/octo:plan` from `$HOME` or another non-project directory uses `~/.claude-octopus/sessions/<session-id>/plans/<run-id>/`. Project runs use `<project-root>/.octo/plans/<run-id>/`.
+
+Keep the absolute path printed by the resolver and use that exact path in every later Read, Write, Edit, and Bash action. If the path must be recovered in a later shell, run `"$PLAN_STORAGE" current "$PWD"`. Report the resolved absolute path, not a relative placeholder, in every confirmation message shown to the user.
 
 ### Provider preflight
 
@@ -37,45 +97,6 @@ If the selected provider is unavailable or unauthenticated, keep the plan in
 Claude-only mode, name the failed preflight, and offer `/octo:setup` or
 `/octo:skill-doctor` as the recovery path. Do not describe an unstarted
 provider seat as completed.
-
-### MANDATORY: Detect Plan Mode Write Conflict Before Starting
-
-**THIS CHECK RUNS FIRST — before intent capture, before any artifact write.**
-
-Native plan mode blocks all Write/Edit tool calls until `ExitPlanMode` is
-called. If you are currently in plan mode (you entered it earlier this session
-or the harness placed you in it), attempting to write `.claude/session-intent.md`
-or `.claude/session-plan.md` will silently fail, producing a degraded native
-plan instead of a full octo multi-provider plan.
-
-**If you are in plan mode when /octo:plan is invoked, you MUST:**
-
-1. Emit this exact warning as the very first output:
-
-   ```text
-   ⚠️  OCTO PLAN DEGRADED — Plan Mode Write Conflict
-
-   Native plan mode is active. Octo cannot save its planning artifacts
-   (.claude/session-intent.md, .claude/session-plan.md) while plan mode
-   restricts writes. You are getting display-only output — this is NOT
-   a full octo multi-provider plan.
-
-   To get the full octo plan:
-     1. Exit or cancel native plan mode
-     2. Re-run /octo:plan
-
-   Continuing with plan visualization only (no artifacts saved)…
-   ```
-
-2. Skip Step 2 (Create Intent Contract) and Step 5 (Save the Plan) entirely.
-   Do not attempt these writes — they will silently fail.
-3. Complete Steps 1, 3, 4, and 6 so the user sees the visualization.
-4. Repeat the re-run reminder at the end of Step 6.
-
-**Do NOT silently fall through to generic native planning. The user invoked
-/octo:plan deliberately. A visible degradation warning is mandatory.**
-
----
 
 ### MANDATORY COMPLIANCE — DO NOT SKIP
 
@@ -163,7 +184,7 @@ Can you describe in 1-2 sentences what you're trying to accomplish?
 
 **Use the skill-intent-contract system to capture this formally:**
 
-1. Create `.claude/session-intent.md` with:
+1. Create `${OCTO_PLAN_DIR}/session-intent.md` with:
    - Job statement (what user is trying to accomplish)
    - Success criteria (from their answers)
    - Boundaries (derived from constraints)
@@ -292,7 +313,7 @@ When the plan includes debate-worthy decision points, surface them explicitly:
 
 Plans with `"High stakes"` constraints or `"Make a decision"` goals should always
 recommend debate gates. Include the debate checkpoint markers in the saved plan
-(`.claude/session-plan.md`) so `/octo:embrace` knows to activate them.
+(`${OCTO_PLAN_DIR}/session-plan.md`) so `/octo:embrace` knows to activate them.
 
 ### Step 4: Present the Plan
 
@@ -348,13 +369,13 @@ status other than `available` cannot be displayed as a completed provider seat.
 
 **CRITICAL: The plan command creates plans, it does NOT execute them by default.**
 
-1. **Save plan to `.claude/session-plan.md`:**
+- **Save plan to `${OCTO_PLAN_DIR}/session-plan.md`:**
 
 ```markdown
 # Session Plan
 
 **Created:** [timestamp]
-**Intent Contract:** See .claude/session-intent.md
+**Intent Contract:** See [resolved OCTO_PLAN_DIR]/session-intent.md
 
 ## What You'll End Up With
 [Clear description of deliverable]
@@ -391,12 +412,12 @@ Or execute phases individually:
 3. Execute with /octo:embrace when ready
 ```
 
-2. **Display the plan to the user** (same visualization as before)
+- **Display the plan to the user** (same visualization as before)
 
-3. **Show completion message:**
+- **Show completion message with the resolved absolute path:**
 
-```
-✅ Plan saved to .claude/session-plan.md
+```text
+✅ Plan saved to [resolved OCTO_PLAN_DIR]/session-plan.md
 
 To execute this plan, run:
   /octo:embrace "[user's goal]"
@@ -430,7 +451,7 @@ AskUserQuestion({
 
 **If "Review and execute later":**
 - Save plan and exit
-- User can review `.claude/session-plan.md` at their leisure
+- User can review `${OCTO_PLAN_DIR}/session-plan.md` at their leisure
 - User runs `/octo:embrace` when ready
 
 **If "Adjust plan weights":**
@@ -447,7 +468,7 @@ AskUserQuestion({
 **If "Multi-LLM debate the plan first":**
 - Read `${HOME}/.claude-octopus/plugin/commands/debate.md` and execute it with the plan as context (Claude plus available providers deliberate):
   - Topic: "Should we proceed with this plan? What are the risks and blind spots?"
-  - `--rounds 2 --debate-style adversarial --context-file .claude/session-plan.md`
+  - `--rounds 2 --debate-style adversarial --context-file "${OCTO_PLAN_DIR}/session-plan.md"`
 - After the Multi-LLM debate completes, present the synthesis and return to Step 6
 - If the debate confirms the plan, user can then select "Execute now"
 - If the debate reveals issues, user can select "Adjust plan weights" or "Different approach"
@@ -473,8 +494,8 @@ The plan command should load the explicit `/octo:embrace` command source, which 
 ### Step 8: Plan Command Completes
 
 **The plan command exits after:**
-- Creating and saving the plan (`.claude/session-plan.md`)
-- Creating the intent contract (`.claude/session-intent.md`)
+- Creating and saving the plan (`${OCTO_PLAN_DIR}/session-plan.md`)
+- Creating the intent contract (`${OCTO_PLAN_DIR}/session-intent.md`)
 - Optionally loading `/octo:embrace` if user requested immediate execution
 
 **The plan command does NOT:**
@@ -506,7 +527,7 @@ DELIVER ██████████ 25%
 
 "You'll get: Comprehensive research report with recommendations"
 
-✅ Plan saved to .claude/session-plan.md
+✅ Plan saved to /path/to/project/.octo/plans/plan-20260902T120000Z.a1b2c3/session-plan.md
 
 To execute this plan, run:
   /octo:embrace "research topic X"
@@ -577,7 +598,7 @@ User selects: "Execute now"
 The plan command is the primary entry point for creating intent contracts. It:
 
 1. Captures comprehensive user intent
-2. Creates `.claude/session-intent.md`
+2. Creates `${OCTO_PLAN_DIR}/session-intent.md` (see Resolve Plan Storage Location)
 3. Routes to appropriate workflows
 4. Passes intent contract through execution
 5. Validates outputs against original intent
