@@ -31,10 +31,12 @@ source "$PROJECT_ROOT/scripts/lib/parallel.sh" 2>/dev/null || true
 
 test_suite "Moonshot Kimi Code CLI Provider"
 
-# Production discovers the Python runtime bundled with the installed Kimi Code
-# launcher. Unit fixtures replace that launcher with shell mocks, so point the
-# parser at the test runner's Python explicitly.
-export _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
+# Config probes execute through Kimi Code's own plugin runtime. The fixture
+# below emulates only Kimi's offline doctor/provider commands; it never reaches
+# the network and keeps credential values inside the child process.
+export KIMI_TEST_DRIVER="$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.py"
+export KIMI_TEST_PYTHON="$(command -v python3)"
+export KIMI_TEST_NODE="$(command -v node)"
 
 # Stub log() — kimi.sh/model-resolver.sh call it outside orchestrate.sh.
 log() { :; }
@@ -48,9 +50,71 @@ _kimi_restore_key() {
 _kimi_mock_bin() {
     local dir="$1" body="$2"
     mkdir -p "$dir"
-    printf '%s\n' '#!/usr/bin/env bash' "$body" > "$dir/kimi"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        cat <<'MOCK'
+case "${1:-}" in
+    __plugin_run_node)
+        shift
+        exec "${KIMI_TEST_NODE:?}" "$@"
+        ;;
+    doctor|provider)
+        exec "${KIMI_TEST_PYTHON:?}" "${KIMI_TEST_DRIVER:?}" "$@"
+        ;;
+esac
+MOCK
+        printf '%s\n' "$body"
+    } > "$dir/kimi"
     chmod +x "$dir/kimi"
 }
+
+_kimi_native_runtime_mock_bin() {
+    local dir="$1" command_name
+    mkdir -p "$dir"
+    ln -s "$(command -v env)" "$dir/kimi"
+    for command_name in doctor provider; do
+        cat > "$dir/$command_name" <<'MOCK'
+#!/usr/bin/env bash
+exec "${KIMI_TEST_PYTHON:?}" "${KIMI_TEST_DRIVER:?}" "${0##*/}" "$@"
+MOCK
+        chmod +x "$dir/$command_name"
+    done
+    cat > "$dir/__plugin_run_node" <<'MOCK'
+#!/usr/bin/env bash
+exec "${KIMI_TEST_NODE:?}" "$@"
+MOCK
+    chmod +x "$dir/__plugin_run_node"
+}
+
+_kimi_node_runtime_mock_bin() {
+    local dir="$1"
+    mkdir -p "$dir"
+    cat > "$dir/kimi" <<'MOCK'
+#!/usr/bin/env node
+const { spawnSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
+const args = process.argv.slice(2);
+if (args[0] === '__plugin_run_node') {
+  const entry = args[1];
+  process.argv = [process.argv[0], entry, ...args.slice(2)];
+  import(pathToFileURL(entry).href).catch(() => process.exit(1));
+} else {
+  const result = spawnSync(process.env.KIMI_TEST_PYTHON, [process.env.KIMI_TEST_DRIVER, ...args], {
+    env: process.env,
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
+MOCK
+    chmod +x "$dir/kimi"
+}
+
+# Keep a deterministic Kimi runtime available for config-only tests that do
+# not otherwise need a bespoke dispatch mock.
+KIMI_TEST_CONFIG_BIN="$TEST_TMP_DIR/kimi-bin-config-runtime"
+_kimi_mock_bin "$KIMI_TEST_CONFIG_BIN" 'exit 0'
+PATH="$KIMI_TEST_CONFIG_BIN:$PATH"
+export PATH
 
 _kimi_fake_system_timeout_bins() {
     local dir="$1" timeout_name
@@ -181,16 +245,13 @@ TOML
     fi
 }
 
-test_kimi_discovers_bundled_parser_from_launcher() {
-    test_case "config validation discovers Python from the Kimi launcher"
-    local tmp_bin root old_path python method rc
-    local _OCTO_KIMI_CONFIG_PYTHON=""
-    tmp_bin="$TEST_TMP_DIR/kimi-bin-parser-discovery"
-    root="$TEST_TMP_DIR/kimi-parser-discovery"
-    python="$(command -v python3)"
-    mkdir -p "$tmp_bin" "$root"
-    printf '#!%s\nraise SystemExit(0)\n' "$python" > "$tmp_bin/kimi"
-    chmod +x "$tmp_bin/kimi"
+test_kimi_native_runtime_config_bridge() {
+    test_case "config validation works with a native Kimi executable shape"
+    local tmp_bin root old_path method rc
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-native-runtime"
+    root="$TEST_TMP_DIR/kimi-native-runtime"
+    _kimi_native_runtime_mock_bin "$tmp_bin"
+    mkdir -p "$root"
     cat > "$root/config.toml" <<'TOML'
 default_model = "custom"
 [models.custom]
@@ -211,12 +272,44 @@ TOML
     if [[ "$rc" -eq 0 && "$method" == "config:api-key" ]]; then
         test_pass
     else
-        test_fail "expected launcher-derived parser readiness, got rc=$rc method=$method"
+        test_fail "expected native-runtime config readiness, got rc=$rc method=$method"
     fi
 }
 
-test_kimi_config_env_is_not_credential() {
-    test_case "provider-local env does not masquerade as a Kimi credential"
+test_kimi_node_runtime_config_bridge() {
+    test_case "config validation works with the official Node launcher shape"
+    local tmp_bin root old_path method rc
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-node-runtime"
+    root="$TEST_TMP_DIR/kimi-node-runtime"
+    _kimi_node_runtime_mock_bin "$tmp_bin"
+    mkdir -p "$root"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "openai"
+model = "gpt-5"
+max_context_size = 400000
+capabilities = ["tool_use", "audio_in"]
+[providers.openai]
+type = "openai"
+[providers.openai.env]
+OPENAI_API_KEY = "fixture-not-a-secret"
+TOML
+    old_path="$PATH"
+    PATH="$tmp_bin:$PATH"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    rc=0
+    method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc=$?
+    PATH="$old_path"
+    if [[ "$rc" -eq 0 && "$method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected Node-runtime config readiness, got rc=$rc method=$method"
+    fi
+}
+
+test_kimi_config_env_is_credential() {
+    test_case "provider-local env supplies the selected provider credential"
     local tmp_bin old_path old_home auth rc
     tmp_bin="$TEST_TMP_DIR/kimi-bin-config-env"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
@@ -240,10 +333,10 @@ TOML
     rc=0; kimi_is_available >/dev/null 2>&1 || rc=$?
     auth="$(kimi_auth_method)"
     PATH="$old_path"; HOME="$old_home"
-    if [[ "$rc" -ne 0 && "$auth" == "none" ]]; then
+    if [[ "$rc" -eq 0 && "$auth" == "config:api-key" ]]; then
         test_pass
     else
-        test_fail "expected provider-local env to remain unauthenticated, got rc=$rc auth=$auth"
+        test_fail "expected provider-local env readiness, got rc=$rc auth=$auth"
     fi
 }
 
@@ -335,16 +428,16 @@ TOML
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_invalid_type=$?
 
     if [[ "$rc_missing_type" -ne 0 && "$rc_missing_model" -ne 0 && \
-          "$rc_missing_context" -ne 0 && "$rc_missing_base_url" -ne 0 && \
-          "$rc_missing_api_key" -ne 0 && "$rc_invalid_type" -ne 0 ]]; then
+          "$rc_missing_context" -ne 0 && "$rc_missing_base_url" -eq 0 && \
+          "$rc_missing_api_key" -ne 0 && "$rc_invalid_type" -eq 0 ]]; then
         test_pass
     else
-        test_fail "expected invalid records to fail, got type=$rc_missing_type model=$rc_missing_model context=$rc_missing_context base-url=$rc_missing_base_url api-key=$rc_missing_api_key provider-type=$rc_invalid_type"
+        test_fail "expected required selected fields to fail while optional base_url and openai pass, got type=$rc_missing_type model=$rc_missing_model context=$rc_missing_context base-url=$rc_missing_base_url api-key=$rc_missing_api_key provider-type=$rc_invalid_type"
     fi
 }
 
-test_kimi_rejects_provider_env_credentials() {
-    test_case "provider-local env is not treated as Kimi or OpenAI authentication"
+test_kimi_accepts_matching_provider_env_credentials() {
+    test_case "provider-local env uses the credential key for the selected provider type"
     local root rc_unrelated rc_kimi rc_openai_wrong rc_openai
     root="$TEST_TMP_DIR/kimi-provider-env-key"
     mkdir -p "$root"
@@ -371,7 +464,7 @@ TOML
     rc_kimi=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_kimi=$?
 
-    sed 's/type = "kimi"/type = "openai_legacy"/' "$root/config.toml" > "$root/config.next"
+    sed 's/type = "kimi"/type = "openai"/' "$root/config.toml" > "$root/config.next"
     mv "$root/config.next" "$root/config.toml"
     rc_openai_wrong=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_openai_wrong=$?
@@ -381,11 +474,46 @@ TOML
     rc_openai=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_openai=$?
 
-    if [[ "$rc_unrelated" -ne 0 && "$rc_kimi" -ne 0 &&
-          "$rc_openai_wrong" -ne 0 && "$rc_openai" -ne 0 ]]; then
+    if [[ "$rc_unrelated" -ne 0 && "$rc_kimi" -eq 0 &&
+          "$rc_openai_wrong" -ne 0 && "$rc_openai" -eq 0 ]]; then
         test_pass
     else
-        test_fail "expected config env values to remain unauthenticated, got unrelated=$rc_unrelated kimi=$rc_kimi openai-wrong=$rc_openai_wrong openai=$rc_openai"
+        test_fail "expected only matching provider env keys to authenticate, got unrelated=$rc_unrelated kimi=$rc_kimi openai-wrong=$rc_openai_wrong openai=$rc_openai"
+    fi
+}
+
+test_kimi_accepts_current_provider_types_and_capabilities() {
+    test_case "current Kimi provider types and capability tags pass readiness"
+    local root rc_openai rc_google method
+    root="$TEST_TMP_DIR/kimi-current-config-vocabulary"
+    mkdir -p "$root"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+
+    cat > "$root/config.toml" <<'TOML'
+default_model = "custom"
+[models.custom]
+provider = "provider"
+model = "model"
+max_context_size = 1048576
+capabilities = ["tool_use", "audio_in"]
+[providers.provider]
+type = "openai"
+[providers.provider.env]
+OPENAI_API_KEY = "fixture-not-a-secret"
+TOML
+    rc_openai=0
+    method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc_openai=$?
+
+    sed 's/type = "openai"/type = "google-genai"/; s/OPENAI_API_KEY/GOOGLE_API_KEY/' \
+        "$root/config.toml" > "$root/config.next"
+    mv "$root/config.next" "$root/config.toml"
+    rc_google=0
+    method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc_google=$?
+
+    if [[ "$rc_openai" -eq 0 && "$rc_google" -eq 0 && "$method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected current vocabulary readiness, got openai=$rc_openai google=$rc_google method=$method"
     fi
 }
 
@@ -393,10 +521,9 @@ test_kimi_rejects_malformed_or_duplicate_toml() {
     test_case "readiness fails closed on malformed and duplicate TOML assignments"
     local root rc_bare rc_boolean rc_trailing rc_duplicate rc_document
     local rc_quoted_duplicate rc_table_duplicate rc_parser_missing parser_issue
-    local _OCTO_KIMI_CONFIG_PYTHON
+    local broken_bin old_path
     root="$TEST_TMP_DIR/kimi-malformed-config"
     mkdir -p "$root"
-    _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
 
     cat > "$root/config.toml" <<'TOML'
@@ -485,21 +612,60 @@ type = "kimi"
 base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
-    _OCTO_KIMI_CONFIG_PYTHON="$root/does-not-exist"
+    broken_bin="$TEST_TMP_DIR/kimi-bin-no-plugin-runtime"
+    mkdir -p "$broken_bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$broken_bin/kimi"
+    chmod +x "$broken_bin/kimi"
+    old_path="$PATH"
+    PATH="$broken_bin:$PATH"
     rc_parser_missing=0
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_parser_missing=$?
     parser_issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+    PATH="$old_path"
 
     if [[ "$rc_bare" -ne 0 && "$rc_boolean" -ne 0 && "$rc_trailing" -ne 0 && "$rc_duplicate" -ne 0 ]]; then
         if [[ "$rc_document" -ne 0 && "$rc_quoted_duplicate" -ne 0 && \
               "$rc_table_duplicate" -ne 0 && "$rc_parser_missing" -ne 0 && \
-              "$parser_issue" == "parser-unavailable" ]]; then
+              "$parser_issue" == "validator-unavailable" ]]; then
             test_pass
         else
             test_fail "expected full-document and parser fail-closed rejection, got document=$rc_document quoted=$rc_quoted_duplicate table=$rc_table_duplicate parser=$rc_parser_missing issue=$parser_issue"
         fi
     else
         test_fail "expected malformed config rejection, got bare=$rc_bare boolean=$rc_boolean trailing=$rc_trailing duplicate=$rc_duplicate"
+    fi
+}
+
+test_kimi_validates_unselected_records() {
+    test_case "readiness rejects a schema-invalid unselected record"
+    local root rc issue readiness
+    root="$TEST_TMP_DIR/kimi-invalid-unselected-record"
+    mkdir -p "$root"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "selected"
+model = "model"
+max_context_size = 1048576
+[providers.selected]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+[providers.unselected]
+type = 42
+TOML
+    rc=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc=$?
+    issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+    readiness="$(PROJECT_ROOT="$PROJECT_ROOT" KIMI_CODE_HOME="$root" /bin/bash -c '
+        source "$PROJECT_ROOT/scripts/lib/preflight.sh"
+        _octo_provider_static_readiness kimi
+    ')"
+    if [[ "$rc" -ne 0 && "$issue" == "config-invalid" && \
+          "$readiness" == degraded\|config-invalid\|* ]]; then
+        test_pass
+    else
+        test_fail "expected full-document rejection, got rc=$rc issue=$issue readiness=$readiness"
     fi
 }
 
@@ -578,10 +744,8 @@ test_kimi_oauth_requires_usable_json_object() {
     test_case "OAuth readiness requires a readable usable token object without exposing it"
     local root rc_unreadable rc_invalid rc_array rc_empty rc_partial rc_whitespace
     local rc_bad_expiry rc_valid method issue_invalid
-    local _OCTO_KIMI_CONFIG_PYTHON
     root="$TEST_TMP_DIR/kimi-oauth-validation"
     mkdir -p "$root/credentials"
-    _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
     cat > "$root/config.toml" <<'TOML'
 default_model = "custom"
@@ -641,10 +805,8 @@ TOML
 test_kimi_keyring_reference_requires_migrated_file() {
     test_case "a keyring OAuth declaration is not readiness without a migrated token file"
     local root rc_missing rc_file method issue readiness health health_rc
-    local _OCTO_KIMI_CONFIG_PYTHON
     root="$TEST_TMP_DIR/kimi-keyring-oauth"
     mkdir -p "$root/credentials"
-    _OCTO_KIMI_CONFIG_PYTHON="$(command -v python3)"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
     cat > "$root/config.toml" <<'TOML'
 default_model = "custom"
@@ -664,13 +826,13 @@ TOML
     KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_missing=$?
     issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
     readiness="$(PROJECT_ROOT="$PROJECT_ROOT" KIMI_CODE_HOME="$root" \
-        _OCTO_KIMI_CONFIG_PYTHON="$_OCTO_KIMI_CONFIG_PYTHON" /bin/bash -c '
+        /bin/bash -c '
             source "$PROJECT_ROOT/scripts/lib/preflight.sh"
             _octo_provider_static_readiness kimi
         ')"
     health_rc=0
     health="$(PROJECT_ROOT="$PROJECT_ROOT" KIMI_CODE_HOME="$root" \
-        _OCTO_KIMI_CONFIG_PYTHON="$_OCTO_KIMI_CONFIG_PYTHON" /bin/bash -c '
+        /bin/bash -c '
             source "$PROJECT_ROOT/scripts/lib/providers.sh"
             check_provider_health kimi
         ' 2>&1)" || health_rc=$?
@@ -678,8 +840,10 @@ TOML
     rc_file=0
     method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc_file=$?
     if [[ "$rc_missing" -ne 0 && "$issue" == "keyring-migration-required" && \
-          "$readiness" == degraded\|auth-migration-required\|*"one-time migration"* && \
-          "$health_rc" -ne 0 && "$health" == *"one-time migration"* && \
+          "$readiness" == degraded\|auth-migration-required\|*"/login"* && \
+          "$readiness" != *"launch"* && \
+          "$health_rc" -ne 0 && "$health" == *"/login"* && \
+          "$health" != *"launch"* && \
           "$rc_file" -eq 0 && "$method" == "kimi-session" ]]; then
         test_pass
     else
@@ -820,8 +984,9 @@ test_kimi_user_guidance_contracts() {
        grep -q 'OCTOPUS_KIMI_MODEL' "$PROJECT_ROOT/scripts/helpers/octo-model-config.sh" && \
        grep -q 'printf "kimi:%s' "$PROJECT_ROOT/commands/model-config.md" && \
        grep -q 'Kimi Code integration' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
-       grep -q 'bundled Python runtime' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
-       grep -q 'one-time migration' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
+       grep -q "Kimi Code's own runtime" "$PROJECT_ROOT/docs/PROVIDERS.md" && \
+       grep -q 'enter `/login`' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
+       ! grep -q 'bundled Python runtime' "$PROJECT_ROOT/docs/PROVIDERS.md" && \
        grep -q 'Kimi Code CLI' "$PROJECT_ROOT/scripts/sync-readme.py"; then
         test_pass
     else
@@ -1371,11 +1536,14 @@ test_kimi_dispatch_shim
 test_kimi_dispatch_wires_model
 test_kimi_env_isolation
 test_kimi_config_credentials
-test_kimi_discovers_bundled_parser_from_launcher
-test_kimi_config_env_is_not_credential
+test_kimi_native_runtime_config_bridge
+test_kimi_node_runtime_config_bridge
+test_kimi_config_env_is_credential
 test_kimi_rejects_incomplete_selected_records
-test_kimi_rejects_provider_env_credentials
+test_kimi_accepts_matching_provider_env_credentials
+test_kimi_accepts_current_provider_types_and_capabilities
 test_kimi_rejects_malformed_or_duplicate_toml
+test_kimi_validates_unselected_records
 test_kimi_accepts_unrelated_array_tables
 test_kimi_custom_root_oauth
 test_kimi_oauth_requires_usable_json_object

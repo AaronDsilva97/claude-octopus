@@ -244,26 +244,27 @@ _octo_provider_static_readiness() {
             if command -v kimi >/dev/null 2>&1; then
                 local kimi_config_path
                 kimi_config_path="$(kimi_config_file 2>/dev/null || printf '%s' "${KIMI_CODE_HOME:-${HOME}/.kimi-code}/config.toml")"
-                if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
-                    status="degraded"; reason_code="model-missing"
-                    remediation="Run kimi and enter /login, or configure default_model and its model/provider mapping in ${kimi_config_path}. OCTOPUS_KIMI_MODEL cannot create a missing Kimi model alias."
-                elif declare -f kimi_configured_credential_method >/dev/null 2>&1 && \
-                     kimi_configured_credential_method >/dev/null 2>&1; then
+                if declare -f kimi_configured_credential_method >/dev/null 2>&1 && \
+                   kimi_configured_credential_method >/dev/null 2>&1; then
                     status="available"; reason_code="ready"; remediation=""
                 else
                     status="degraded"
                     case "$(kimi_credential_issue 2>/dev/null || true)" in
+                        model-missing)
+                            reason_code="model-missing"
+                            remediation="Run kimi and enter /login, or configure default_model and its model/provider mapping in ${kimi_config_path}. OCTOPUS_KIMI_MODEL cannot create a missing Kimi model alias."
+                            ;;
                         keyring-migration-required)
                             reason_code="auth-migration-required"
-                            remediation="Kimi's legacy keyring session needs a one-time migration. Launch kimi once with the same KIMI_CODE_HOME, then retry; if migration cannot complete, enter /login again."
+                            remediation="Kimi Code cannot use the legacy keyring session. Run kimi with the same KIMI_CODE_HOME and enter /login again."
                             ;;
                         config-invalid)
                             reason_code="config-invalid"
                             remediation="Repair ${kimi_config_path}; Kimi requires valid TOML with a complete default model and selected provider mapping."
                             ;;
-                        parser-unavailable)
-                            reason_code="config-parser-unavailable"
-                            remediation="Reinstall or update Kimi Code so its bundled Python TOML parser is available, then retry."
+                        validator-unavailable)
+                            reason_code="config-validator-unavailable"
+                            remediation="Reinstall or update Kimi Code so its built-in config validator is available, then retry."
                             ;;
                         oauth-invalid)
                             reason_code="auth-invalid"

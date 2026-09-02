@@ -49,12 +49,12 @@ real sync/background dispatch regressions. Its readiness contract follows
 provider-local `env` credential, or configured OAuth storage. An API key that
 exists only in the parent shell is not Kimi Code authentication.
 
-Readiness validates the complete TOML document with the bundled validator using
-the bundled Python runtime installed with Kimi Code. If that parser cannot be
-resolved, the provider fails closed and asks the user to reinstall or update
-Kimi Code. Legacy keyring-only OAuth is also not reported as ready. Complete
-its one-time migration by launching `kimi` once with the same `KIMI_CODE_HOME`,
-or enter `/login` again if migration fails.
+Readiness validates the complete TOML document with Kimi Code's own runtime and
+built-in `doctor` command. This works with both the native executable and the
+Node launcher without requiring a separate Python installation. If the
+validator cannot run, the provider fails closed and asks the user to reinstall
+or update Kimi Code. Legacy keyring-only OAuth is not reported as ready; run
+`kimi` with the same `KIMI_CODE_HOME` and enter `/login` again.
 
 ## Traps (each has bitten a real PR)
 

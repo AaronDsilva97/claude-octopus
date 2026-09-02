@@ -63,45 +63,24 @@ kimi_config_file(){
     printf '%s/config.toml\n' "$(kimi_data_root)"
 }
 
-_kimi_config_python(){
-    local binary shebang interpreter env_name
-    if [[ -n "${_OCTO_KIMI_CONFIG_PYTHON:-}" ]]; then
-        interpreter="$_OCTO_KIMI_CONFIG_PYTHON"
-    else
-        binary="$(command -v kimi 2>/dev/null)" || return 1
-        [[ -f "$binary" ]] || return 1
-        IFS= read -r shebang < "$binary" || return 1
-        case "$shebang" in
-            '#!/usr/bin/env '*)
-                env_name="${shebang#\#!/usr/bin/env }"
-                env_name="${env_name#-S }"
-                env_name="${env_name%% *}"
-                interpreter="$(command -v "$env_name" 2>/dev/null)" || return 1
-                ;;
-            '#!'*)
-                interpreter="${shebang#\#!}"
-                interpreter="${interpreter%% *}"
-                ;;
-            *) return 1 ;;
-        esac
-    fi
-    [[ -x "$interpreter" ]] || return 1
-    "$interpreter" -c 'import tomllib' >/dev/null 2>&1 || return 1
-    printf '%s\n' "$interpreter"
-}
-
 _kimi_run_config_check(){
-    local interpreter lib_dir helper
-    interpreter="$(_kimi_config_python)" || return 1
+    local binary lib_dir plugin_root helper
+    binary="$(command -v kimi 2>/dev/null)" || return 1
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
-    helper="${lib_dir}/../helpers/kimi-config-check.py"
+    plugin_root="$(cd "${lib_dir}/../.." && pwd -P)" || return 1
+    helper="${plugin_root}/scripts/helpers/kimi-config-check.mjs"
     [[ -r "$helper" ]] || return 1
-    "$interpreter" "$helper" "$@" 2>/dev/null
+    KIMI_PLUGIN_ROOT="$plugin_root" \
+        "$binary" __plugin_run_node "$helper" "$@" "$binary" 2>/dev/null
 }
 
-# Parse the complete TOML document, then emit only a credential method label.
-# The parser runtime comes from Kimi's own launcher; no ambient Python is a
-# provider dependency. Missing or unusable parser runtimes fail closed.
+_kimi_config_backend_available(){
+    _kimi_run_config_check self-test
+}
+
+# Ask Kimi's own doctor to validate the complete TOML document, then emit only
+# a credential method label. The plugin runner works in both the native and npm
+# distributions, so no ambient Python or Node installation is required.
 _kimi_config_credential_record(){
     local config
     config="$(kimi_config_file)"
@@ -126,8 +105,8 @@ kimi_configured_credential_method(){
             printf '%s\n' "kimi-session"
             ;;
         oauth-keyring:*)
-            # Current Kimi Code migrates legacy keyring tokens to the same
-            # file-backed store. A config reference alone is not proof of auth.
+            # Current Kimi Code uses a file-backed store. A legacy keyring
+            # reference alone is not proof of authentication.
             _kimi_oauth_file_exists "${record#oauth-keyring:}" || return 1
             printf '%s\n' "kimi-session"
             ;;
@@ -138,14 +117,15 @@ kimi_configured_credential_method(){
 kimi_credential_issue(){
     local record
     record="$(_kimi_config_credential_record 2>/dev/null)" || {
-        if _kimi_config_python >/dev/null 2>&1; then
+        if _kimi_config_backend_available >/dev/null 2>&1; then
             printf '%s\n' "config-invalid"
         else
-            printf '%s\n' "parser-unavailable"
+            printf '%s\n' "validator-unavailable"
         fi
         return 0
     }
     case "$record" in
+        model-missing) printf '%s\n' "model-missing" ;;
         oauth-keyring:*)
             if ! _kimi_oauth_file_exists "${record#oauth-keyring:}"; then
                 printf '%s\n' "keyring-migration-required"
@@ -160,45 +140,18 @@ kimi_credential_issue(){
     esac
 }
 
-# A signed-in kimi with no configured provider refuses every prompt, so a model
-# is part of the availability contract, not a nicety.
-#
-# kimi reads the pointer as a TOP-LEVEL key only (`config.raw["default_model"]`),
-# and `[secondary_model]` carries its own `default_model` for the subagent pool.
-# A line-anchored grep therefore reports ready for a config that has only a
-# subagent model and no main one. So the scan stops at the first table header.
-#
-# The value matters too: `default_model = ""` or a bare `=` is not a model, and
-# kimi fails resolution on it exactly as if the key were absent.
-#
-# This helper checks only the top-level pointer. `kimi_is_available` combines it
-# with `_kimi_config_credential_record`, which verifies the selected model's
-# provider mapping and configured credential source without exposing values.
-#
-# OCTOPUS_KIMI_MODEL deliberately does not count: kimi resolves -m against this
-# same config, so a pin with no matching alias fails just as hard.
+# A signed-in Kimi with no configured provider refuses every prompt, so the
+# default model is part of the availability contract. Kimi's own config loader
+# resolves the top-level pointer; nested `default_model` keys cannot satisfy it.
 kimi_has_model(){
     local config
     config="$(kimi_config_file)"
     [[ -f "$config" ]] || return 1
-    awk '
-        # Stop at the first table header: past it we are no longer top-level.
-        /^[[:space:]]*\[/ { stop = 1 }
-        !stop && /^[[:space:]]*default_model[[:space:]]*=/ {
-            value = $0
-            sub(/^[[:space:]]*default_model[[:space:]]*=[[:space:]]*/, "", value)
-            sub(/[[:space:]]*#.*$/, "", value)
-            gsub(/^["'"'"']|["'"'"']$/, "", value)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-            if (length(value) > 0) { found = 1 }
-        }
-        END { exit(found ? 0 : 1) }
-    ' "$config"
+    _kimi_run_config_check has-model "$config"
 }
 
 kimi_is_available(){
     command -v kimi &>/dev/null || return 1
-    kimi_has_model || return 1
     kimi_configured_credential_method >/dev/null
 }
 

@@ -1071,21 +1071,20 @@ check_provider_health() {
                 echo "kimi: CLI not found in PATH" >&2
                 return 1
             fi
-            if declare -f kimi_has_model >/dev/null 2>&1 && ! kimi_has_model; then
-                echo "kimi: no model configured (run kimi and enter /login, or configure default_model and its model/provider mapping in $(kimi_config_file); OCTOPUS_KIMI_MODEL cannot create a missing Kimi model alias)" >&2
-                return 1
-            fi
             if ! declare -f kimi_configured_credential_method >/dev/null 2>&1 || \
                ! kimi_configured_credential_method >/dev/null 2>&1; then
                 case "$(kimi_credential_issue 2>/dev/null || true)" in
+                    model-missing)
+                        echo "kimi: no model configured (run kimi and enter /login, or configure default_model and its model/provider mapping in $(kimi_config_file); OCTOPUS_KIMI_MODEL cannot create a missing Kimi model alias)" >&2
+                        ;;
                     keyring-migration-required)
-                        echo "kimi: legacy keyring session needs a one-time migration (launch kimi once with the same KIMI_CODE_HOME, then retry; if needed, enter /login again)" >&2
+                        echo "kimi: legacy keyring session is unsupported (run kimi with the same KIMI_CODE_HOME and enter /login again)" >&2
                         ;;
                     config-invalid)
                         echo "kimi: invalid config (repair $(kimi_config_file); a complete default model and selected provider mapping are required)" >&2
                         ;;
-                    parser-unavailable)
-                        echo "kimi: config parser unavailable (reinstall or update Kimi Code so its bundled Python TOML parser is available)" >&2
+                    validator-unavailable)
+                        echo "kimi: config validator unavailable (reinstall or update Kimi Code so its built-in config validator is available)" >&2
                         ;;
                     oauth-invalid)
                         echo "kimi: OAuth session is missing or malformed (run kimi and enter /login again)" >&2
