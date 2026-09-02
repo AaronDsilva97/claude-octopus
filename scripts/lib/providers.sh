@@ -1080,6 +1080,9 @@ check_provider_health() {
                     keyring-migration-required)
                         echo "kimi: legacy keyring session is unsupported (run kimi with the same KIMI_CODE_HOME and enter /login again)" >&2
                         ;;
+                    vertex-adc-unsupported)
+                        echo "kimi: Vertex ADC is unsupported through this integration (configure VERTEXAI_API_KEY or GOOGLE_API_KEY in the selected provider's env table in $(kimi_config_file))" >&2
+                        ;;
                     config-invalid)
                         echo "kimi: invalid config (repair $(kimi_config_file); a complete default model and selected provider mapping are required)" >&2
                         ;;

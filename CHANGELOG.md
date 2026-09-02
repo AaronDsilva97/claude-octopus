@@ -8,14 +8,15 @@
   existing OpenRouter `openrouter-kimi` API route. Dispatch goes through
   `scripts/helpers/kimi-exec.sh` (kimi's `-p` takes the prompt as argv, so the
   shim bridges octo's stdin contract), with model selection wired from
-  `providers.json` / `OCTOPUS_KIMI_MODEL`. Auth is `MOONSHOT_API_KEY` or a
-  `kimi login` session. Availability additionally requires a model that kimi's
-  own `config.toml` declares at the top level — `[secondary_model]` carries its
-  own `default_model` for the subagent pool, which is not a main model — with a
-  non-empty value. An octo-side pin is not proof of readiness: kimi resolves
-  `-m` against that same config, so a pin with no matching alias fails just as
-  hard. Config errors exit 1, so the existing exit-code gate in `spawn.sh`
-  handles them.
+  `providers.json` / `OCTOPUS_KIMI_MODEL`. Auth comes from the selected
+  provider in `config.toml`, a validated `/login` session, or the documented
+  `KIMI_MODEL_*` override family. Availability additionally requires a model
+  that kimi's own `config.toml` declares at the top level — `[secondary_model]`
+  carries its own `default_model` for the subagent pool, which is not a main
+  model — with a non-empty value. An octo-side pin is not proof of readiness:
+  kimi resolves `-m` against that same config, so a pin with no matching alias
+  fails just as hard. Config errors exit 1, so the existing exit-code gate in
+  `spawn.sh` handles them.
 
 ### Fixed
 

@@ -218,6 +218,31 @@ _octo_build_provider_env_impl() {
                 if [[ -n "${OCTOPUS_KIMI_MODEL:-}" ]]; then
                     PROVIDER_ENV_ARRAY+=("OCTOPUS_KIMI_MODEL=${OCTOPUS_KIMI_MODEL}")
                 fi
+                # Kimi Code 0.40.1 owns validation of its documented model
+                # override family. Forward only this finite list so the
+                # synthetic provider works without broad shell inheritance.
+                local _kimi_model_var
+                for _kimi_model_var in \
+                    KIMI_MODEL_NAME \
+                    KIMI_MODEL_API_KEY \
+                    KIMI_MODEL_PROVIDER_TYPE \
+                    KIMI_MODEL_BASE_URL \
+                    KIMI_MODEL_MAX_CONTEXT_SIZE \
+                    KIMI_MODEL_CAPABILITIES \
+                    KIMI_MODEL_DISPLAY_NAME \
+                    KIMI_MODEL_MAX_OUTPUT_SIZE \
+                    KIMI_MODEL_REASONING_KEY \
+                    KIMI_MODEL_THINKING_EFFORT \
+                    KIMI_MODEL_ADAPTIVE_THINKING \
+                    KIMI_MODEL_MAX_COMPLETION_TOKENS \
+                    KIMI_MODEL_MAX_TOKENS \
+                    KIMI_MODEL_TEMPERATURE \
+                    KIMI_MODEL_TOP_P \
+                    KIMI_MODEL_THINKING_KEEP; do
+                    if [[ -n "${!_kimi_model_var:-}" ]]; then
+                        PROVIDER_ENV_ARRAY+=("${_kimi_model_var}=${!_kimi_model_var}")
+                    fi
+                done
                 if [[ ${#_trace_env[@]} -gt 0 ]]; then
                     PROVIDER_ENV_ARRAY+=("${_trace_env[@]}")
                 fi

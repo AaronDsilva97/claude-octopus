@@ -84,7 +84,7 @@ _kimi_config_backend_available(){
 _kimi_config_credential_record(){
     local config
     config="$(kimi_config_file)"
-    [[ -f "$config" ]] || return 1
+    [[ -f "$config" || -n "${KIMI_MODEL_NAME:-}" ]] || return 1
     _kimi_run_config_check config-record "$config"
 }
 
@@ -126,6 +126,7 @@ kimi_credential_issue(){
     }
     case "$record" in
         model-missing) printf '%s\n' "model-missing" ;;
+        vertex-adc-unsupported) printf '%s\n' "$record" ;;
         oauth-keyring:*)
             if ! _kimi_oauth_file_exists "${record#oauth-keyring:}"; then
                 printf '%s\n' "keyring-migration-required"
@@ -146,7 +147,7 @@ kimi_credential_issue(){
 kimi_has_model(){
     local config
     config="$(kimi_config_file)"
-    [[ -f "$config" ]] || return 1
+    [[ -f "$config" || -n "${KIMI_MODEL_NAME:-}" ]] || return 1
     _kimi_run_config_check has-model "$config"
 }
 

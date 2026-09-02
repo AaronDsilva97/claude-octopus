@@ -8,8 +8,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 const MAX_CONFIG_OUTPUT = 8 * 1024 * 1024;
 const PROVIDER_ENV_KEYS = new Map([
@@ -41,12 +41,18 @@ function runKimi(binary, args, configPath) {
 }
 
 function inspectConfig(binary, configPath) {
-  if (runKimi(binary, ['doctor', 'config', configPath], configPath) === undefined) {
+  const absoluteConfigPath = resolve(configPath);
+  const configExists = existsSync(absoluteConfigPath);
+  if (
+    configExists &&
+    runKimi(binary, ['doctor', 'config', absoluteConfigPath], absoluteConfigPath) === undefined
+  ) {
     return undefined;
   }
+  if (!configExists && !nonBlank(process.env.KIMI_MODEL_NAME)) return undefined;
 
-  const summary = runKimi(binary, ['provider', 'list'], configPath);
-  const raw = runKimi(binary, ['provider', 'list', '--json'], configPath);
+  const summary = runKimi(binary, ['provider', 'list'], absoluteConfigPath);
+  const raw = runKimi(binary, ['provider', 'list', '--json'], absoluteConfigPath);
   if (summary === undefined || raw === undefined) return undefined;
 
   const match = summary.match(/^Default model: ([^\r\n]+)\r?$/m);
@@ -63,11 +69,55 @@ function inspectConfig(binary, configPath) {
   if (!plainObject(listed) || !plainObject(listed.providers) || !plainObject(listed.models)) {
     return undefined;
   }
-  return {
+  const config = {
     defaultModel: match[1],
     providers: listed.providers,
     models: listed.models,
   };
+  return configSemanticsAreValid(config) ? config : undefined;
+}
+
+function providerHasApiKey(provider) {
+  if (nonBlank(provider.apiKey)) return true;
+  if (!plainObject(provider.env)) return false;
+  const envKeys = PROVIDER_ENV_KEYS.get(provider.type);
+  return envKeys !== undefined && envKeys.some((key) => nonBlank(provider.env[key]));
+}
+
+function vertexLocationIsConfigured(provider) {
+  if (!plainObject(provider.env)) return false;
+  if (nonBlank(provider.env.GOOGLE_CLOUD_LOCATION)) return true;
+  const baseUrl = nonBlank(provider.baseUrl)
+    ? provider.baseUrl
+    : provider.env.GOOGLE_VERTEX_BASE_URL;
+  if (!nonBlank(baseUrl)) return false;
+  try {
+    const hostname = new URL(baseUrl).hostname;
+    const suffix = '-aiplatform.googleapis.com';
+    return hostname.endsWith(suffix) && hostname.length > suffix.length;
+  } catch {
+    return false;
+  }
+}
+
+function configSemanticsAreValid(config) {
+  for (const provider of Object.values(config.providers)) {
+    if (!plainObject(provider)) return false;
+    if (provider.oauth !== undefined && providerHasApiKey(provider)) return false;
+  }
+  for (const model of Object.values(config.models)) {
+    if (!plainObject(model)) return false;
+    if (model.oauth !== undefined && nonBlank(model.apiKey)) return false;
+    const providerName = model.providerId !== undefined ? model.providerId : model.provider;
+    if (
+      providerName !== undefined &&
+      (!nonBlank(providerName) ||
+        !Object.prototype.hasOwnProperty.call(config.providers, providerName))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function storageName(oauthKey) {
@@ -84,23 +134,30 @@ function credentialRecord(config) {
   if (!nonBlank(config.defaultModel)) return undefined;
   const model = config.models[config.defaultModel];
   if (!plainObject(model)) return undefined;
-  if (!nonBlank(model.provider) || !nonBlank(model.model)) return undefined;
+  const providerName = model.providerId !== undefined ? model.providerId : model.provider;
+  const modelName = model.name !== undefined ? model.name : model.model;
+  if (!nonBlank(providerName) || !nonBlank(modelName)) return undefined;
   if (!Number.isInteger(model.maxContextSize) || model.maxContextSize < 1) return undefined;
 
-  const provider = config.providers[model.provider];
+  const provider = config.providers[providerName];
   if (!plainObject(provider) || !nonBlank(provider.type)) return undefined;
   const envKeys = PROVIDER_ENV_KEYS.get(provider.type);
   if (envKeys === undefined) return undefined;
 
-  if (nonBlank(provider.apiKey)) return 'config:api-key';
-  if (
-    plainObject(provider.env) &&
-    envKeys.some((key) => nonBlank(provider.env[key]))
-  ) {
-    return 'config:api-key';
-  }
+  const hasApiKey = providerHasApiKey(provider);
+  if (hasApiKey) return 'config:api-key';
 
-  if (provider.oauth === undefined) return 'none';
+  if (provider.oauth === undefined) {
+    if (
+      provider.type === 'vertexai' &&
+      plainObject(provider.env) &&
+      nonBlank(provider.env.GOOGLE_CLOUD_PROJECT) &&
+      vertexLocationIsConfigured(provider)
+    ) {
+      return 'vertex-adc-unsupported';
+    }
+    return 'none';
+  }
   if (!plainObject(provider.oauth)) return undefined;
   if (provider.oauth.storage !== 'file' && provider.oauth.storage !== 'keyring') return undefined;
   const name = storageName(provider.oauth.key);

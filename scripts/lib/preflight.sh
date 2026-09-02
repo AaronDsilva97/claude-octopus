@@ -258,6 +258,10 @@ _octo_provider_static_readiness() {
                             reason_code="auth-migration-required"
                             remediation="Kimi Code cannot use the legacy keyring session. Run kimi with the same KIMI_CODE_HOME and enter /login again."
                             ;;
+                        vertex-adc-unsupported)
+                            reason_code="auth-unsupported"
+                            remediation="Vertex ADC is not supported through the Octopus Kimi integration. Configure VERTEXAI_API_KEY or GOOGLE_API_KEY in the selected provider's env table in ${kimi_config_path}."
+                            ;;
                         config-invalid)
                             reason_code="config-invalid"
                             remediation="Repair ${kimi_config_path}; Kimi requires valid TOML with a complete default model and selected provider mapping."

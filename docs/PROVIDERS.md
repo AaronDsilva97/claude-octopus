@@ -42,12 +42,14 @@ Plus, usually:
 Kimi Code exercises all seven wiring points: `kimi` identity/runtime rows in
 `provider-registry.sh`; the `kimi` command arm and `kimi-exec.sh` stdin shim;
 model alias resolution through `OCTOPUS_KIMI_MODEL`; an isolated environment
-that preserves `KIMI_CODE_HOME`; config-aware detection and health checks; and
+that preserves `KIMI_CODE_HOME` and the documented `KIMI_MODEL_*` override
+family; config-aware detection and health checks; and
 real sync/background dispatch regressions. Its readiness contract follows
 `default_model` to the model's provider in `$KIMI_CODE_HOME/config.toml`
 (default `~/.kimi-code/config.toml`) and checks that provider's `api_key`,
-provider-local `env` credential, or configured OAuth storage. An API key that
-exists only in the parent shell is not Kimi Code authentication.
+provider-local `env` credential, configured OAuth storage, or a complete
+`KIMI_MODEL_NAME` plus `KIMI_MODEL_API_KEY` override. Bare `KIMI_API_KEY` in
+the parent shell is not Kimi Code authentication.
 
 Readiness validates the complete TOML document with Kimi Code's own runtime and
 built-in `doctor` command. This works with both the native executable and the
@@ -55,6 +57,12 @@ Node launcher without requiring a separate Python installation. If the
 validator cannot run, the provider fails closed and asks the user to reinstall
 or update Kimi Code. Legacy keyring-only OAuth is not reported as ready; run
 `kimi` with the same `KIMI_CODE_HOME` and enter `/login` again.
+
+Kimi Code 0.40.1 documents Vertex ADC, but its shipped default headless runtime
+rejects an ADC-only provider before dispatch. Octopus therefore fails that
+configuration closed and does not forward `GOOGLE_APPLICATION_CREDENTIALS`.
+Use `VERTEXAI_API_KEY` or `GOOGLE_API_KEY` inside the selected provider's
+`env` table until the Kimi runtime contract supports ADC consistently.
 
 ## Traps (each has bitten a real PR)
 

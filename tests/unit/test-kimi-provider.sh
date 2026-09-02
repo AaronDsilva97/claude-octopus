@@ -13,7 +13,7 @@
 #   7. stderr-only authentication failures receive actionable guidance without
 #      contaminating successful response output.
 #   8. kimi_is_available requires the binary, a resolvable configured model,
-#      and credentials on that model's provider. Ambient MOONSHOT_API_KEY is
+#      and credentials on that model's provider. Ambient KIMI_API_KEY is
 #      not a Kimi Code credential source.
 #   9. standard dispatch validation and configured routing accept both Kimi
 #      agent types and give them a stable display label.
@@ -34,17 +34,16 @@ test_suite "Moonshot Kimi Code CLI Provider"
 # Config probes execute through Kimi Code's own plugin runtime. The fixture
 # below emulates only Kimi's offline doctor/provider commands; it never reaches
 # the network and keeps credential values inside the child process.
-export KIMI_TEST_DRIVER="$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.py"
-export KIMI_TEST_PYTHON="$(command -v python3)"
 export KIMI_TEST_NODE="$(command -v node)"
+export KIMI_TEST_DRIVER="$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.mjs"
 
 # Stub log() — kimi.sh/model-resolver.sh call it outside orchestrate.sh.
 log() { :; }
 
-# Restore MOONSHOT_API_KEY exactly as found — including "was not set at all",
+# Restore KIMI_API_KEY exactly as found — including "was not set at all",
 # which a plain -n check would silently turn into "keep the fake test key".
 _kimi_restore_key() {
-    if [[ -n "$1" ]]; then export MOONSHOT_API_KEY="$2"; else unset MOONSHOT_API_KEY; fi
+    if [[ -n "$1" ]]; then export KIMI_API_KEY="$2"; else unset KIMI_API_KEY; fi
 }
 
 _kimi_mock_bin() {
@@ -59,7 +58,7 @@ case "${1:-}" in
         exec "${KIMI_TEST_NODE:?}" "$@"
         ;;
     doctor|provider)
-        exec "${KIMI_TEST_PYTHON:?}" "${KIMI_TEST_DRIVER:?}" "$@"
+        exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "$@"
         ;;
 esac
 MOCK
@@ -75,7 +74,7 @@ _kimi_native_runtime_mock_bin() {
     for command_name in doctor provider; do
         cat > "$dir/$command_name" <<'MOCK'
 #!/usr/bin/env bash
-exec "${KIMI_TEST_PYTHON:?}" "${KIMI_TEST_DRIVER:?}" "${0##*/}" "$@"
+exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "${0##*/}" "$@"
 MOCK
         chmod +x "$dir/$command_name"
     done
@@ -99,7 +98,7 @@ if (args[0] === '__plugin_run_node') {
   process.argv = [process.argv[0], entry, ...args.slice(2)];
   import(pathToFileURL(entry).href).catch(() => process.exit(1));
 } else {
-  const result = spawnSync(process.env.KIMI_TEST_PYTHON, [process.env.KIMI_TEST_DRIVER, ...args], {
+  const result = spawnSync(process.env.KIMI_TEST_NODE, [process.env.KIMI_TEST_DRIVER, ...args], {
     env: process.env,
     stdio: 'inherit',
   });
@@ -212,10 +211,10 @@ test_kimi_config_credentials() {
     local tmp_bin old_path old_home old_root old_key had_root had_key auth rc rc_whitespace
     tmp_bin="$TEST_TMP_DIR/kimi-bin-config-auth"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_root="${KIMI_CODE_HOME-}"; old_key="${MOONSHOT_API_KEY-}"
-    had_root="${KIMI_CODE_HOME+set}"; had_key="${MOONSHOT_API_KEY+set}"
+    old_path="$PATH"; old_home="$HOME"; old_root="${KIMI_CODE_HOME-}"; old_key="${KIMI_API_KEY-}"
+    had_root="${KIMI_CODE_HOME+set}"; had_key="${KIMI_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-config-home"; unset KIMI_CODE_HOME
-    unset MOONSHOT_API_KEY
+    unset KIMI_API_KEY
     mkdir -p "$HOME/.kimi-code"
     cat > "$HOME/.kimi-code/config.toml" <<'TOML'
 default_model = "kimi-code/k3"
@@ -314,7 +313,7 @@ test_kimi_config_env_is_credential() {
     tmp_bin="$TEST_TMP_DIR/kimi-bin-config-env"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
     old_path="$PATH"; old_home="$HOME"
-    PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-config-env-home"; unset KIMI_CODE_HOME MOONSHOT_API_KEY
+    PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-config-env-home"; unset KIMI_CODE_HOME KIMI_API_KEY
     mkdir -p "$HOME/.kimi-code"
     cat > "$HOME/.kimi-code/config.toml" <<'TOML'
 default_model = "custom"
@@ -517,6 +516,32 @@ TOML
     fi
 }
 
+test_kimi_accepts_current_v2_model_reference_shape() {
+    test_case "current provider_id/name model records resolve and authenticate"
+    local root rc method
+    root="$TEST_TMP_DIR/kimi-current-v2-model-shape"
+    mkdir -p "$root"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider_id = "openai"
+name = "gpt-5"
+protocol = "openai"
+max_context_size = 400000
+[providers.openai]
+type = "openai"
+api_key = "fixture-not-a-secret"
+TOML
+    rc=0
+    method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)" || rc=$?
+    if [[ "$rc" -eq 0 && "$method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected provider_id/name readiness, got rc=$rc method=$method"
+    fi
+}
+
 test_kimi_rejects_malformed_or_duplicate_toml() {
     test_case "readiness fails closed on malformed and duplicate TOML assignments"
     local root rc_bare rc_boolean rc_trailing rc_duplicate rc_document
@@ -669,6 +694,282 @@ TOML
     fi
 }
 
+test_kimi_rejects_dangling_unselected_provider_reference() {
+    test_case "readiness rejects an unselected model whose provider does not exist"
+    local root rc issue
+    root="$TEST_TMP_DIR/kimi-dangling-unselected-provider"
+    mkdir -p "$root"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "selected"
+model = "model"
+max_context_size = 1048576
+[models.unselected]
+provider = "missing"
+model = "other"
+max_context_size = 1048576
+[providers.selected]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+TOML
+    rc=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc=$?
+    issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+    if [[ "$rc" -ne 0 && "$issue" == "config-invalid" ]]; then
+        test_pass
+    else
+        test_fail "expected dangling unselected provider rejection, got rc=$rc issue=$issue"
+    fi
+}
+
+test_kimi_rejects_mixed_provider_auth() {
+    test_case "readiness rejects model or provider API keys mixed with OAuth"
+    local root rc_direct rc_env rc_unselected rc_model issue
+    root="$TEST_TMP_DIR/kimi-mixed-provider-auth"
+    mkdir -p "$root"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "kimi"
+model = "model"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+[providers.kimi.oauth]
+storage = "file"
+key = "oauth/kimi-code"
+TOML
+    rc_direct=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_direct=$?
+    sed '/api_key = /d' "$root/config.toml" > "$root/config.next"
+    cat >> "$root/config.next" <<'TOML'
+[providers.kimi.env]
+KIMI_API_KEY = "fixture-not-a-secret"
+TOML
+    mv "$root/config.next" "$root/config.toml"
+    rc_env=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_env=$?
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "selected"
+model = "model"
+max_context_size = 1048576
+[providers.selected]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+[providers.unselected]
+type = "openai"
+api_key = "fixture-not-a-secret"
+[providers.unselected.oauth]
+storage = "file"
+key = "oauth/other"
+TOML
+    rc_unselected=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_unselected=$?
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "kimi"
+model = "model"
+max_context_size = 1048576
+api_key = "fixture-not-a-secret"
+[models.selected.oauth]
+storage = "file"
+key = "oauth/model"
+[providers.kimi]
+type = "kimi"
+TOML
+    rc_model=0
+    KIMI_CODE_HOME="$root" kimi_configured_credential_method >/dev/null 2>&1 || rc_model=$?
+    issue="$(KIMI_CODE_HOME="$root" kimi_credential_issue 2>/dev/null || true)"
+    if [[ "$rc_direct" -ne 0 && "$rc_env" -ne 0 && "$rc_unselected" -ne 0 && \
+          "$rc_model" -ne 0 && "$issue" == "config-invalid" ]]; then
+        test_pass
+    else
+        test_fail "expected mixed-auth rejection, got direct=$rc_direct env=$rc_env unselected=$rc_unselected model=$rc_model issue=$issue"
+    fi
+}
+
+test_kimi_model_env_is_forwarded_and_drives_readiness() {
+    test_case "documented KIMI_MODEL variables cross isolation and can provide readiness"
+    local root entry expected_var found forwarded_count=0 found_extra=false method rc
+    local -a expected_vars=(
+        KIMI_MODEL_NAME KIMI_MODEL_API_KEY KIMI_MODEL_PROVIDER_TYPE
+        KIMI_MODEL_BASE_URL KIMI_MODEL_MAX_CONTEXT_SIZE KIMI_MODEL_CAPABILITIES
+        KIMI_MODEL_DISPLAY_NAME KIMI_MODEL_MAX_OUTPUT_SIZE KIMI_MODEL_REASONING_KEY
+        KIMI_MODEL_THINKING_EFFORT KIMI_MODEL_ADAPTIVE_THINKING
+        KIMI_MODEL_MAX_COMPLETION_TOKENS KIMI_MODEL_MAX_TOKENS
+        KIMI_MODEL_TEMPERATURE KIMI_MODEL_TOP_P KIMI_MODEL_THINKING_KEEP
+    )
+    root="$TEST_TMP_DIR/kimi-model-env"
+    mkdir -p "$root"
+    export KIMI_CODE_HOME="$root"
+    export KIMI_MODEL_NAME="fixture-model"
+    export KIMI_MODEL_API_KEY="fixture-not-a-secret"
+    export KIMI_MODEL_PROVIDER_TYPE="openai"
+    export KIMI_MODEL_BASE_URL="https://fixture.invalid/v1"
+    export KIMI_MODEL_MAX_CONTEXT_SIZE="262144"
+    export KIMI_MODEL_CAPABILITIES="tool_use,thinking"
+    export KIMI_MODEL_DISPLAY_NAME="Fixture"
+    export KIMI_MODEL_MAX_OUTPUT_SIZE="4096"
+    export KIMI_MODEL_REASONING_KEY="reasoning_content"
+    export KIMI_MODEL_THINKING_EFFORT="high"
+    export KIMI_MODEL_ADAPTIVE_THINKING="true"
+    export KIMI_MODEL_MAX_COMPLETION_TOKENS="2048"
+    export KIMI_MODEL_MAX_TOKENS="2048"
+    export KIMI_MODEL_TEMPERATURE="0.3"
+    export KIMI_MODEL_TOP_P="0.9"
+    export KIMI_MODEL_THINKING_KEEP="all"
+    KIMI_MODEL_UNDOCUMENTED_SECRET="must-not-cross"
+    source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+    build_provider_env kimi
+    for expected_var in "${expected_vars[@]}"; do
+        found=false
+        for entry in "${PROVIDER_ENV_ARRAY[@]}"; do
+            case "$entry" in "$expected_var="*) found=true; break ;; esac
+        done
+        [[ "$found" == true ]] && forwarded_count=$((forwarded_count + 1))
+    done
+    for entry in "${PROVIDER_ENV_ARRAY[@]}"; do
+        [[ "$entry" == KIMI_MODEL_UNDOCUMENTED_SECRET=* ]] && found_extra=true
+    done
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    rc=0
+    method="$(kimi_configured_credential_method 2>/dev/null)" || rc=$?
+    for expected_var in "${expected_vars[@]}"; do unset "$expected_var"; done
+    unset KIMI_MODEL_UNDOCUMENTED_SECRET KIMI_CODE_HOME
+    if [[ "$forwarded_count" -eq "${#expected_vars[@]}" && "$found_extra" == false && \
+          "$rc" -eq 0 && "$method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected exact env-model forwarding/readiness, got forwarded=$forwarded_count/${#expected_vars[@]} extra=$found_extra rc=$rc method=$method"
+    fi
+}
+
+test_kimi_vertex_adc_fails_closed() {
+    test_case "Vertex ADC is reported unsupported and its system credential path is isolated"
+    local root entry forwarded=false issue base_url_issue readiness keyed_method keyed_rc
+    root="$TEST_TMP_DIR/kimi-vertex-adc"
+    mkdir -p "$root"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "vertex"
+model = "gemini-2.5-pro"
+max_context_size = 1048576
+[providers.vertex]
+type = "vertexai"
+[providers.vertex.env]
+GOOGLE_CLOUD_PROJECT = "fixture-project"
+GOOGLE_CLOUD_LOCATION = "us-central1"
+TOML
+    KIMI_CODE_HOME="$root"
+    GOOGLE_APPLICATION_CREDENTIALS="$root/adc.json"
+    source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+    build_provider_env kimi
+    for entry in "${PROVIDER_ENV_ARRAY[@]}"; do
+        [[ "$entry" == GOOGLE_APPLICATION_CREDENTIALS=* ]] && forwarded=true
+    done
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    issue="$(kimi_credential_issue 2>/dev/null || true)"
+    readiness="$(PROJECT_ROOT="$PROJECT_ROOT" KIMI_CODE_HOME="$root" \
+        GOOGLE_APPLICATION_CREDENTIALS="$GOOGLE_APPLICATION_CREDENTIALS" /bin/bash -c '
+            source "$PROJECT_ROOT/scripts/lib/preflight.sh"
+            _octo_provider_static_readiness kimi
+        ')"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "vertex"
+model = "gemini-2.5-pro"
+max_context_size = 1048576
+[providers.vertex]
+type = "vertexai"
+base_url = "https://us-central1-aiplatform.googleapis.com"
+[providers.vertex.env]
+GOOGLE_CLOUD_PROJECT = "fixture-project"
+TOML
+    base_url_issue="$(kimi_credential_issue 2>/dev/null || true)"
+    printf '%s\n' 'VERTEXAI_API_KEY = "fixture-not-a-secret"' >> "$root/config.toml"
+    keyed_rc=0
+    keyed_method="$(kimi_configured_credential_method 2>/dev/null)" || keyed_rc=$?
+    unset GOOGLE_APPLICATION_CREDENTIALS KIMI_CODE_HOME
+    if [[ "$forwarded" == false && "$issue" == "vertex-adc-unsupported" && \
+          "$base_url_issue" == "vertex-adc-unsupported" && \
+          "$readiness" == degraded\|auth-unsupported\|*"VERTEXAI_API_KEY"* && \
+          "$readiness" == *"GOOGLE_API_KEY"* && "$keyed_rc" -eq 0 && \
+          "$keyed_method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected fail-closed ADC and provider-key fallback, got forwarded=$forwarded issue=$issue base_url_issue=$base_url_issue readiness=$readiness keyed=$keyed_rc/$keyed_method"
+    fi
+}
+
+test_kimi_leading_dash_home_is_safe() {
+    test_case "a relative KIMI_CODE_HOME beginning with a dash validates safely"
+    local tmp_bin case_parent old_path old_pwd method rc
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-leading-dash"
+    case_parent="$TEST_TMP_DIR/kimi-leading-dash"
+    mkdir -p "$tmp_bin" "$case_parent/-kimi-home"
+    cat > "$tmp_bin/kimi" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    __plugin_run_node)
+        shift
+        exec "${KIMI_TEST_NODE:?}" "$@"
+        ;;
+    doctor)
+        [[ "${3:-}" != -* ]] || exit 2
+        exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "$@"
+        ;;
+    provider)
+        exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "$@"
+        ;;
+esac
+exit 1
+MOCK
+    chmod +x "$tmp_bin/kimi"
+    cat > "$case_parent/-kimi-home/config.toml" <<'TOML'
+default_model = "selected"
+[models.selected]
+provider = "kimi"
+model = "model"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+TOML
+    old_path="$PATH"; old_pwd="$PWD"
+    PATH="$tmp_bin:$PATH"
+    cd "$case_parent"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    rc=0
+    method="$(KIMI_CODE_HOME=-kimi-home kimi_configured_credential_method 2>/dev/null)" || rc=$?
+    cd "$old_pwd"; PATH="$old_path"
+    if [[ "$rc" -eq 0 && "$method" == "config:api-key" ]]; then
+        test_pass
+    else
+        test_fail "expected safe leading-dash home, got rc=$rc method=$method"
+    fi
+}
+
+test_kimi_fixture_and_docs_are_current() {
+    test_case "Kimi tests need no Python and setup text has no stale keyring/MOONSHOT advice"
+    if [[ -f "$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.mjs" ]] && \
+       [[ ! -e "$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.py" ]] && \
+       ! grep -q 'MOONSHOT_API_KEY' "$PROJECT_ROOT/CHANGELOG.md" && \
+       ! grep -qi 'keyring.*migrat\|migrat.*keyring' "$PROJECT_ROOT/commands/model-config.md"; then
+        test_pass
+    else
+        test_fail "expected Node-only fixture and current /login/provider credential guidance"
+    fi
+}
+
 test_kimi_accepts_unrelated_array_tables() {
     test_case "readiness tolerates valid repeated array tables outside the selected records"
     local root method rc
@@ -709,7 +1010,7 @@ test_kimi_custom_root_oauth() {
     old_path="$PATH"; old_home="$HOME"; old_root="${KIMI_CODE_HOME-}"; had_root="${KIMI_CODE_HOME+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-unused-home"
     KIMI_CODE_HOME="$TEST_TMP_DIR/kimi-custom-root"
-    unset MOONSHOT_API_KEY
+    unset KIMI_API_KEY
     mkdir -p "$KIMI_CODE_HOME/credentials/oauth"
     cat > "$KIMI_CODE_HOME/config.toml" <<'TOML'
 default_model = "kimi-code/k3"
@@ -802,8 +1103,8 @@ TOML
     fi
 }
 
-test_kimi_keyring_reference_requires_migrated_file() {
-    test_case "a keyring OAuth declaration is not readiness without a migrated token file"
+test_kimi_keyring_reference_requires_flat_file() {
+    test_case "a legacy keyring OAuth declaration needs a usable flat credential file"
     local root rc_missing rc_file method issue readiness health health_rc
     root="$TEST_TMP_DIR/kimi-keyring-oauth"
     mkdir -p "$root/credentials"
@@ -852,11 +1153,11 @@ TOML
 }
 
 test_kimi_ambient_key_is_not_auth() {
-    test_case "ambient MOONSHOT_API_KEY alone is not reported as Kimi Code readiness"
+    test_case "ambient KIMI_API_KEY alone is not reported as Kimi Code readiness"
     local tmp_bin old_path old_home old_key had_key rc auth
     tmp_bin="$TEST_TMP_DIR/kimi-bin-ambient-only"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
+    old_path="$PATH"; old_home="$HOME"; old_key="${KIMI_API_KEY-}"; had_key="${KIMI_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-ambient-home"; unset KIMI_CODE_HOME
     mkdir -p "$HOME/.kimi-code"
     cat > "$HOME/.kimi-code/config.toml" <<'TOML'
@@ -870,7 +1171,7 @@ type = "kimi"
 base_url = "https://fixture.invalid/v1"
 api_key = ""
 TOML
-    MOONSHOT_API_KEY="ambient-fixture-value"
+    KIMI_API_KEY="ambient-fixture-value"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh"
     rc=0; kimi_is_available >/dev/null 2>&1 || rc=$?
     auth="$(kimi_auth_method)"
@@ -900,7 +1201,7 @@ base_url = "https://fixture.invalid/v1"
 api_key = "fixture-not-a-secret"
 TOML
     output="$(HOME="$home" PATH="$tmp_bin:$PATH" OCTO_ALLOWED_PROVIDERS=kimi /bin/bash -c '
-        unset KIMI_CODE_HOME MOONSHOT_API_KEY
+        unset KIMI_CODE_HOME KIMI_API_KEY
         source "'$PROJECT_ROOT'/scripts/lib/preflight.sh"
         _octo_provider_static_readiness kimi
     ')"
@@ -908,7 +1209,7 @@ TOML
     mv "$home/.kimi-code/config.next" "$home/.kimi-code/config.toml"
     missing="$(HOME="$home" PATH="$tmp_bin:$PATH" OCTO_ALLOWED_PROVIDERS=kimi /bin/bash -c '
         unset KIMI_CODE_HOME
-        MOONSHOT_API_KEY=ambient-fixture-value
+        KIMI_API_KEY=ambient-fixture-value
         source "'$PROJECT_ROOT'/scripts/lib/preflight.sh"
         _octo_provider_static_readiness kimi
     ')"
@@ -942,7 +1243,7 @@ TOML
     rc=0
     output="$(HOME="$TEST_TMP_DIR/kimi-health-home" KIMI_CODE_HOME="$root" \
         PATH="$tmp_bin:$PATH" /bin/bash -c '
-            unset MOONSHOT_API_KEY
+            unset KIMI_API_KEY
             source "'$PROJECT_ROOT'/scripts/lib/providers.sh"
             check_provider_health kimi
         ' 2>&1)" || rc=$?
@@ -1332,10 +1633,10 @@ test_kimi_portable_timeout() {
         builtin command "$@"
     }
 
-    started_ms="$(python3 -c 'import time; print(int(time.monotonic() * 1000))')"
+    started_ms="$("$KIMI_TEST_NODE" -e 'process.stdout.write(String(process.hrtime.bigint() / 1000000n))')"
     rc=0
     OCTOPUS_KIMI_TIMEOUT=1 kimi_execute kimi "probe" >/dev/null 2>&1 || rc=$?
-    elapsed_ms=$(( $(python3 -c 'import time; print(int(time.monotonic() * 1000))') - started_ms ))
+    elapsed_ms=$(( $("$KIMI_TEST_NODE" -e 'process.stdout.write(String(process.hrtime.bigint() / 1000000n))') - started_ms ))
 
     unset -f command
     unset KIMI_TIMEOUT_STARTED
@@ -1353,10 +1654,10 @@ test_kimi_pin_is_not_readiness() {
     local tmp_bin old_path old_home old_key had_key rc_pin_only rc_default
     tmp_bin="$TEST_TMP_DIR/kimi-bin-pin"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
+    old_path="$PATH"; old_home="$HOME"; old_key="${KIMI_API_KEY-}"; had_key="${KIMI_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-pin-home"; mkdir -p "$HOME/.kimi-code"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
-    unset MOONSHOT_API_KEY
+    unset KIMI_API_KEY
 
     # A model alias declared but no default_model: kimi resolves -m against its
     # own config, so a pin here is not evidence a dispatch can succeed.
@@ -1390,10 +1691,10 @@ test_kimi_empty_default_model() {
     local tmp_bin old_path old_home old_key had_key rc_empty rc_bare rc_set
     tmp_bin="$TEST_TMP_DIR/kimi-bin-empty"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
+    old_path="$PATH"; old_home="$HOME"; old_key="${KIMI_API_KEY-}"; had_key="${KIMI_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-empty-model-home"; mkdir -p "$HOME/.kimi-code"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
-    unset MOONSHOT_API_KEY
+    unset KIMI_API_KEY
 
     printf 'default_model = ""\n' > "$HOME/.kimi-code/config.toml"
     rc_empty=0; kimi_is_available >/dev/null 2>&1 || rc_empty=$?
@@ -1453,7 +1754,7 @@ test_kimi_detection() {
     local tmp_bin old_path old_home old_key had_key rc_ready rc_nomodel rc_noauth
     tmp_bin="$TEST_TMP_DIR/kimi-bin-det"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
-    old_path="$PATH"; old_home="$HOME"; old_key="${MOONSHOT_API_KEY-}"; had_key="${MOONSHOT_API_KEY+set}"
+    old_path="$PATH"; old_home="$HOME"; old_key="${KIMI_API_KEY-}"; had_key="${KIMI_API_KEY+set}"
     PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-empty-home"; mkdir -p "$HOME"
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
 
@@ -1542,12 +1843,19 @@ test_kimi_config_env_is_credential
 test_kimi_rejects_incomplete_selected_records
 test_kimi_accepts_matching_provider_env_credentials
 test_kimi_accepts_current_provider_types_and_capabilities
+test_kimi_accepts_current_v2_model_reference_shape
 test_kimi_rejects_malformed_or_duplicate_toml
 test_kimi_validates_unselected_records
+test_kimi_rejects_dangling_unselected_provider_reference
+test_kimi_rejects_mixed_provider_auth
+test_kimi_model_env_is_forwarded_and_drives_readiness
+test_kimi_vertex_adc_fails_closed
+test_kimi_leading_dash_home_is_safe
+test_kimi_fixture_and_docs_are_current
 test_kimi_accepts_unrelated_array_tables
 test_kimi_custom_root_oauth
 test_kimi_oauth_requires_usable_json_object
-test_kimi_keyring_reference_requires_migrated_file
+test_kimi_keyring_reference_requires_flat_file
 test_kimi_ambient_key_is_not_auth
 test_kimi_static_preflight_uses_config
 test_kimi_real_health_uses_custom_root
