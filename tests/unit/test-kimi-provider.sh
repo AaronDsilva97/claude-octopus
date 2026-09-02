@@ -9,7 +9,9 @@
 #      "default" emits no --model.
 #   5. kimi_execute propagates a non-zero exit even with stdout.
 #   6. the Kimi request timeout still works without GNU/BSD timeout.
-#   7. kimi_is_available requires the binary AND auth AND a model kimi itself
+#   7. stderr-only authentication failures receive actionable guidance without
+#      contaminating successful response output.
+#   8. kimi_is_available requires the binary AND auth AND a model kimi itself
 #      declares — an octo-side pin alone is not proof of readiness.
 set -euo pipefail
 
@@ -184,6 +186,49 @@ test_kimi_exit_propagation() {
     fi
 }
 
+test_kimi_stderr_auth_classification() {
+    test_case "kimi_execute classifies stderr-only auth failures"
+    local tmp_bin old_path output rc=0
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-auth-stderr"
+    _kimi_mock_bin "$tmp_bin" 'printf "Login required: token expired\n" >&2; exit 1'
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
+    log() { printf '[%s] %s\n' "$1" "${*:2}" >&2; }
+
+    output="$(kimi_execute kimi "probe" 2>&1)" || rc=$?
+    log() { :; }
+    PATH="$old_path"
+
+    if [[ "$rc" -ne 0 && "$output" == *"kimi: auth failure"* && "$output" != *"kimi: exit 1"* ]]; then
+        test_pass
+    else
+        test_fail "expected stderr-only auth guidance, got rc=$rc output='$output'"
+    fi
+}
+
+test_kimi_success_stderr_is_not_response() {
+    test_case "kimi_execute keeps successful stderr out of response output"
+    local tmp_bin old_path output_file stderr_file rc=0 response stdout_response call_output
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-success-stderr"
+    output_file="$TEST_TMP_DIR/kimi-success.out"
+    stderr_file="$TEST_TMP_DIR/kimi-success.err"
+    _kimi_mock_bin "$tmp_bin" 'printf "provider diagnostic\n" >&2; printf "answer\n"; exit 0'
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
+
+    stdout_response="$(kimi_execute kimi "probe" 2>"$stderr_file")" || rc=$?
+    call_output="$(kimi_execute kimi "probe" "$output_file" 2>"$stderr_file")" || rc=$?
+    PATH="$old_path"
+    response="$(< "$output_file")"
+
+    if [[ "$rc" -eq 0 && "$stdout_response" == "answer" && -z "$call_output" &&
+          "$response" == "answer" && "$response" != *"provider diagnostic"* ]]; then
+        test_pass
+    else
+        test_fail "expected only provider stdout in both output modes, got rc=$rc stdout='$stdout_response' file-call-stdout='$call_output' response='$response'"
+    fi
+}
+
 # ── 8. request timeout uses the shared portable watchdog ─────────────────────
 test_kimi_portable_timeout() {
     test_case "kimi_execute enforces its timeout without GNU/BSD timeout"
@@ -336,6 +381,8 @@ test_kimi_config_runtime_model
 test_kimi_default_no_model
 test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
+test_kimi_stderr_auth_classification
+test_kimi_success_stderr_is_not_response
 test_kimi_portable_timeout
 test_kimi_pin_is_not_readiness
 test_kimi_empty_default_model

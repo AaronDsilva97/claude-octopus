@@ -99,17 +99,23 @@ kimi_execute(){
     fi
     # File-backed capture prevents a provider descendant from keeping command
     # substitution open after the main process has exited.
-    local response response_file exit_code
+    local response error_response response_file error_file exit_code
     response_file="$(umask 077 && mktemp "${TMPDIR:-/tmp}/octo-kimi-response.XXXXXX")" || {
         _kimi_log ERROR "kimi: could not create response capture"
         return 1
     }
-    run_with_timeout "$timeout" "${cmd[@]}" >"$response_file" 2>/dev/null && exit_code=0 || exit_code=$?
+    error_file="$(umask 077 && mktemp "${TMPDIR:-/tmp}/octo-kimi-error.XXXXXX")" || {
+        rm -f "$response_file"
+        _kimi_log ERROR "kimi: could not create error capture"
+        return 1
+    }
+    run_with_timeout "$timeout" "${cmd[@]}" >"$response_file" 2>"$error_file" && exit_code=0 || exit_code=$?
     response="$(< "$response_file")"
-    rm -f "$response_file"
+    error_response="$(< "$error_file")"
+    rm -f "$response_file" "$error_file"
     if [[ $exit_code -ne 0 ]]; then
         [[ $exit_code -eq 124 ]] && { _kimi_log WARN "kimi: timed out after ${timeout}s"; return 1; }
-        if printf '%s' "$response" | grep -ciE 'unauthorized|forbidden|(401|403)|not authorized|invalid token|expired token|please .?login|login required' >/dev/null; then
+        if printf '%s\n%s' "$response" "$error_response" | grep -ciE 'unauthorized|forbidden|(401|403)|not authorized|invalid token|expired token|please .?login|login required' >/dev/null; then
             _kimi_log ERROR "kimi: auth failure — run: kimi login (or set MOONSHOT_API_KEY)"; return 1
         fi
         _kimi_log ERROR "kimi: exit $exit_code"; return 1

@@ -204,21 +204,33 @@ _run_with_timeout_preserving_process_group() {
 # its descendants immediately after TERM, so discovering children after the
 # root is gone is too late for reliable cleanup.
 _octo_timeout_process_tree_depth_first() {
-    local root_pid="$1" child_pid process_started
+    local root_pid="$1" include_without_metadata="${2:-false}" child_pid process_started
     while IFS= read -r child_pid; do
         child_pid="${child_pid//[[:space:]]/}"
         [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] || continue
-        _octo_timeout_process_tree_depth_first "$child_pid"
+        _octo_timeout_process_tree_depth_first "$child_pid" false
     done < <(ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$root_pid" '$2 == parent { print $1 }')
-    process_started="$(ps -o lstart= -p "$root_pid" 2>/dev/null)" || return 0
-    printf '%s\t%s\n' "$root_pid" "$process_started"
+    # The direct root PID comes from `$!`, so it remains actionable even when a
+    # restricted harness denies process enumeration. Start metadata is an
+    # additional PID-reuse guard when available, not a prerequisite to signal
+    # the process we just launched. Descendants remain metadata-gated.
+    if process_started="$(ps -o lstart= -p "$root_pid" 2>/dev/null)" && [[ -n "$process_started" ]]; then
+        printf '%s\t%s\n' "$root_pid" "$process_started"
+    elif [[ "$include_without_metadata" == "true" ]]; then
+        printf '%s\t\n' "$root_pid"
+    fi
 }
 
 _octo_timeout_pid_is_running() {
     local pid="$1" expected_started="${2:-}" process_stat process_started
     kill -0 "$pid" 2>/dev/null || return 1
-    process_stat="$(ps -o stat= -p "$pid" 2>/dev/null)" || return 1
-    [[ "$process_stat" != *Z* ]] || return 1
+    if process_stat="$(ps -o stat= -p "$pid" 2>/dev/null)"; then
+        [[ "$process_stat" != *Z* ]] || return 1
+    elif [[ -n "$expected_started" ]]; then
+        # If a snapshot had start metadata, never signal without proving that
+        # the PID still identifies the same process.
+        return 1
+    fi
     [[ -z "$expected_started" ]] && return 0
     process_started="$(ps -o lstart= -p "$pid" 2>/dev/null)" || return 1
     [[ "$process_started" == "$expected_started" ]]
@@ -315,7 +327,7 @@ run_with_timeout() {
         # finish cleanup even if it races with and stops this monitor.
         (
             sleep "$timeout_secs"
-            process_tree="$(_octo_timeout_process_tree_depth_first "$cmd_pid")"
+            process_tree="$(_octo_timeout_process_tree_depth_first "$cmd_pid" true)"
             _octo_timeout_mark_snapshot "$timeout_marker" "$process_tree"
             _octo_timeout_signal_snapshot TERM "$process_tree"
 
