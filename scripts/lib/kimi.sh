@@ -9,6 +9,10 @@
 # Config errors (no model / unknown alias) exit 1, so the exit-code check below
 # is the whole contract — no stdout scanning needed. Verified on Kimi Code 0.40.1.
 
+_kimi_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${_kimi_lib_dir}/bounded-probe.sh" 2>/dev/null || true
+source "${_kimi_lib_dir}/kimi-env.sh" 2>/dev/null || true
+
 _kimi_log(){ if declare -f log >/dev/null 2>&1; then log "$@"; else echo "[${1}] ${*:2}" >&2; fi; }
 
 _kimi_restore_trap(){
@@ -64,14 +68,38 @@ kimi_config_file(){
 }
 
 _kimi_run_config_check(){
-    local binary lib_dir plugin_root helper
+    local binary lib_dir plugin_root helper probe_timeout term_timeout kill_grace
+    local -a probe_cmd
     binary="$(command -v kimi 2>/dev/null)" || return 1
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || return 1
     plugin_root="$(cd "${lib_dir}/../.." && pwd -P)" || return 1
     helper="${plugin_root}/scripts/helpers/kimi-config-check.mjs"
     [[ -r "$helper" ]] || return 1
-    KIMI_PLUGIN_ROOT="$plugin_root" \
-        "$binary" __plugin_run_node "$helper" "$@" "$binary" 2>/dev/null
+    declare -f _octo_bare_probe_timeout >/dev/null 2>&1 || return 1
+    declare -f _octo_run_bare_probe_with_timeout >/dev/null 2>&1 || return 1
+    declare -f octopus_build_kimi_provider_env >/dev/null 2>&1 || return 1
+
+    read -r probe_timeout term_timeout kill_grace <<< \
+        "$(_octo_bare_probe_budget "${OCTOPUS_KIMI_HEALTH_TIMEOUT:-5}")"
+
+    octopus_build_kimi_provider_env
+    if [[ ${#KIMI_PROVIDER_ENV_ARRAY[@]} -gt 0 ]]; then
+        probe_cmd=(
+            "${KIMI_PROVIDER_ENV_ARRAY[@]}"
+            "KIMI_PLUGIN_ROOT=$plugin_root"
+            "OCTOPUS_KIMI_HEALTH_TIMEOUT_MS=$((probe_timeout * 1000))"
+            "$binary" __plugin_run_node "$helper" "$@" "$binary"
+        )
+    else
+        probe_cmd=(
+            env
+            "KIMI_PLUGIN_ROOT=$plugin_root"
+            "OCTOPUS_KIMI_HEALTH_TIMEOUT_MS=$((probe_timeout * 1000))"
+            "$binary" __plugin_run_node "$helper" "$@" "$binary"
+        )
+    fi
+    _octo_run_bare_probe_with_timeout \
+        "$probe_timeout" "$term_timeout" "$kill_grace" "${probe_cmd[@]}" 2>/dev/null
 }
 
 _kimi_config_backend_available(){
@@ -141,9 +169,8 @@ kimi_credential_issue(){
     esac
 }
 
-# A signed-in Kimi with no configured provider refuses every prompt, so the
-# default model is part of the availability contract. Kimi's own config loader
-# resolves the top-level pointer; nested `default_model` keys cannot satisfy it.
+# Availability requires an effective model. OCTOPUS_KIMI_MODEL selects a
+# configured alias directly; otherwise Kimi resolves top-level default_model.
 kimi_has_model(){
     local config
     config="$(kimi_config_file)"

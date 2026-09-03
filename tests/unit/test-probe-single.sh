@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/../helpers/test-framework.sh"
 test_suite "probe-single command: single-agent probe for multi-agentic skill dispatch (v8.54.0)"
 
 ORCHESTRATE="$PROJECT_ROOT/scripts/orchestrate.sh"
+WORKFLOWS="$PROJECT_ROOT/scripts/lib/workflows.sh"
 
 # Combined search target (functions decomposed to lib/ in v9.7.7+)
 ALL_SRC=$(mktemp)
@@ -155,6 +156,55 @@ assert_contains "$PROBE_SINGLE_SRC" \
 
 assert_contains "$PROBE_SINGLE_SRC" \
   'cat "\$temp_errors" >> "\$result_file"' "probe_single_agent: appends recovered Codex stderr transcript"
+
+# ── Kimi output receives the external-provider trust marker ──────────────────
+
+test_case "probe_single_agent: marks Kimi output as untrusted"
+kimi_probe_root="$TEST_TMP_DIR/kimi-probe"
+mkdir -p "$kimi_probe_root/project" "$kimi_probe_root/results" "$kimi_probe_root/logs"
+if (
+  RESULTS_DIR="$kimi_probe_root/results"
+  LOGS_DIR="$kimi_probe_root/logs"
+  PROJECT_ROOT="$kimi_probe_root/project"
+  SUPPORTS_AGENT_TYPE_ROUTING=false
+  SUPPORTS_STABLE_AUTH=true
+  OCTOPUS_PERSONA_PACKS=off
+  OCTOPUS_BACKEND=api
+  OCTOPUS_SECURITY_V870=true
+  TIMEOUT=5
+  PROVIDER_ENV_ARRAY=()
+  log() { :; }
+  preflight_check() { return 0; }
+  classify_task() { printf '%s\n' general; }
+  match_routing_rule() { return 1; }
+  apply_persona() { printf '%s\n' "$2"; }
+  enforce_context_budget() { printf '%s\n' "$1"; }
+  get_agent_model() { printf '%s\n' fixture-model; }
+  get_agent_command() { printf '%s\n' /bin/true; }
+  validate_agent_command() { return 0; }
+  record_agent_call() { :; }
+  update_metrics() { :; }
+  bridge_register_task() { :; }
+  update_agent_status() { :; }
+  build_provider_env() { PROVIDER_ENV_ARRAY=(); }
+  octo_prompt_byte_length() { printf '%s\n' 1; }
+  octopus_capture_provider_output() {
+    printf '%s\n' 'Kimi fixture output' > "$4"
+    : > "$5"
+    return 0
+  }
+  classify_agent_output() { printf '%s\n' 'ok:'; }
+  octo_estimate_tokens_for_file() { printf '%s\n' 1; }
+  record_outcome() { :; }
+  record_run_pattern() { :; }
+  source "$WORKFLOWS"
+  result_file="$(probe_single_agent kimi-research perspective trust-marker original)"
+  grep -Fqx '<!-- trust=untrusted provider=kimi-research -->' "$result_file"
+); then
+  test_pass
+else
+  test_fail "Kimi probe output did not cross the untrusted-provider boundary"
+fi
 
 # ── flow-discover.md references probe-single ─────────────────────────────────
 

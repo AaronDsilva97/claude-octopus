@@ -13,6 +13,7 @@ if ! declare -f _is_cursor_agent_binary >/dev/null 2>&1; then
 fi
 source "${_providers_lib_dir}/provider-allowlist.sh" 2>/dev/null || true
 source "${_providers_lib_dir}/provider-registry.sh" 2>/dev/null || true
+source "${_providers_lib_dir}/bounded-probe.sh" 2>/dev/null || true
 # Provider detection can run standalone in tests and helper scripts, before the
 # main orchestrator reaches its later provider-routing import. Load the shared
 # non-interactive credential resolver here so API-backed providers can discover
@@ -33,123 +34,14 @@ if ! declare -f copilot_is_available >/dev/null 2>&1; then
     source "${_providers_lib_dir}/copilot.sh" 2>/dev/null || true
 fi
 
-# Normalize before arithmetic: Bash 3.2 wraps sufficiently long digit strings,
-# which can otherwise turn an oversized value into a small positive timeout.
-_octo_bare_probe_timeout() {
-    local value="${1:-5}"
-
-    case "$value" in
-        ''|*[!0-9]*) printf '%s\n' 5; return ;;
-    esac
-    while [[ "$value" == 0* ]]; do
-        value="${value#0}"
-    done
-    case "$value" in
-        '') printf '%s\n' 5 ;;
-        [1-9]|[1-2][0-9]|30) printf '%s\n' "$value" ;;
-        *) printf '%s\n' 30 ;;
-    esac
-}
-
-# This startup probe has a strict total wall-clock budget. Normal dispatch uses
-# run_with_timeout's ten-second TERM grace, but adding that grace here would let
-# a five-second auth check block startup for up to fifteen seconds. Reserve a
-# two-second grace inside budgets above two seconds; shorter budgets hard-kill
-# at their cap.
-_octo_run_bare_probe_with_timeout() {
-    local total_timeout="$1"
-    local term_timeout="$2"
-    local kill_grace="$3"
-    shift 3
-
-    if command -v gtimeout >/dev/null 2>&1; then
-        if [[ "$kill_grace" -gt 0 ]]; then
-            gtimeout -k "$kill_grace" "$term_timeout" "$@"
-        else
-            gtimeout -s KILL "$total_timeout" "$@"
-        fi
-        return $?
-    elif command -v timeout >/dev/null 2>&1; then
-        if [[ "$kill_grace" -gt 0 ]]; then
-            timeout -k "$kill_grace" "$term_timeout" "$@"
-        else
-            timeout -s KILL "$total_timeout" "$@"
-        fi
-        return $?
-    fi
-
-    # The portable path must own the whole probe tree, not only the immediate
-    # claude process. A hook may add wrapper processes below claude; killing
-    # direct children can orphan their descendants. Start a fresh session when
-    # the platform provides either setsid(1) or Perl's POSIX::setsid. If neither
-    # safe launcher exists, treat the optional auth probe as unavailable rather
-    # than launching a process tree that cannot be bounded.
-    local cmd_pid monitor_pid exit_code
-    if command -v setsid >/dev/null 2>&1; then
-        setsid "$@" <&0 &
-    elif command -v perl >/dev/null 2>&1; then
-        perl -MPOSIX -e \
-            'defined POSIX::setsid() or exit 125; exec @ARGV; exit 126' \
-            -- "$@" <&0 &
-    else
-        return 125
-    fi
-    cmd_pid=$!
-
-    if command -v perl >/dev/null 2>&1; then
-        # Keep the watchdog in one process. A background shell starts sleep(1)
-        # asynchronously; completion can race before that child is visible to
-        # pkill, leaving sleep with the command-substitution pipe open until the
-        # full timeout expires (notably on macOS).
-        perl -e '
-            my ($term_timeout, $kill_grace, $pid) = @ARGV;
-            select undef, undef, undef, $term_timeout;
-            if ($kill_grace > 0) {
-                kill "TERM", -$pid;
-                select undef, undef, undef, $kill_grace;
-            }
-            kill "KILL", -$pid;
-        ' "$term_timeout" "$kill_grace" "$cmd_pid" </dev/null >/dev/null 2>&1 &
-    else
-        # This branch is reachable only when setsid launched the command.
-        # Detach watchdog stdio so an unavoidable shell/sleep race cannot hold
-        # a caller's command-substitution pipe open after the command exits.
-        (
-            sleep "$term_timeout"
-            if [[ "$kill_grace" -gt 0 ]]; then
-                kill -TERM -- "-$cmd_pid" 2>/dev/null || true
-                sleep "$kill_grace"
-            fi
-            kill -KILL -- "-$cmd_pid" 2>/dev/null || true
-        ) </dev/null >/dev/null 2>&1 &
-    fi
-    monitor_pid=$!
-
-    if wait "$cmd_pid" 2>/dev/null; then
-        exit_code=0
-    else
-        exit_code=$?
-    fi
-    pkill -KILL -P "$monitor_pid" 2>/dev/null || true
-    kill "$monitor_pid" 2>/dev/null || true
-    wait "$monitor_pid" 2>/dev/null || true
-    kill -KILL -- "-$cmd_pid" 2>/dev/null || true
-    return "$exit_code"
-}
-
 # Keep the Claude Code --bare authentication check from wedging every Octopus
 # command when the CLI is waiting on auth, Keychain, or a broken hook. The
 # dedicated runner keeps its termination grace inside the configured total cap
 # whether providers.sh is loaded by the orchestrator or sourced on its own.
 _octo_bare_auth_probe() {
     local probe_timeout term_timeout kill_grace
-    probe_timeout="$(_octo_bare_probe_timeout "${OCTOPUS_BARE_PROBE_TIMEOUT:-5}")"
-    term_timeout="$probe_timeout"
-    kill_grace=0
-    if [[ "$probe_timeout" -gt 2 ]]; then
-        kill_grace=2
-        term_timeout=$((probe_timeout - kill_grace))
-    fi
+    read -r probe_timeout term_timeout kill_grace <<< \
+        "$(_octo_bare_probe_budget "${OCTOPUS_BARE_PROBE_TIMEOUT:-5}")"
 
     if [[ "${OCTOPUS_SKIP_PROVIDER_PROBES:-false}" == "true" ]]; then
         return 125

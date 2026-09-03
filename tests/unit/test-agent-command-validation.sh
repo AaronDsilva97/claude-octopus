@@ -115,6 +115,16 @@ else
     test_fail "Kimi hex transport accepted unsafe decoded values:${kimi_invalid_hex:- none}"
 fi
 
+test_case "validate_agent_command accepts only the installed Kimi helper path"
+attacker_kimi_shim="/tmp/attacker$PROJECT_ROOT/scripts/helpers/kimi-exec.sh"
+if validate_agent_command "$kimi_shim" && \
+   ! validate_agent_command "$attacker_kimi_shim extra" >/dev/null 2>&1 && \
+   ! validate_agent_command "env OCTOPUS_KIMI_MODEL_HEX=5465616d $attacker_kimi_shim" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "Kimi validation trusted an attacker-controlled suffix path"
+fi
+
 # get_agent_command returns the commandcode shim WITH arguments (model and
 # permission mode), so the shim must be allowed via the executable-token check
 # rather than an exact-string case arm.

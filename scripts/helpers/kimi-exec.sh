@@ -24,27 +24,19 @@ if [[ -z "${prompt//[[:space:]]/}" ]]; then
     echo "kimi-exec: no prompt provided on stdin" >&2
     exit 64
 fi
-plaintext_model_set=false
-plaintext_model=""
-if [[ "${OCTOPUS_KIMI_MODEL+x}" == x ]]; then
-    plaintext_model_set=true
-    plaintext_model="$OCTOPUS_KIMI_MODEL"
-    if ! octopus_kimi_model_name_is_safe "$plaintext_model"; then
-        echo "kimi-exec: invalid model" >&2
-        exit 64
-    fi
-fi
 if [[ "${OCTOPUS_KIMI_MODEL_HEX+x}" == x ]]; then
+    # The validated dispatch token is authoritative. An ambient plaintext
+    # override must not conflict with the exact model selected by dispatch.
     model="$(octopus_kimi_model_from_hex "$OCTOPUS_KIMI_MODEL_HEX")" || {
         echo "kimi-exec: invalid encoded model" >&2
         exit 64
     }
-    if [[ "$plaintext_model_set" == true && "$plaintext_model" != "$model" ]]; then
-        echo "kimi-exec: encoded model does not match isolated model" >&2
+elif [[ "${OCTOPUS_KIMI_MODEL+x}" == x ]]; then
+    model="$OCTOPUS_KIMI_MODEL"
+    if ! octopus_kimi_model_name_is_safe "$model"; then
+        echo "kimi-exec: invalid model" >&2
         exit 64
     fi
-elif [[ "$plaintext_model_set" == true ]]; then
-    model="$plaintext_model"
 else
     model="default"
 fi

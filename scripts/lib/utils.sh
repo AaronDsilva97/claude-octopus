@@ -216,7 +216,7 @@ _octopus_is_safe_openai_compatible_value() {
 # later in the string), so `env OCTOPUS_GROK_MODEL=x echo pwned <shim>` is
 # rejected instead of matching on a fixed prefix/suffix pair.
 _validate_env_prefixed_shim_command() {
-    local cmd="$1" env_prefix="$2" shim_suffix="$3" allowed_tail="${4:-}" encoding="${5:-plain}"
+    local cmd="$1" env_prefix="$2" shim_path="$3" allowed_tail="${4:-}" encoding="${5:-plain}" path_match="${6:-suffix}"
     local -a parts
     read -r -a parts <<< "$cmd"
     if [[ -n "$allowed_tail" ]]; then
@@ -227,7 +227,11 @@ _validate_env_prefixed_shim_command() {
     fi
     [[ "${parts[0]}" == "env" ]] || return 1
     [[ "${parts[1]}" == "${env_prefix}="* ]] || return 1
-    [[ "${parts[2]}" == *"$shim_suffix" ]] || return 1
+    if [[ "$path_match" == exact ]]; then
+        [[ "${parts[2]}" == "$shim_path" ]] || return 1
+    else
+        [[ "${parts[2]}" == *"$shim_path" ]] || return 1
+    fi
     if [[ "$encoding" == hex ]]; then
         local encoded="${parts[1]#*=}"
         octopus_kimi_model_from_hex "$encoded" >/dev/null || return 1
@@ -440,6 +444,11 @@ validate_agent_command() {
     local cmd_executable="${cmd%%[[:space:]]*}"
     local configured_claude="${OCTOPUS_CLAUDE_BIN:-claude}"
     local configured_claude_executable="${configured_claude%%[[:space:]]*}"
+    local trusted_plugin_root="${PLUGIN_DIR:-}"
+    if [[ -z "$trusted_plugin_root" ]]; then
+        trusted_plugin_root="$(cd "${_utils_lib_dir}/../.." && pwd)" || return 1
+    fi
+    local trusted_kimi_shim="${trusted_plugin_root}/scripts/helpers/kimi-exec.sh"
 
     # Allow helper shims only when they are the executable token, not when they
     # appear later in the command string. OpenAI-compatible helper arguments are
@@ -452,15 +461,17 @@ validate_agent_command() {
     if [[ "$cmd_executable" == */vibe-exec.sh || "$cmd_executable" == */ollama-run.sh || "$cmd_executable" == */codex-run.sh \
         || "$cmd_executable" == */scripts/helpers/agy-exec.sh || "$cmd_executable" == */scripts/helpers/copilot-exec.sh \
         || "$cmd_executable" == */scripts/helpers/commandcode-exec.sh || "$cmd_executable" == */scripts/helpers/grok-exec.sh \
-        || "$cmd_executable" == */scripts/helpers/claude-sdk-exec.sh \
-        || "$cmd_executable" == */scripts/helpers/kimi-exec.sh ]]; then
+        || "$cmd_executable" == */scripts/helpers/claude-sdk-exec.sh ]]; then
+        return 0
+    fi
+    if [[ "$cmd" == "$trusted_kimi_shim" ]]; then
         return 0
     fi
     if [[ "$cmd_executable" == "env" ]]; then
         if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_GROK_MODEL" "/scripts/helpers/grok-exec.sh"; then
             return 0
         fi
-        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_KIMI_MODEL_HEX" "/scripts/helpers/kimi-exec.sh" "" hex; then
+        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_KIMI_MODEL_HEX" "$trusted_kimi_shim" "" hex exact; then
             return 0
         fi
         if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_COPILOT_MODEL" "/scripts/helpers/copilot-exec.sh"; then

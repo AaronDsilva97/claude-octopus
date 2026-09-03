@@ -12,6 +12,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const MAX_CONFIG_OUTPUT = 8 * 1024 * 1024;
+const configuredTimeout = Number.parseInt(process.env.OCTOPUS_KIMI_HEALTH_TIMEOUT_MS ?? '', 10);
+const CONFIG_CHECK_TIMEOUT_MS = Number.isInteger(configuredTimeout)
+  ? Math.min(Math.max(configuredTimeout, 250), 30_000)
+  : 5_000;
 const PROVIDER_ENV_KEYS = new Map([
   ['anthropic', ['ANTHROPIC_API_KEY']],
   ['openai', ['OPENAI_API_KEY']],
@@ -34,6 +38,7 @@ function runKimi(binary, args, configPath) {
     encoding: 'utf8',
     env: { ...process.env, KIMI_CODE_HOME: dirname(configPath) },
     maxBuffer: MAX_CONFIG_OUTPUT,
+    timeout: CONFIG_CHECK_TIMEOUT_MS,
     windowsHide: true,
   });
   if (result.error !== undefined || result.status !== 0) return undefined;
@@ -374,7 +379,6 @@ function storageName(oauthKey) {
 }
 
 function credentialRecord(config) {
-  if (!nonBlank(config.defaultModel)) return undefined;
   const resolved = resolveModelConfiguration(config, config.credentialModel);
   if (resolved === undefined) return undefined;
   const { model, provider } = resolved;
@@ -438,9 +442,11 @@ function main(argv) {
 
   const config = inspectConfig(binary, source);
   if (config === undefined) return 1;
-  if (operation === 'has-model') return nonBlank(config.defaultModel) ? 0 : 1;
+  if (operation === 'has-model') {
+    return resolveModelConfiguration(config, config.credentialModel) === undefined ? 1 : 0;
+  }
   if (operation !== 'config-record') return 1;
-  if (!nonBlank(config.defaultModel)) {
+  if (!nonBlank(config.credentialModel)) {
     process.stdout.write('model-missing\n');
     return 0;
   }

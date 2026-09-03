@@ -19,59 +19,37 @@ if [[ "$rc" -eq 125 && ! -e "$probe_marker" ]]; then test_pass
 else test_fail "suppressed probe rc=$rc launched=$([[ -e "$probe_marker" ]] && echo yes || echo no)"; fi
 unset -f claude
 
-fake_bin="$TEST_TMP_DIR/bin"
-timeout_args="$TEST_TMP_DIR/timeout-args"
-mkdir -p "$fake_bin"
-cat > "$fake_bin/gtimeout" <<'SH'
-#!/bin/sh
-printf '%s\n' "$*" > "$OCTO_TIMEOUT_ARGS_FILE"
-exit 124
-SH
-chmod +x "$fake_bin/gtimeout"
-export OCTO_TIMEOUT_ARGS_FILE="$timeout_args"
-export PATH="$fake_bin:$PATH"
-
 test_case "probe keeps the TERM-to-KILL grace inside its total default budget"
-rc=0
-OCTOPUS_SKIP_PROVIDER_PROBES=false _octo_bare_auth_probe >/dev/null 2>&1 || rc=$?
-args=$(cat "$timeout_args" 2>/dev/null || true)
-if [[ "$rc" -eq 124 && "$args" == "-k 2 3 claude --bare --print --model claude-haiku-4-5-20251001" ]]; then
+read -r total_timeout term_timeout kill_grace <<< "$(_octo_bare_probe_budget 5)"
+if [[ "$total_timeout" -eq 5 && "$term_timeout" -eq 3 && "$kill_grace" -eq 2 ]]; then
     test_pass
 else
-    test_fail "unexpected total-budget timeout contract: rc=$rc args=$args"
+    test_fail "unexpected total-budget split: total=$total_timeout term=$term_timeout grace=$kill_grace"
 fi
 
 test_case "invalid and arbitrarily large timeout overrides are normalized before arithmetic"
-OCTOPUS_BARE_PROBE_TIMEOUT=bogus OCTOPUS_SKIP_PROVIDER_PROBES=false \
-    _octo_bare_auth_probe >/dev/null 2>&1 || true
-invalid_args=$(cat "$timeout_args" 2>/dev/null || true)
-OCTOPUS_BARE_PROBE_TIMEOUT=999999999999999999999999999999999999999 \
-    OCTOPUS_SKIP_PROVIDER_PROBES=false _octo_bare_auth_probe >/dev/null 2>&1 || true
-clamped_args=$(cat "$timeout_args" 2>/dev/null || true)
-if [[ "$invalid_args" == "-k 2 3 "* && "$clamped_args" == "-k 2 28 "* ]]; then
+invalid_budget="$(_octo_bare_probe_budget bogus)"
+clamped_budget="$(_octo_bare_probe_budget 999999999999999999999999999999999999999)"
+if [[ "$invalid_budget" == "5 3 2" && "$clamped_budget" == "30 28 2" ]]; then
     test_pass
 else
-    test_fail "timeout validation failed: invalid=$invalid_args clamped=$clamped_args"
+    test_fail "timeout validation failed: invalid=$invalid_budget clamped=$clamped_budget"
 fi
 
 test_case "zero-padded positive timeout overrides retain their numeric value"
-OCTOPUS_BARE_PROBE_TIMEOUT=00029 OCTOPUS_SKIP_PROVIDER_PROBES=false \
-    _octo_bare_auth_probe >/dev/null 2>&1 || true
-padded_args=$(cat "$timeout_args" 2>/dev/null || true)
-if [[ "$padded_args" == "-k 2 27 "* ]]; then
+padded_budget="$(_octo_bare_probe_budget 00029)"
+if [[ "$padded_budget" == "29 27 2" ]]; then
     test_pass
 else
-    test_fail "zero-padded timeout did not normalize to 29 seconds: args=$padded_args"
+    test_fail "zero-padded timeout did not normalize to 29 seconds: budget=$padded_budget"
 fi
 
 test_case "one-second probe budgets use a hard cap without extending for grace"
-OCTOPUS_BARE_PROBE_TIMEOUT=1 OCTOPUS_SKIP_PROVIDER_PROBES=false \
-    _octo_bare_auth_probe >/dev/null 2>&1 || true
-short_args=$(cat "$timeout_args" 2>/dev/null || true)
-if [[ "$short_args" == "-s KILL 1 claude --bare --print --model claude-haiku-4-5-20251001" ]]; then
+short_budget="$(_octo_bare_probe_budget 1)"
+if [[ "$short_budget" == "1 1 0" ]]; then
     test_pass
 else
-    test_fail "short timeout extended past the configured cap: args=$short_args"
+    test_fail "short timeout extended past the configured cap: budget=$short_budget"
 fi
 
 test_case "portable fallback hard-kills a TERM-ignoring probe at the total cap"
@@ -79,6 +57,9 @@ manual_bin="$TEST_TMP_DIR/manual-bin"
 mkdir -p "$manual_bin"
 ln -sf /bin/sleep "$manual_bin/sleep"
 ln -sf /usr/bin/pkill "$manual_bin/pkill"
+ln -sf "$(command -v mktemp)" "$manual_bin/mktemp"
+ln -sf "$(command -v rm)" "$manual_bin/rm"
+ln -sf "$(command -v cat)" "$manual_bin/cat"
 if command -v setsid >/dev/null 2>&1; then
     ln -sf "$(command -v setsid)" "$manual_bin/setsid"
 elif command -v perl >/dev/null 2>&1; then
@@ -141,6 +122,56 @@ elif [[ "$rc" -ne 0 && -n "$grandchild_pid" ]]; then
     test_pass
 else
     test_fail "portable fallback did not exercise descendant fixture: rc=$rc pid=$grandchild_pid"
+fi
+
+test_case "strict probe cleanup kills descendants after their wrapper exits cleanly"
+early_child_pid_file="$TEST_TMP_DIR/early-child.pid"
+early_exit_probe="$TEST_TMP_DIR/early-exit-probe.sh"
+cat > "$early_exit_probe" <<'SH'
+#!/bin/sh
+sleep 30 &
+printf '%s\n' "$!" > "$OCTO_EARLY_CHILD_PID_FILE"
+exit 0
+SH
+chmod +x "$early_exit_probe"
+export OCTO_EARLY_CHILD_PID_FILE="$early_child_pid_file"
+rc=0
+(
+    PATH="$manual_bin"
+    _octo_run_bare_probe_with_timeout 3 1 2 "$early_exit_probe" >/dev/null 2>&1
+) || rc=$?
+early_child_pid=$(cat "$early_child_pid_file" 2>/dev/null || true)
+early_child_alive=false
+if [[ "$early_child_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$early_child_pid" 2>/dev/null; then
+    early_child_stat="$(ps -o stat= -p "$early_child_pid" 2>/dev/null | tr -d '[:space:]')"
+    [[ -n "$early_child_stat" && "$early_child_stat" != Z* ]] && early_child_alive=true
+fi
+if [[ "$rc" -eq 0 && -n "$early_child_pid" && "$early_child_alive" == false ]]; then
+    test_pass
+else
+    [[ "$early_child_alive" == false ]] || kill -KILL "$early_child_pid" 2>/dev/null || true
+    test_fail "clean wrapper exit left descendant running: rc=$rc pid=${early_child_pid:-missing}/$early_child_alive"
+fi
+
+test_case "a probe that exits zero from TERM still reports timeout"
+term_success_probe="$TEST_TMP_DIR/term-success-probe.sh"
+cat > "$term_success_probe" <<'SH'
+#!/bin/sh
+trap 'exit 0' TERM
+while :; do sleep 1; done
+SH
+chmod +x "$term_success_probe"
+SECONDS=0
+rc=0
+(
+    PATH="$manual_bin"
+    _octo_run_bare_probe_with_timeout 3 1 2 "$term_success_probe" >/dev/null 2>&1
+) || rc=$?
+elapsed=$SECONDS
+if [[ "$rc" -eq 124 && "$elapsed" -le 3 ]]; then
+    test_pass
+else
+    test_fail "TERM-handling probe hid its timeout: rc=$rc elapsed=${elapsed}s"
 fi
 
 test_case "non-live suite runner suppresses provider probes without changing live suites"

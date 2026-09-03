@@ -37,6 +37,12 @@ test_suite "Moonshot Kimi Code CLI Provider"
 export KIMI_TEST_NODE="$(command -v node)"
 export KIMI_TEST_DRIVER="$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.mjs"
 
+_kimi_emit_test_runtime_env() {
+    printf 'KIMI_TEST_NODE=%q\n' "$KIMI_TEST_NODE"
+    printf 'KIMI_TEST_DRIVER=%q\n' "$KIMI_TEST_DRIVER"
+    printf '%s\n' 'export KIMI_TEST_NODE KIMI_TEST_DRIVER'
+}
+
 # Stub log() — kimi.sh/model-resolver.sh call it outside orchestrate.sh.
 log() { :; }
 
@@ -51,6 +57,7 @@ _kimi_mock_bin() {
     mkdir -p "$dir"
     {
         printf '%s\n' '#!/usr/bin/env bash'
+        _kimi_emit_test_runtime_env
         cat <<'MOCK'
 case "${1:-}" in
     __plugin_run_node)
@@ -72,24 +79,35 @@ _kimi_native_runtime_mock_bin() {
     mkdir -p "$dir"
     ln -s "$(command -v env)" "$dir/kimi"
     for command_name in doctor provider; do
-        cat > "$dir/$command_name" <<'MOCK'
-#!/usr/bin/env bash
+        {
+            printf '%s\n' '#!/usr/bin/env bash'
+            _kimi_emit_test_runtime_env
+            cat <<'MOCK'
 exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "${0##*/}" "$@"
 MOCK
+        } > "$dir/$command_name"
         chmod +x "$dir/$command_name"
     done
-    cat > "$dir/__plugin_run_node" <<'MOCK'
-#!/usr/bin/env bash
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        _kimi_emit_test_runtime_env
+        cat <<'MOCK'
 exec "${KIMI_TEST_NODE:?}" "$@"
 MOCK
+    } > "$dir/__plugin_run_node"
     chmod +x "$dir/__plugin_run_node"
 }
 
 _kimi_node_runtime_mock_bin() {
-    local dir="$1"
+    local dir="$1" node_json driver_json
     mkdir -p "$dir"
-    cat > "$dir/kimi" <<'MOCK'
-#!/usr/bin/env node
+    node_json="$("$KIMI_TEST_NODE" -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$KIMI_TEST_NODE")"
+    driver_json="$("$KIMI_TEST_NODE" -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$KIMI_TEST_DRIVER")"
+    {
+        printf '%s\n' '#!/usr/bin/env node'
+        printf 'const KIMI_TEST_NODE = %s;\n' "$node_json"
+        printf 'const KIMI_TEST_DRIVER = %s;\n' "$driver_json"
+        cat <<'MOCK'
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const args = process.argv.slice(2);
@@ -98,13 +116,14 @@ if (args[0] === '__plugin_run_node') {
   process.argv = [process.argv[0], entry, ...args.slice(2)];
   import(pathToFileURL(entry).href).catch(() => process.exit(1));
 } else {
-  const result = spawnSync(process.env.KIMI_TEST_NODE, [process.env.KIMI_TEST_DRIVER, ...args], {
+  const result = spawnSync(KIMI_TEST_NODE, [KIMI_TEST_DRIVER, ...args], {
     env: process.env,
     stdio: 'inherit',
   });
   process.exit(result.status ?? 1);
 }
 MOCK
+    } > "$dir/kimi"
     chmod +x "$dir/kimi"
 }
 
@@ -663,8 +682,10 @@ test_kimi_routing_parser_accepts_multiline_quote_endings() {
     local tmp_bin root suffix method rc failures=""
     tmp_bin="$TEST_TMP_DIR/kimi-bin-multiline-quotes"
     mkdir -p "$tmp_bin"
-    cat > "$tmp_bin/kimi" <<'MOCK'
-#!/usr/bin/env bash
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        _kimi_emit_test_runtime_env
+        cat <<'MOCK'
 case "${1:-}" in
     __plugin_run_node)
         shift
@@ -680,6 +701,7 @@ case "${1:-}" in
     *) exit 1 ;;
 esac
 MOCK
+    } > "$tmp_bin/kimi"
     chmod +x "$tmp_bin/kimi"
 
     for suffix in four five; do
@@ -792,7 +814,10 @@ MOCK
     rc=0
     OCTOPUS_KIMI_MODEL_HEX=5465616d204d6f64656c OCTOPUS_KIMI_MODEL="Other Model" \
         /bin/bash "$PROJECT_ROOT/scripts/helpers/kimi-exec.sh" <<<"probe" >/dev/null 2>&1 || rc=$?
-    [[ "$rc" -eq 64 ]] || failures="$failures mismatch=$rc"
+    if [[ "$rc" -ne 0 ]] || \
+       [[ "$(grep -A1 -x -- '--model' "$capture" | tail -1)" != "Team Model" ]]; then
+        failures="$failures encoded-authority=$rc"
+    fi
 
     for encoded in 5465616d204d6f64656c 5465616d094d6f64656c; do
         rc=0
@@ -1293,8 +1318,10 @@ test_kimi_leading_dash_home_is_safe() {
     tmp_bin="$TEST_TMP_DIR/kimi-bin-leading-dash"
     case_parent="$TEST_TMP_DIR/kimi-leading-dash"
     mkdir -p "$tmp_bin" "$case_parent/-kimi-home"
-    cat > "$tmp_bin/kimi" <<'MOCK'
-#!/usr/bin/env bash
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        _kimi_emit_test_runtime_env
+        cat <<'MOCK'
 case "${1:-}" in
     __plugin_run_node)
         shift
@@ -1310,6 +1337,7 @@ case "${1:-}" in
 esac
 exit 1
 MOCK
+    } > "$tmp_bin/kimi"
     chmod +x "$tmp_bin/kimi"
     cat > "$case_parent/-kimi-home/config.toml" <<'TOML'
 default_model = "selected"
@@ -1952,8 +1980,13 @@ run_with_timeout 2 /usr/bin/true >/dev/null 2>&1 || exit 90
 [[ -s "$FAKE_TIMEOUT_USED" ]] || exit 91
 rm -f "$FAKE_TIMEOUT_USED"
 (
-    sleep 0.2
-    kill -"$SIGNAL_NAME" "$$"
+    _attempt=0
+    while [[ "$_attempt" -lt 200 ]]; do
+        [[ -s "$KIMI_STARTED" ]] && break
+        sleep 0.01
+        _attempt=$((_attempt + 1))
+    done
+    [[ -s "$KIMI_STARTED" ]] && kill -"$SIGNAL_NAME" "$$"
 ) &
 OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
 EOF
@@ -2025,9 +2058,9 @@ test_kimi_portable_timeout() {
     fi
 }
 
-# ── 9. an octo-side model pin is not proof of readiness ──────────────────────
-test_kimi_pin_is_not_readiness() {
-    test_case "OCTOPUS_KIMI_MODEL does not substitute for kimi's own default_model"
+# ── 9. an explicit model pin is sufficient model selection ───────────────────
+test_kimi_pin_drives_readiness() {
+    test_case "OCTOPUS_KIMI_MODEL selects a configured alias without default_model"
     local tmp_bin old_path old_home old_key had_key rc_pin_only rc_default
     tmp_bin="$TEST_TMP_DIR/kimi-bin-pin"
     _kimi_mock_bin "$tmp_bin" 'exit 0'
@@ -2036,8 +2069,8 @@ test_kimi_pin_is_not_readiness() {
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
     unset KIMI_API_KEY
 
-    # The pinned alias and its provider are complete and credentialed. Kimi
-    # 0.40.1 still requires a real top-level default_model before dispatch.
+    # Kimi's --model contract selects this alias directly; default_model is
+    # consulted only when --model is omitted.
     cat > "$HOME/.kimi-code/config.toml" <<'TOML'
 [models."Pinned Complete"]
 provider = "kimi"
@@ -2064,10 +2097,128 @@ TOML
     rc_default=0; kimi_is_available >/dev/null 2>&1 || rc_default=$?
 
     PATH="$old_path"; HOME="$old_home"; _kimi_restore_key "$had_key" "$old_key"
-    if [[ "$rc_pin_only" -ne 0 && "$rc_default" -eq 0 ]]; then
+    if [[ "$rc_pin_only" -eq 0 && "$rc_default" -eq 0 ]]; then
         test_pass
     else
-        test_fail "expected pin-only!=0 ($rc_pin_only) and default_model=0 ($rc_default)"
+        test_fail "expected pin-only=0 ($rc_pin_only) and default_model=0 ($rc_default)"
+    fi
+}
+
+test_kimi_unknown_pin_is_not_a_model() {
+    test_case "kimi_has_model rejects an explicit alias absent from config.models"
+    local tmp_bin old_path old_home rc
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-unknown-pin"
+    _kimi_mock_bin "$tmp_bin" 'exit 0'
+    old_path="$PATH"; old_home="$HOME"
+    PATH="$tmp_bin:$PATH"; HOME="$TEST_TMP_DIR/kimi-unknown-pin-home"
+    mkdir -p "$HOME/.kimi-code"
+    cat > "$HOME/.kimi-code/config.toml" <<'TOML'
+default_model = "known"
+[models.known]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+TOML
+    rc=0
+    OCTOPUS_KIMI_MODEL=missing kimi_has_model >/dev/null 2>&1 || rc=$?
+    PATH="$old_path"; HOME="$old_home"
+    if [[ "$rc" -ne 0 ]]; then
+        test_pass
+    else
+        test_fail "unknown explicit alias was reported as a configured model"
+    fi
+}
+
+test_kimi_readiness_env_isolation() {
+    test_case "Kimi readiness strips unrelated provider credentials"
+    local tmp_bin marker old_path root rc
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-readiness-env"
+    marker="$TEST_TMP_DIR/kimi-readiness-env-leak"
+    root="$TEST_TMP_DIR/kimi-readiness-env-root"
+    mkdir -p "$tmp_bin" "$root"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        _kimi_emit_test_runtime_env
+        printf 'KIMI_LEAK_MARKER=%q\n' "$marker"
+        printf '%s\n' 'export KIMI_LEAK_MARKER'
+        cat <<'MOCK'
+if [[ -n "${UNRELATED_PROVIDER_SECRET:-}" ]]; then
+    printf 'leaked\n' > "${KIMI_LEAK_MARKER:?}"
+fi
+case "${1:-}" in
+    __plugin_run_node) shift; exec "${KIMI_TEST_NODE:?}" "$@" ;;
+    doctor|provider) exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "$@" ;;
+esac
+exit 1
+MOCK
+    } > "$tmp_bin/kimi"
+    chmod +x "$tmp_bin/kimi"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "ready"
+[models.ready]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+api_key = "fixture-not-a-secret"
+TOML
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+    rc=0
+    KIMI_CODE_HOME="$root" KIMI_LEAK_MARKER="$marker" \
+        UNRELATED_PROVIDER_SECRET="must-not-leak" \
+        kimi_configured_credential_method >/dev/null 2>&1 || rc=$?
+    PATH="$old_path"
+    if [[ "$rc" -eq 0 && ! -e "$marker" ]]; then
+        test_pass
+    else
+        test_fail "readiness leaked an unrelated credential or failed: rc=$rc marker=$([[ -e "$marker" ]] && echo yes || echo no)"
+    fi
+}
+
+test_kimi_readiness_timeout() {
+    test_case "Kimi readiness bounds the plugin runner and its descendants"
+    local tmp_bin started child_pid_file old_path rc started_ms elapsed_ms child_pid child_alive=false
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-readiness-timeout"
+    started="$TEST_TMP_DIR/kimi-readiness-timeout-started"
+    child_pid_file="$TEST_TMP_DIR/kimi-readiness-timeout-child"
+    mkdir -p "$tmp_bin"
+    {
+        printf '%s\n' '#!/usr/bin/env bash'
+        printf 'KIMI_TIMEOUT_STARTED=%q\n' "$started"
+        printf 'KIMI_TIMEOUT_CHILD=%q\n' "$child_pid_file"
+        printf '%s\n' 'export KIMI_TIMEOUT_STARTED KIMI_TIMEOUT_CHILD'
+        cat <<'MOCK'
+if [[ "${1:-}" == __plugin_run_node ]]; then
+    /bin/sleep 30 &
+    printf '%s\n' "$!" > "${KIMI_TIMEOUT_CHILD:?}"
+    printf 'started\n' > "${KIMI_TIMEOUT_STARTED:?}"
+    wait
+fi
+exit 1
+MOCK
+    } > "$tmp_bin/kimi"
+    chmod +x "$tmp_bin/kimi"
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+    started_ms="$("$KIMI_TEST_NODE" -e 'process.stdout.write(String(Date.now()))')"
+    rc=0
+    KIMI_TIMEOUT_STARTED="$started" KIMI_TIMEOUT_CHILD="$child_pid_file" \
+        OCTOPUS_KIMI_HEALTH_TIMEOUT=1 _kimi_run_config_check self-test \
+        >/dev/null 2>&1 || rc=$?
+    elapsed_ms=$(( $("$KIMI_TEST_NODE" -e 'process.stdout.write(String(Date.now()))') - started_ms ))
+    PATH="$old_path"
+    child_pid=""; [[ -s "$child_pid_file" ]] && child_pid="$(< "$child_pid_file")"
+    if [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$child_pid" 2>/dev/null; then
+        child_alive=true
+        kill -KILL "$child_pid" 2>/dev/null || true
+    fi
+    if [[ "$rc" -ne 0 && -s "$started" && "$elapsed_ms" -lt 3000 && "$child_alive" == false ]]; then
+        test_pass
+    else
+        test_fail "expected bounded process-tree failure, got rc=$rc elapsed=${elapsed_ms}ms child=${child_pid:-missing}/$child_alive"
     fi
 }
 
@@ -2264,7 +2415,10 @@ test_kimi_interruption_cleans_private_captures
 test_kimi_interruption_restores_caller_trap
 test_kimi_interruption_bypasses_system_timeout
 test_kimi_portable_timeout
-test_kimi_pin_is_not_readiness
+test_kimi_pin_drives_readiness
+test_kimi_unknown_pin_is_not_a_model
+test_kimi_readiness_env_isolation
+test_kimi_readiness_timeout
 test_kimi_empty_default_model
 test_kimi_dispatch_command_is_valid
 test_kimi_detection

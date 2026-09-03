@@ -13,6 +13,7 @@
 
 _provider_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_provider_registry_dir}/provider-registry.sh" || { echo "provider-routing: failed to load provider-registry.sh" >&2; return 1 2>/dev/null || exit 1; }
+source "${_provider_registry_dir}/kimi-env.sh" || { echo "provider-routing: failed to load kimi-env.sh" >&2; return 1 2>/dev/null || exit 1; }
 
 # Providers accepted by set_provider_model / reset_provider_model.
 #
@@ -211,38 +212,8 @@ _octo_build_provider_env_impl() {
                 fi
                 PROVIDER_ENV_ARRAY=()
             else
-                PROVIDER_ENV_ARRAY=(env -i "PATH=$PATH" "HOME=$HOME" "TERM=${TERM:-dumb}" "TMPDIR=${TMPDIR:-/tmp}")
-                if [[ -n "${KIMI_CODE_HOME:-}" ]]; then
-                    PROVIDER_ENV_ARRAY+=("KIMI_CODE_HOME=${KIMI_CODE_HOME}")
-                fi
-                if [[ -n "${OCTOPUS_KIMI_MODEL:-}" ]]; then
-                    PROVIDER_ENV_ARRAY+=("OCTOPUS_KIMI_MODEL=${OCTOPUS_KIMI_MODEL}")
-                fi
-                # Kimi Code 0.40.1 owns validation of its documented model
-                # override family. Forward only this finite list so the
-                # synthetic provider works without broad shell inheritance.
-                local _kimi_model_var
-                for _kimi_model_var in \
-                    KIMI_MODEL_NAME \
-                    KIMI_MODEL_API_KEY \
-                    KIMI_MODEL_PROVIDER_TYPE \
-                    KIMI_MODEL_BASE_URL \
-                    KIMI_MODEL_MAX_CONTEXT_SIZE \
-                    KIMI_MODEL_CAPABILITIES \
-                    KIMI_MODEL_DISPLAY_NAME \
-                    KIMI_MODEL_MAX_OUTPUT_SIZE \
-                    KIMI_MODEL_REASONING_KEY \
-                    KIMI_MODEL_THINKING_EFFORT \
-                    KIMI_MODEL_ADAPTIVE_THINKING \
-                    KIMI_MODEL_MAX_COMPLETION_TOKENS \
-                    KIMI_MODEL_MAX_TOKENS \
-                    KIMI_MODEL_TEMPERATURE \
-                    KIMI_MODEL_TOP_P \
-                    KIMI_MODEL_THINKING_KEEP; do
-                    if [[ -n "${!_kimi_model_var:-}" ]]; then
-                        PROVIDER_ENV_ARRAY+=("${_kimi_model_var}=${!_kimi_model_var}")
-                    fi
-                done
+                octopus_build_kimi_provider_env
+                PROVIDER_ENV_ARRAY=("${KIMI_PROVIDER_ENV_ARRAY[@]}")
                 if [[ ${#_trace_env[@]} -gt 0 ]]; then
                     PROVIDER_ENV_ARRAY+=("${_trace_env[@]}")
                 fi
