@@ -2,8 +2,8 @@
 # tests/unit/test-kimi-provider.sh
 # Contract coverage for the Moonshot Kimi Code CLI provider:
 #   1. dispatch routes through the stdin->-p shim (helpers/kimi-exec.sh).
-#   2. config/env model selection reaches the shim (get_agent_model +
-#      OCTOPUS_KIMI_MODEL env prefix).
+#   2. config/env model selection reaches the shim through a reversible,
+#      shell-safe environment encoding.
 #   3. provider-routing isolates kimi by default, preserves KIMI_CODE_HOME,
 #      and offers a full-env opt-in.
 #   4. providers.json kimi model resolves and kimi-exec.sh emits --model;
@@ -175,13 +175,13 @@ test_kimi_dispatch_shim() {
 
 # ── 2. dispatch wires config/env model to the shim ────────────────────────────
 test_kimi_dispatch_wires_model() {
-    test_case "dispatch kimi arm resolves model and env-prefixes OCTOPUS_KIMI_MODEL"
+    test_case "dispatch kimi arm resolves and safely encodes OCTOPUS_KIMI_MODEL"
     local arm
     arm="$(sed -n '/kimi|kimi-research)/,/;;/p' "$PROJECT_ROOT/scripts/lib/dispatch.sh")"
-    if [[ "$arm" == *"get_agent_model"* ]] && [[ "$arm" == *"env OCTOPUS_KIMI_MODEL="* ]]; then
+    if [[ "$arm" == *"get_agent_model"* ]] && [[ "$arm" == *"env OCTOPUS_KIMI_MODEL_HEX="* ]]; then
         test_pass
     else
-        test_fail "kimi arm should call get_agent_model and pass OCTOPUS_KIMI_MODEL to the shim"
+        test_fail "kimi arm should encode the resolved model before passing it to the shim"
     fi
 }
 
@@ -588,6 +588,162 @@ TOML
         test_pass
     else
         test_fail "expected model auth precedence without secret output, got api=$api_rc/$api_method oauth=$oauth_rc/$oauth_method"
+    fi
+}
+
+test_kimi_effective_dispatch_model_drives_health() {
+    test_case "health validates the effective Kimi dispatch alias and its OAuth file"
+    local root old_model had_model default_method pinned_rc=0 issue health_rc=0 health
+    root="$TEST_TMP_DIR/kimi-effective-health"
+    mkdir -p "$root/credentials"
+    old_model="${OCTOPUS_KIMI_MODEL-}"
+    had_model="${OCTOPUS_KIMI_MODEL+set}"
+    unset OCTOPUS_KIMI_MODEL
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    cat > "$root/config.toml" <<'TOML'
+default_model = "ready"
+[models.ready]
+provider = "ready-provider"
+model = "k3"
+max_context_size = 1048576
+[models."Pinned OAuth"]
+provider = "oauth-provider"
+model = "k3"
+max_context_size = 1048576
+[providers.ready-provider]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+[providers.oauth-provider]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+[providers.oauth-provider.oauth]
+storage = "file"
+key = "oauth/missing-session"
+TOML
+
+    default_method="$(KIMI_CODE_HOME="$root" kimi_configured_credential_method 2>/dev/null)"
+    KIMI_CODE_HOME="$root" OCTOPUS_KIMI_MODEL="Pinned OAuth" \
+        kimi_configured_credential_method >/dev/null 2>&1 || pinned_rc=$?
+    issue="$(KIMI_CODE_HOME="$root" OCTOPUS_KIMI_MODEL="Pinned OAuth" \
+        kimi_credential_issue 2>/dev/null || true)"
+    health="$(KIMI_CODE_HOME="$root" check_provider_health kimi "Pinned OAuth" 2>&1)" || health_rc=$?
+
+    if [[ "$had_model" == set ]]; then OCTOPUS_KIMI_MODEL="$old_model"; else unset OCTOPUS_KIMI_MODEL; fi
+    if [[ "$default_method" == "config:api-key" && "$pinned_rc" -ne 0 && \
+          "$issue" == "oauth-invalid" && "$health_rc" -ne 0 && "$health" == *"/login"* ]]; then
+        test_pass
+    else
+        test_fail "expected pinned OAuth failure before dispatch, got default=$default_method pinned=$pinned_rc issue=$issue health=$health_rc/$health"
+    fi
+}
+
+test_kimi_routing_parser_accepts_multiline_quote_endings() {
+    test_case "routing parser accepts Kimi-valid multiline strings ending in one or two quotes"
+    local tmp_bin root suffix method rc failures=""
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-multiline-quotes"
+    mkdir -p "$tmp_bin"
+    cat > "$tmp_bin/kimi" <<'MOCK'
+#!/usr/bin/env bash
+case "${1:-}" in
+    __plugin_run_node)
+        shift
+        exec "${KIMI_TEST_NODE:?}" "$@"
+        ;;
+    doctor)
+        exit 0
+        ;;
+    provider)
+        [[ "${2:-}" == list && "${3:-}" == --json ]] || exit 1
+        printf '%s\n' '{"providers":{"kimi":{"type":"kimi","baseUrl":"https://fixture.invalid/v1","apiKey":"fixture-not-a-secret"}},"models":{"selected":{"provider":"kimi","model":"k3","maxContextSize":1048576}}}'
+        ;;
+    *) exit 1 ;;
+esac
+MOCK
+    chmod +x "$tmp_bin/kimi"
+
+    for suffix in four five; do
+        root="$TEST_TMP_DIR/kimi-multiline-$suffix"
+        mkdir -p "$root"
+        if [[ "$suffix" == four ]]; then
+            printf '%s\n' 'default_model = "selected"' 'description = """ends with one quote""""' > "$root/config.toml"
+        else
+            printf '%s\n' 'default_model = "selected"' 'description = """ends with two quotes"""""' > "$root/config.toml"
+        fi
+        cat >> "$root/config.toml" <<'TOML'
+[models.selected]
+provider = "kimi"
+model = "k3"
+max_context_size = 1048576
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+        rc=0
+        method="$(PATH="$tmp_bin:$PATH" KIMI_CODE_HOME="$root" \
+            kimi_configured_credential_method 2>/dev/null)" || rc=$?
+        [[ "$rc" -eq 0 && "$method" == "config:api-key" ]] || failures="$failures $suffix=$rc/$method"
+    done
+
+    if [[ -z "$failures" ]]; then
+        test_pass
+    else
+        test_fail "Kimi-valid multiline quote endings were rejected:$failures"
+    fi
+}
+
+test_kimi_whitespace_alias_dispatch_is_safe() {
+    test_case "whitespace Kimi aliases survive validation, isolation, splitting, and shim argv"
+    local tmp_bin capture marker old_path old_model had_model model cmd output="" rc=1 malicious_rc=0
+    local word_count=0
+    local command_valid=false
+    local -a inner_cmd_array cmd_array
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-whitespace-alias"
+    capture="$tmp_bin/argv"
+    marker="$TEST_TMP_DIR/never-octopus-kimi"
+    mkdir -p "$tmp_bin"
+    cat > "$tmp_bin/kimi" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${0%/*}/argv"
+printf '%s\n' "whitespace alias dispatched"
+MOCK
+    chmod +x "$tmp_bin/kimi"
+    old_path="$PATH"
+    old_model="${OCTOPUS_KIMI_MODEL-}"
+    had_model="${OCTOPUS_KIMI_MODEL+set}"
+    PATH="$tmp_bin:$PATH"
+    OCTOPUS_KIMI_MODEL="Team Model"
+    export PATH OCTOPUS_KIMI_MODEL
+    source "$PROJECT_ROOT/scripts/lib/utils.sh"
+    source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+
+    model="$(get_agent_model kimi 2>/dev/null || true)"
+    cmd="$(get_agent_command kimi 2>/dev/null || true)"
+    build_provider_env kimi
+    if [[ -n "$cmd" ]]; then
+        read -r -a inner_cmd_array <<< "$cmd"
+        word_count=${#inner_cmd_array[@]}
+        cmd_array=("${PROVIDER_ENV_ARRAY[@]}" "${inner_cmd_array[@]}")
+        validate_agent_command "$cmd" && command_valid=true
+        rc=0
+        output="$(printf '%s' probe | "${cmd_array[@]}" 2>&1)" || rc=$?
+    fi
+
+    OCTOPUS_KIMI_MODEL="Team Model;touch $marker"
+    get_agent_model kimi >/dev/null 2>&1 || malicious_rc=$?
+    PATH="$old_path"
+    if [[ "$had_model" == set ]]; then OCTOPUS_KIMI_MODEL="$old_model"; else unset OCTOPUS_KIMI_MODEL; fi
+
+    if [[ "$model" == "Team Model" && -n "$cmd" && "$cmd" != *"Team Model"* && \
+          "$word_count" -eq 3 && "${PROVIDER_ENV_ARRAY[0]:-}" == env && \
+          "${PROVIDER_ENV_ARRAY[1]:-}" == -i && "$command_valid" == true && \
+          "$rc" -eq 0 && "$output" == "whitespace alias dispatched" && \
+          "$(grep -A1 -x -- '--model' "$capture" | tail -1)" == "Team Model" && \
+          "$malicious_rc" -ne 0 && ! -e "$marker" ]]; then
+        test_pass
+    else
+        test_fail "whitespace alias did not round-trip safely: model=$model words=$word_count rc=$rc malicious=$malicious_rc"
     fi
 }
 
@@ -1983,6 +2139,9 @@ test_kimi_accepts_matching_provider_env_credentials
 test_kimi_accepts_current_provider_types_and_capabilities
 test_kimi_accepts_current_v2_model_reference_shape
 test_kimi_model_level_auth_precedes_provider_auth
+test_kimi_effective_dispatch_model_drives_health
+test_kimi_routing_parser_accepts_multiline_quote_endings
+test_kimi_whitespace_alias_dispatch_is_safe
 test_kimi_default_provider_and_flat_model_readiness
 test_kimi_rejects_malformed_or_duplicate_toml
 test_kimi_validates_unselected_records

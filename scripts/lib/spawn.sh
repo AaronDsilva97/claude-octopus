@@ -751,7 +751,7 @@ ${heuristic_ctx}"
     esac
     if [[ -n "$_provider_for_health" ]] && declare -F check_provider_health >/dev/null 2>&1; then
         local _health_diag
-        if ! _health_diag=$(check_provider_health "$_provider_for_health" 2>&1); then
+        if ! _health_diag=$(check_provider_health "$_provider_for_health" "$model" 2>&1); then
             octo_spawn_contract_finish "$_contract_seat_id" failed "" "" \
                 "Provider unavailable: $_health_diag" 1 "" >/dev/null 2>&1 || true
             log WARN "Provider '$_provider_for_health' health check failed: $_health_diag"

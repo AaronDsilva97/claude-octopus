@@ -96,6 +96,17 @@ else
     test_pass
 fi
 
+test_case "validate_agent_command accepts only hex-encoded Kimi model transport"
+kimi_shim="$PROJECT_ROOT/scripts/helpers/kimi-exec.sh"
+if validate_agent_command "env OCTOPUS_KIMI_MODEL_HEX=5465616d204d6f64656c $kimi_shim" && \
+   ! validate_agent_command "env OCTOPUS_KIMI_MODEL_HEX=Team Model $kimi_shim" >/dev/null 2>&1 && \
+   ! validate_agent_command "env OCTOPUS_KIMI_MODEL_HEX=54\;touch $kimi_shim" >/dev/null 2>&1 && \
+   ! validate_agent_command "env OCTOPUS_KIMI_MODEL=Team $kimi_shim" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "Kimi model transport must be reversible hex bound directly to its shim"
+fi
+
 # get_agent_command returns the commandcode shim WITH arguments (model and
 # permission mode), so the shim must be allowed via the executable-token check
 # rather than an exact-string case arm.

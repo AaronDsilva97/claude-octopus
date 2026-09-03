@@ -213,7 +213,7 @@ _octopus_is_safe_openai_compatible_value() {
 # later in the string), so `env OCTOPUS_GROK_MODEL=x echo pwned <shim>` is
 # rejected instead of matching on a fixed prefix/suffix pair.
 _validate_env_prefixed_shim_command() {
-    local cmd="$1" env_prefix="$2" shim_suffix="$3" allowed_tail="${4:-}"
+    local cmd="$1" env_prefix="$2" shim_suffix="$3" allowed_tail="${4:-}" encoding="${5:-plain}"
     local -a parts
     read -r -a parts <<< "$cmd"
     if [[ -n "$allowed_tail" ]]; then
@@ -225,6 +225,10 @@ _validate_env_prefixed_shim_command() {
     [[ "${parts[0]}" == "env" ]] || return 1
     [[ "${parts[1]}" == "${env_prefix}="* ]] || return 1
     [[ "${parts[2]}" == *"$shim_suffix" ]] || return 1
+    if [[ "$encoding" == hex ]]; then
+        local encoded="${parts[1]#*=}"
+        [[ "$encoded" =~ ^([0-9A-Fa-f][0-9A-Fa-f])+$ ]] || return 1
+    fi
     return 0
 }
 
@@ -453,7 +457,7 @@ validate_agent_command() {
         if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_GROK_MODEL" "/scripts/helpers/grok-exec.sh"; then
             return 0
         fi
-        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_KIMI_MODEL" "/scripts/helpers/kimi-exec.sh"; then
+        if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_KIMI_MODEL_HEX" "/scripts/helpers/kimi-exec.sh" "" hex; then
             return 0
         fi
         if _validate_env_prefixed_shim_command "$cmd" "OCTOPUS_COPILOT_MODEL" "/scripts/helpers/copilot-exec.sh"; then

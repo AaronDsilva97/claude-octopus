@@ -1437,7 +1437,7 @@ ${provider_ctx}"
         if ! declare -f "$_health_handler" >/dev/null 2>&1; then
             _health_diag="registry health handler unavailable: $_health_handler"
             _health_failed=true
-        elif ! _health_diag=$("$_health_handler" "$_provider_for_health" 2>&1); then
+        elif ! _health_diag=$("$_health_handler" "$_provider_for_health" "$model" 2>&1); then
             _health_failed=true
         fi
         if [[ "$_health_failed" == true ]]; then

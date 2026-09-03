@@ -96,12 +96,16 @@ function tomlValueEnd(source, start) {
     }
     if (quote === 'basic' && char === '"') quote = undefined;
     else if (quote === 'literal' && char === "'") quote = undefined;
-    else if (quote === 'multiline-basic' && source.startsWith('"""', index)) {
-      quote = undefined;
-      index += 2;
-    } else if (quote === 'multiline-literal' && source.startsWith("'''", index)) {
-      quote = undefined;
-      index += 2;
+    else if (quote === 'multiline-basic' && char === '"') {
+      let runLength = 1;
+      while (source[index + runLength] === '"') runLength += 1;
+      if (runLength >= 3) quote = undefined;
+      index += runLength - 1;
+    } else if (quote === 'multiline-literal' && char === "'") {
+      let runLength = 1;
+      while (source[index + runLength] === "'") runLength += 1;
+      if (runLength >= 3) quote = undefined;
+      index += runLength - 1;
     } else if (quote === undefined) {
       if (source.startsWith('"""', index)) {
         quote = 'multiline-basic';
@@ -259,12 +263,16 @@ function inspectConfig(binary, configPath) {
   if (!plainObject(listed) || !plainObject(listed.providers) || !plainObject(listed.models)) {
     return undefined;
   }
+  const dispatchedModel = process.env.OCTOPUS_KIMI_MODEL;
   const config = {
-    defaultModel: nonBlank(process.env.KIMI_MODEL_NAME)
-      ? '__kimi_env_model__'
-      : nonBlank(routing.defaultModel)
-        ? routing.defaultModel
-        : undefined,
+    defaultModel:
+      nonBlank(dispatchedModel) && dispatchedModel !== 'default'
+        ? dispatchedModel
+        : nonBlank(process.env.KIMI_MODEL_NAME)
+          ? '__kimi_env_model__'
+          : nonBlank(routing.defaultModel)
+            ? routing.defaultModel
+            : undefined,
     defaultProvider: nonBlank(routing.defaultProvider) ? routing.defaultProvider : undefined,
     providers: listed.providers,
     models: listed.models,

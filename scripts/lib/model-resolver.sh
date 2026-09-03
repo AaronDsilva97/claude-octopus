@@ -197,6 +197,22 @@ validate_agy_model_name() {
     return 1
 }
 
+# Kimi Code aliases are user-defined TOML keys and may contain whitespace.
+# They still cross an Octopus command boundary, so retain the generic model
+# validator's metacharacter, line-break, backslash, and absolute-path guards.
+validate_kimi_model_name() {
+    local model="$1"
+
+    [[ -n "$model" ]] || return 1
+    [[ "$model" != *$'\n'* && "$model" != *$'\r'* ]] || return 1
+    case "$model" in
+        *\\*|*\*|*";"*|*"|"*|*"&"*|*'$'*|*'`'*|*"'"*|*'"'*|*"("*|*")"*|*"<"*|*">"*|*"!"*|*"?"*|*"["*|*"]"*|*"{"*|*"}"*)
+            return 1
+            ;;
+    esac
+    [[ "$model" != /* ]]
+}
+
 validate_model_name_for_provider() {
     local provider="$1"
     local model="$2"
@@ -204,6 +220,9 @@ validate_model_name_for_provider() {
     case "$provider" in
         agy|agy-research|antigravity)
             validate_agy_model_name "$model"
+            ;;
+        kimi)
+            validate_kimi_model_name "$model"
             ;;
         *)
             validate_model_name "$model"

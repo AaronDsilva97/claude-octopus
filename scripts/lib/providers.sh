@@ -894,6 +894,7 @@ _commandcode_auth_mode() {
 
 check_provider_health() {
     local provider="$1"
+    local resolved_model="${2:-}"
     local errors=0
 
     if declare -f octo_provider_allowed >/dev/null 2>&1 && ! octo_provider_allowed "$provider"; then
@@ -1067,6 +1068,8 @@ check_provider_health() {
             fi
             ;;
         kimi)
+            local OCTOPUS_KIMI_MODEL="${resolved_model:-${OCTOPUS_KIMI_MODEL:-default}}"
+            export OCTOPUS_KIMI_MODEL
             if ! command -v kimi &>/dev/null; then
                 echo "kimi: CLI not found in PATH" >&2
                 return 1

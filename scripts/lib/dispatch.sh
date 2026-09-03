@@ -37,6 +37,13 @@ _octopus_is_safe_env_var_name() {
     [[ "${1:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
 }
 
+_octopus_hex_encode_kimi_model() {
+    local model="$1" encoded
+    encoded="$(LC_ALL=C printf '%s' "$model" | od -An -v -tx1 | tr -d '[:space:]')" || return 1
+    [[ "$encoded" =~ ^([0-9A-Fa-f][0-9A-Fa-f])+$ ]] || return 1
+    printf '%s\n' "$encoded"
+}
+
 _octopus_claude_reasoning_fragment() {
     local level="$1" policy="${2:-best_effort}"
     if [[ "${SUPPORTS_EFFORT_COMMAND:-false}" != "true" ||
@@ -505,11 +512,15 @@ get_agent_command() {
             ;;
         kimi|kimi-research)  # Moonshot Kimi Code CLI — headless single-turn via helpers/kimi-exec.sh
             # Model wiring mirrors grok: get_agent_model reads providers.json +
-            # OCTOPUS_KIMI_MODEL, and the env prefix carries the pick to the shim.
-            # Kimi model ids are single tokens, so the prefix survives word-splitting.
+            # OCTOPUS_KIMI_MODEL. Kimi aliases may contain whitespace, while all
+            # command consumers split this legacy command string into argv. Hex
+            # keeps the transport one inert token; kimi-exec.sh decodes it without
+            # eval before adding the exact alias to its command array.
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then return 1; fi
             if [[ -n "$model" && "$model" != "default" ]]; then
-                echo "env OCTOPUS_KIMI_MODEL=${model} ${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
+                local model_hex
+                model_hex="$(_octopus_hex_encode_kimi_model "$model")" || return 1
+                echo "env OCTOPUS_KIMI_MODEL_HEX=${model_hex} ${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
             else
                 echo "${PLUGIN_DIR}/scripts/helpers/kimi-exec.sh"
             fi

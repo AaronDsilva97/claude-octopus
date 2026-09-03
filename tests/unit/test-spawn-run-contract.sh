@@ -327,6 +327,7 @@ update_agent_status() { :; }
 write_agent_status() { :; }
 check_provider_health() {
     printf '%s\n' "$1" >> "$TEST_TMP_DIR/background-health-calls"
+    [[ "$1" != kimi ]] || printf '%s\n' "${2:-missing}" > "$TEST_TMP_DIR/background-kimi-health-model"
     [[ "${FAKE_SCENARIO:-}" != health-fail ]]
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
@@ -584,6 +585,7 @@ kimi_pid="$(spawn_agent kimi-research "External Kimi fixture" external-kimi revi
 wait "$kimi_pid" 2>/dev/null || true
 kimi_result="$RESULTS_DIR/kimi-research-external-kimi.md"
 if [[ "$(grep -cx 'kimi' "$TEST_TMP_DIR/background-health-calls")" -eq 1 ]] && \
+   [[ "$(cat "$TEST_TMP_DIR/background-kimi-health-model")" == fixture-model ]] && \
    grep -q '<!-- trust=untrusted provider=kimi-research -->' "$kimi_result" && \
    grep -q '<!-- BEGIN-UNTRUSTED:provider=kimi-research:' "$kimi_result" && \
    grep -q '<!-- END-UNTRUSTED:provider=kimi-research:' "$kimi_result"; then

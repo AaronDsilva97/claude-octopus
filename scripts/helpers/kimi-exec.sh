@@ -9,6 +9,19 @@
 # -p is already a single-turn non-interactive run, so there is no prompt to
 # auto-approve.
 set -euo pipefail
+
+_kimi_decode_model_hex() {
+    local encoded="$1" decoded="" byte
+    local index=0
+    [[ "$encoded" =~ ^([0-9A-Fa-f][0-9A-Fa-f])+$ ]] || return 1
+    while [[ "$index" -lt "${#encoded}" ]]; do
+        printf -v byte '%b' "\\x${encoded:index:2}" || return 1
+        decoded="${decoded}${byte}"
+        index=$((index + 2))
+    done
+    printf '%s' "$decoded"
+}
+
 prompt=""
 [[ ! -t 0 ]] && prompt="$(cat)"
 if [[ -z "${prompt//[[:space:]]/}" ]]; then
@@ -17,7 +30,18 @@ if [[ -z "${prompt//[[:space:]]/}" ]]; then
     echo "kimi-exec: no prompt provided on stdin" >&2
     exit 64
 fi
-model="${OCTOPUS_KIMI_MODEL:-default}"
+if [[ -n "${OCTOPUS_KIMI_MODEL_HEX:-}" ]]; then
+    model="$(_kimi_decode_model_hex "$OCTOPUS_KIMI_MODEL_HEX")" || {
+        echo "kimi-exec: invalid encoded model" >&2
+        exit 64
+    }
+    if [[ -n "${OCTOPUS_KIMI_MODEL:-}" && "$OCTOPUS_KIMI_MODEL" != "$model" ]]; then
+        echo "kimi-exec: encoded model does not match isolated model" >&2
+        exit 64
+    fi
+else
+    model="${OCTOPUS_KIMI_MODEL:-default}"
+fi
 cmd=(kimi -p "$prompt" --output-format text)
 if [[ -n "$model" && "$model" != "default" ]]; then
     cmd+=(--model "$model")

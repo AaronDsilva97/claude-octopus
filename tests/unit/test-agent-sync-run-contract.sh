@@ -107,6 +107,9 @@ write_agent_status() {
     printf '%s|%s|%s|%s|%s\n' "$1" "$2" "$5" "$7" "$8" >> "$FIXTURE_ROOT/legacy-statuses"
 }
 check_provider_health() {
+    if [[ "$1" == kimi ]]; then
+        printf '%s\n' "${2:-missing}" > "$FIXTURE_ROOT/health-model"
+    fi
     if [[ "$FIXTURE_SCENARIO" == auth-fail || "$FIXTURE_SCENARIO" == health-fail-qwen ]]; then
         printf '%s\n' 'fixture authentication rejected'
         return 1
@@ -194,10 +197,11 @@ assert_scenario agy-pin 0 1 \
 run_fixture kimi-success kimi-research
 test_case "synchronous Kimi output crosses the real untrusted-output boundary"
 if grep -q '<external-cli-output provider="kimi-research".*trust="untrusted">' \
-       "$TEST_TMP_DIR/kimi-success/stdout"; then
+       "$TEST_TMP_DIR/kimi-success/stdout" && \
+   [[ "$(cat "$TEST_TMP_DIR/kimi-success/health-model")" == fixture-model ]]; then
     test_pass
 else
-    test_fail "real run_agent_sync returned unwrapped Kimi output"
+    test_fail "run_agent_sync did not health-check the resolved Kimi model or returned unwrapped output"
 fi
 assert_scenario auth-fail 1 0 planned,starting,failed failed none \
     'Provider unavailable: fixture authentication rejected'
