@@ -815,6 +815,7 @@ get_tiered_agent() {
             ;;
     esac
 
-    # Apply API key fallback (v4.5)
-    get_fallback_agent "$agent" "$task_type" 2>/dev/null || echo "$agent"
+    # Apply API key fallback (v4.5). Resolver failure is terminal: returning
+    # the known-unavailable preferred identity would defer the error to dispatch.
+    get_fallback_agent "$agent" "$task_type"
 }

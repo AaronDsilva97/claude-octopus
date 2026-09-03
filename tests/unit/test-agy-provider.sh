@@ -1143,6 +1143,59 @@ UNBOUNDED_BASH_ENV
     fi
 }
 
+test_agy_doctor_skips_version_probe() {
+    test_case "AGY live doctor does not run the unrelated version probe"
+
+    local tmp_bin="$TEST_TMP_DIR/agy-doctor-version-bin"
+    local tmp_home="$TEST_TMP_DIR/agy-doctor-version-home"
+    local marker="$TEST_TMP_DIR/agy-doctor-version-called"
+    local output
+    mkdir -p "$tmp_bin" "$tmp_home"
+    rm -f "$marker"
+    cat > "$tmp_bin/agy" <<'MOCK_AGY'
+#!/usr/bin/env bash
+case "${1:-}" in
+    --version)
+        printf '%s\n' called > "${AGY_VERSION_MARKER:?}"
+        sleep 5
+        exit 0
+        ;;
+    models)
+        printf '%s\t%s\n' 'gemini-test' 'Gemini Test'
+        exit 0
+        ;;
+esac
+while (( $# > 0 )); do
+    if [[ "$1" == "--print" && $# -ge 2 ]]; then
+        printf '%s\n' 'OCTOPUS_AGY_HEALTH_OK'
+        printf '%s\n' 'LOCAL_PROVIDER_DISPATCH_WORKS'
+        exit 0
+    fi
+    shift
+done
+exit 2
+MOCK_AGY
+    chmod +x "$tmp_bin/agy"
+
+    output="$(
+        HOME="$tmp_home" \
+        OCTO_ROOT="$PROJECT_ROOT" \
+        AGY_VERSION_MARKER="$marker" \
+        OCTOPUS_AGY_MODEL='gemini-test' \
+        OCTOPUS_AGY_HEALTH_TIMEOUT=1 \
+        PATH="$tmp_bin:/usr/bin:/bin" \
+            bash "$PROJECT_ROOT/scripts/doctor.sh" providers --live --json
+    )"
+
+    if [[ ! -e "$marker" ]] && \
+       jq -e '.results[] | select(.name == "agy-live-dispatch" and .status == "pass")' \
+           <<< "$output" >/dev/null; then
+        test_pass
+    else
+        test_fail "Doctor invoked the unrelated AGY version probe or live dispatch failed: $output"
+    fi
+}
+
 test_agy_auth_guidance_uses_real_cli_flow() {
     test_case "user-facing AGY auth guidance never advertises a nonexistent login subcommand"
 
@@ -1637,6 +1690,7 @@ test_agy_doctor_provider_check
 test_agy_doctor_live_probe
 test_agy_doctor_auth_remediation
 test_agy_doctor_catalog_timeout_is_bounded
+test_agy_doctor_skips_version_probe
 test_agy_auth_guidance_uses_real_cli_flow
 test_agy_setup_visibility
 test_agy_status_visibility

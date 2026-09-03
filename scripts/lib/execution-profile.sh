@@ -167,12 +167,12 @@ _octopus_profile_route_json() {
     if ($role != "" and (.routing.roles[$role] != null)) then .routing.roles[$role]
     elif ($phase != "" and (.routing.phases[$phase] != null)) then .routing.phases[$phase]
     else null end
-  ' "$cfg" 2>/dev/null || printf "%s\n" "null"
+  ' "$cfg" 2>/dev/null
 }
 
 _octopus_profile_field() {
   local phase="${1:-}" role="${2:-}" field="$3" route
-  route="$(_octopus_profile_route_json "$phase" "$role")"
+  route="$(_octopus_profile_route_json "$phase" "$role")" || return $?
   [[ "$route" != "null" ]] || return 1
   if [[ "$route" == \{* ]]; then
     jq -r --arg field "$field" '.[$field] // empty' <<<"$route" 2>/dev/null

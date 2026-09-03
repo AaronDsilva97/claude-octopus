@@ -127,6 +127,46 @@ Role defaults:
 
 ## Fallbacks
 
+Dispatch fallback policy is configuration-driven. The built-in `default` chain
+tries these routing roles after the workflow's preferred agent fails:
+
+1. `code-reviewer`
+2. `implementer-heavy`
+3. `architect`
+
+Each role resolves through the existing `routing.roles` table, so the fallback
+chain does not hard-code a provider or model. A user can replace the chain in
+`~/.claude-octopus/config/providers.json`:
+
+```json
+{
+  "routing": {
+    "fallbackChains": {
+      "default": [
+        { "role": "code-reviewer" },
+        { "role": "implementer-heavy" },
+        { "role": "architect" }
+      ]
+    }
+  }
+}
+```
+
+Candidates may also use explicit `{ "provider": "...", "model": "..." }`
+objects when pinning is required, but role-based candidates are preferred.
+`run_agent_sync_fallback_chain` applies the same ordered chain to process
+failures, empty output, and caller-defined semantic/protocol validation
+failures. The task's semantic role and phase remain unchanged while the routing
+candidate changes. Exhausting the chain fails closed.
+
+Invalid JSON, unknown roles, malformed candidates, and incorrect chain types
+stop fallback dispatch. Provider aliases are canonicalized, equivalent attempts
+are deduplicated, and session model overrides retain precedence over role
+defaults.
+
+The existing model-version fallbacks below are separate: they resolve a model
+within a provider family rather than selecting a different dispatch candidate.
+
 - Opus: Opus 5 → Opus 4.8 → Opus 4.7 → Opus 4.6.
 - Sonnet: Sonnet 5 → Sonnet 4.6.
 - Fable refusal/security fallback: Opus 5, overridable with

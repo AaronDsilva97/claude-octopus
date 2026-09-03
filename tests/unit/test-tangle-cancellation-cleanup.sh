@@ -124,7 +124,7 @@ fi
 
 workspace_definition="$(declare -f _tangle_develop_in_workspace)"
 helper_guard_line=$(awk '/declare -F review_kill_process_tree_frozen/ { print NR; exit }' <<< "$workspace_definition")
-dispatch_line=$(awk '/run_agent_sync/ { print NR; exit }' <<< "$workspace_definition")
+dispatch_line=$(awk '/run_agent_sync|tangle_run_decomposition_fallbacks/ { print NR; exit }' <<< "$workspace_definition")
 trap_line=$(awk "/trap 'octopus_tangle_handle_signal/ { print NR; exit }" <<< "$workspace_definition")
 if [[ "$behavioral_guarded" == "true" ]] \
    && [[ "$helper_guard_line" =~ ^[0-9]+$ ]] \

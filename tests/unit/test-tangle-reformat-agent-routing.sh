@@ -45,7 +45,7 @@ if (
     export OCTOPUS_TANGLE_DECOMPOSE_FALLBACK_AGENT="codex"
     result=$(tangle_reformat_decomposition "task" "bad decomposition" "overlap" "")
     [[ "$result" == *"Reformatted task"* ]] &&
-    [[ "$(sed -n '1p' "$CALL_LOG")" == "gemini|0|researcher|tangle" ]] &&
+    [[ "$(sed -n '1p' "$CALL_LOG")" == "agy|0|researcher|tangle" ]] &&
     [[ "$(wc -l < "$CALL_LOG")" -eq 1 ]]
 ); then
     test_pass
@@ -53,19 +53,19 @@ else
     test_fail "reformat did not use OCTOPUS_TANGLE_DECOMPOSE_AGENT first"
 fi
 
-test_case "reformat falls back to OCTOPUS_TANGLE_DECOMPOSE_FALLBACK_AGENT"
+test_case "invalid explicit reformat provider fails closed before dispatch"
 if (
     rm -f "$CALL_LOG"
     export OCTOPUS_TANGLE_DECOMPOSE_AGENT="unavailable-agent"
     export OCTOPUS_TANGLE_DECOMPOSE_FALLBACK_AGENT="gemini"
-    result=$(tangle_reformat_decomposition "task" "bad decomposition" "overlap" "")
-    [[ "$result" == *"Reformatted task"* ]] &&
-    [[ "$(sed -n '1p' "$CALL_LOG")" == "unavailable-agent|0|researcher|tangle" ]] &&
-    [[ "$(sed -n '2p' "$CALL_LOG")" == "gemini|0|researcher|tangle" ]]
+    if tangle_reformat_decomposition "task" "bad decomposition" "overlap" "" >/dev/null 2>&1; then
+        exit 1
+    fi
+    [[ ! -s "$CALL_LOG" ]]
 ); then
     test_pass
 else
-    test_fail "reformat did not use OCTOPUS_TANGLE_DECOMPOSE_FALLBACK_AGENT"
+    test_fail "invalid explicit provider reached dispatch or fell back"
 fi
 
 

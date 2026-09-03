@@ -3,6 +3,7 @@ _profile_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -f octopus_resolve_reasoning_level >/dev/null 2>&1; then
     source "${_profile_lib_dir}/execution-profile.sh" 2>/dev/null || true
 fi
+source "${_profile_lib_dir}/fallback-chain.sh" 2>/dev/null || true
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION v3.0: Unified Model Resolver (v8.50.0)
 # Consolidated logic for provider, phase, and role-based model selection.
@@ -327,7 +328,7 @@ resolve_octopus_model() {
     local agent_type="$2"
     local phase="${3:-}"
     local role="${4:-}"
-    local config_file="${HOME}/.claude-octopus/config/providers.json"
+    local config_file="${OCTOPUS_PROVIDERS_CONFIG:-${HOME}/.claude-octopus/config/providers.json}"
     local resolved_model=""
     local cost_mode routing_policy
     cost_mode="$(_octo_effective_cost_mode "$config_file")"
@@ -887,83 +888,45 @@ is_agent_available_v2() {
     esac
 }
 
+# Print one verified available agent and return 0. If neither the preferred
+# agent nor any fallback is available, print nothing and return non-zero.
 get_fallback_agent() {
     local preferred="$1"
     local task_type="$2"
+    local candidate=""
 
-    if is_agent_available "$preferred"; then
+    if octo_fallback_agent_available "$preferred"; then
         echo "$preferred"
         return 0
     fi
 
-    # Fallback logic (v8.9.0: extended with spark, reasoning, large-context fallbacks)
+    # Retired Gemini IDs remain compatibility aliases for Antigravity. Treat
+    # the alias translation separately from fallback policy so the policy can
+    # be fully configuration-driven.
     case "$preferred" in
         gemini|gemini-fast|gemini-image)
-            # Retired Gemini IDs are compatibility aliases for Antigravity.
-            echo "agy"
-            ;;
-        codex|codex-standard|codex-mini)
-            # Codex unavailable, try Antigravity
-            if is_agent_available "agy"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: $preferred -> agy (no OpenAI)" || true
+            if octo_fallback_agent_available "agy"; then
                 echo "agy"
-            else
-                echo "$preferred"
+                return 0
             fi
-            ;;
-        codex-spark)
-            # Spark unavailable or unsupported → fall back to standard codex → Antigravity
-            if is_agent_available "codex"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: codex-spark -> codex (spark unavailable)" || true
-                echo "codex"
-            elif is_agent_available "agy"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: codex-spark -> agy (no OpenAI)" || true
-                echo "agy"
-            else
-                echo "$preferred"
-            fi
-            ;;
-        codex-reasoning)
-            # Reasoning model unavailable → fall back to codex (deep reasoning) → Antigravity
-            if is_agent_available "codex"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: codex-reasoning -> codex (reasoning unavailable)" || true
-                echo "codex"
-            elif is_agent_available "agy"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: codex-reasoning -> agy (no OpenAI)" || true
-                echo "agy"
-            else
-                echo "$preferred"
-            fi
-            ;;
-        codex-large-context)
-            # Large context unavailable → fall back to codex (400K ctx) → Antigravity
-            if is_agent_available "codex"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: codex-large-context -> codex (large-ctx unavailable)" || true
-                echo "codex"
-            elif is_agent_available "agy"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: codex-large-context -> agy (no OpenAI)" || true
-                echo "agy"
-            else
-                echo "$preferred"
-            fi
-            ;;
-        openrouter-glm5|openrouter-kimi|openrouter-deepseek)
-            # v8.11.0: Model-specific OpenRouter → generic openrouter → codex → Antigravity
-            if is_agent_available "openrouter"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: $preferred -> openrouter (model-specific unavailable)" || true
-                echo "openrouter"
-            elif is_agent_available "codex"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: $preferred -> codex (no OpenRouter)" || true
-                echo "codex"
-            elif is_agent_available "agy"; then
-                [[ "$VERBOSE" == "true" ]] && log DEBUG "Fallback: $preferred -> agy (no OpenRouter/OpenAI)" || true
-                echo "agy"
-            else
-                echo "$preferred"
-            fi
-            ;;
-        *)
-            echo "$preferred"
             ;;
     esac
+
+    # Unified fallback policy. routing.fallbackChains.default may override the
+    # built-in role chain; role candidates resolve through routing.roles.
+    if declare -f octo_fallback_first_available >/dev/null 2>&1; then
+        candidate="$(octo_fallback_first_available default "$preferred" "" 2>/dev/null || true)"
+    fi
+    if [[ -n "$candidate" ]]; then
+        [[ "${VERBOSE:-false}" == "true" ]] && log DEBUG "Fallback: $preferred -> $candidate (chain: default, task: $task_type)" || true
+        echo "$candidate"
+        return 0
+    fi
+
+    if declare -f log >/dev/null 2>&1; then
+        log ERROR "No available agent for '$preferred' and fallback chain 'default'"
+    else
+        printf "No available agent for '%s' and fallback chain 'default'\n" "$preferred" >&2
+    fi
+    return 1
 }

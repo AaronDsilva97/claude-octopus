@@ -25,6 +25,10 @@ attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >> "$FIXTURE_CALLS"
 case "$FIXTURE_SCENARIO" in
     success|exact-seat) printf '%s\n' 'Substantive provider result.' ;;
+    agy-pin)
+        printf '%s\n' "${OCTOPUS_AGY_MODEL:-missing}" > "$FIXTURE_ROOT/executed-agy-model"
+        printf '%s\n' 'Substantive AGY result.'
+        ;;
     empty) : ;;
     whitespace) printf ' \n\t\n' ;;
     placeholder) printf '%s\n' 'Provider available' ;;
@@ -75,6 +79,7 @@ get_agent_model() {
         printf '%s\n' "${1#*:}"
         return 0
     fi
+    [[ "${FIXTURE_SCENARIO:-}" == agy-pin ]] && { printf '%s\n' 'Gemini 3.1 Pro (High)'; return 0; }
     printf '%s\n' fixture-model
 }
 estimate_agent_call_cost() { printf '%s\n' 0.000000; }
@@ -85,6 +90,10 @@ get_agent_command() {
         command_model="${1#*:}"
     fi
     printf '%s\n' "${4:-missing}" > "$FIXTURE_ROOT/prompt-bytes"
+    if [[ "${FIXTURE_SCENARIO:-}" == agy-pin ]]; then
+        printf '%s\n' "$fixture_provider"
+        return 0
+    fi
     printf '%s\n' "$fixture_provider --model $command_model"
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
@@ -177,6 +186,9 @@ assert_scenario success 0 1 \
 assert_scenario exact-seat 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \
     contributed eligible '' 'command-code:thinkingmachines/inkling-small'
+assert_scenario agy-pin 0 1 \
+    planned,starting,authenticated,running,output_received,validated,contributed \
+    contributed eligible '' 'agy:Gemini 3.1 Pro (High)'
 assert_scenario auth-fail 1 0 planned,starting,failed failed none \
     'Provider unavailable: fixture authentication rejected'
 assert_scenario health-fail-qwen 1 0 planned,starting,failed failed none \
@@ -329,6 +341,16 @@ if (
     test_pass
 else
     test_fail "synchronous exact Fable execution retried or lost its lifecycle identity"
+fi
+
+test_case "exact AGY model pins reach execution and match lifecycle truth"
+agy_pin_snapshot="$TEST_TMP_DIR/agy-pin/workspace/runs/sync-agy-pin/seats.json"
+if [[ "$(cat "$TEST_TMP_DIR/agy-pin/executed-agy-model" 2>/dev/null || true)" == 'Gemini 3.1 Pro (High)' ]] && \
+   [[ "$(jq -r '.seats[0].resolved.model' "$agy_pin_snapshot")" == 'Gemini 3.1 Pro (High)' ]] && \
+   [[ "$(jq -r '.seats[0].resolved.provider' "$agy_pin_snapshot")" == 'agy' ]]; then
+    test_pass
+else
+    test_fail "AGY execution model and lifecycle model diverged: executed=[$(cat "$TEST_TMP_DIR/agy-pin/executed-agy-model" 2>/dev/null || true)] lifecycle-model=[$(jq -r '.seats[0].resolved.model' "$agy_pin_snapshot" 2>/dev/null || true)] lifecycle-provider=[$(jq -r '.seats[0].resolved.provider' "$agy_pin_snapshot" 2>/dev/null || true)]"
 fi
 
 test_summary

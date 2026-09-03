@@ -7,6 +7,11 @@ if ! type probe_result_file_status >/dev/null 2>&1; then
     _octo_probe_results_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/probe-results.sh"
     [[ -f "$_octo_probe_results_lib" ]] && source "$_octo_probe_results_lib"
 fi
+if ! type run_agent_sync_fallback_chain >/dev/null 2>&1; then
+    _octo_fallback_chain_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fallback-chain.sh"
+    [[ -f "$_octo_fallback_chain_lib" ]] && source "$_octo_fallback_chain_lib"
+    unset _octo_fallback_chain_lib
+fi
 if ! type review_kill_process_tree_frozen >/dev/null 2>&1; then
     _octo_review_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/review.sh"
     if [[ -f "$_octo_review_lib" ]]; then
@@ -1657,6 +1662,33 @@ tangle_parseable_coding_subtask_count() {
     echo "$count"
 }
 
+tangle_decomposition_output_usable() {
+    local subtasks="${1:-}" parseable_count coding_count line subtask scopes
+    parseable_count="$(tangle_parseable_subtask_count "$subtasks")"
+    coding_count="$(tangle_parseable_coding_subtask_count "$subtasks")"
+    [[ "$parseable_count" -gt 0 && "$coding_count" -gt 0 ]] || return 1
+
+    # Overlap is repairable by tangle_consolidate_overlapping_subtasks after
+    # routing completes. Missing Files clauses are not: treat those as semantic
+    # provider failures so the shared chain can try another candidate.
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        tangle_line_is_numbered_subtask "$line" || continue
+        [[ "$line" =~ \[CODING\] ]] || continue
+        subtask="$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(\*\*)?[0-9]+[\.\)][[:space:]]*//; s/^[[:space:]]+//')"
+        scopes="$(tangle_extract_write_scopes "$subtask")"
+        [[ -n "$scopes" ]] || return 1
+    done <<<"$subtasks"
+    return 0
+}
+
+tangle_run_decomposition_fallbacks() {
+    local primary_agent="$1" preferred_fallback="$2" prompt="$3" timeout_secs="${4:-0}"
+    run_agent_sync_fallback_chain \
+        "$primary_agent" "$prompt" "$timeout_secs" researcher tangle \
+        tangle_decomposition_output_usable default "$preferred_fallback"
+}
+
 tangle_reformat_decomposition() {
     local original_task="$1"
     local previous_decomposition="$2"
@@ -1695,8 +1727,9 @@ ${previous_decomposition}
         tangle_decompose_fallback_agent=$(octopus_execution_profile_provider "tangle" "decompose_fallback" "implementer" "codex")
     fi
 
-    OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-reformat-validation" run_agent_sync "$tangle_decompose_agent" "$reformat_prompt" 0 "researcher" "tangle" || \
-    OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-reformat-validation" run_agent_sync "$tangle_decompose_fallback_agent" "$reformat_prompt" 0 "researcher" "tangle"
+    OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-reformat-validation" \
+        tangle_run_decomposition_fallbacks \
+        "$tangle_decompose_agent" "$tangle_decompose_fallback_agent" "$reformat_prompt" 0
 }
 
 tangle_effective_write_scopes() {
@@ -3364,8 +3397,9 @@ Every [CODING] line must include a same-line Files: clause."
     fi
 
     local subtasks
-    subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" run_agent_sync "$tangle_decompose_agent" "$decompose_prompt" 0 "researcher" "tangle") || \
-    subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" run_agent_sync "$tangle_decompose_fallback_agent" "$decompose_prompt" 0 "researcher" "tangle") || {
+    subtasks=$(OCTOPUS_UNBOUNDED_EXECUTION_SUPERVISED="tangle-dispatch-watcher" \
+        tangle_run_decomposition_fallbacks \
+        "$tangle_decompose_agent" "$tangle_decompose_fallback_agent" "$decompose_prompt" 0) || {
         log ERROR "Decomposition failed with all providers; refusing monolithic direct fallback"
         return 1
     }
