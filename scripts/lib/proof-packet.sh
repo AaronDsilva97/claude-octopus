@@ -4,6 +4,10 @@
 # Proof packets are local-only run artifacts. They make escalated Octopus
 # workflows auditable without turning the plugin into a full project manager.
 
+_proof_packet_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_proof_packet_lib_dir}/agent-spec.sh" 2>/dev/null || true
+unset _proof_packet_lib_dir
+
 octo_proof_enabled() {
     case "${OCTOPUS_PROOF_PACKET:-1}" in
         0|false|FALSE|off|OFF|no|NO) return 1 ;;
@@ -147,14 +151,21 @@ octo_proof_capture_provider_status() {
     [[ -n "$run_dir" && -d "$run_dir" && -f "$status_file" ]] || return 0
     octo_proof_enabled || return 0
 
-    while IFS='|' read -r provider provider_status detail; do
+    local record provider model provider_status detail
+    while IFS= read -r record; do
+        octo_parse_provider_status_record "$record" || continue
+        provider="$OCTO_PROVIDER_STATUS_PROVIDER"
+        model="$OCTO_PROVIDER_STATUS_MODEL"
+        provider_status="$OCTO_PROVIDER_STATUS_VALUE"
+        detail="$OCTO_PROVIDER_STATUS_DETAIL"
         [[ -z "${provider:-}" ]] && continue
-        detail="${detail:-}"
         octo_proof_event "$run_dir" "provider_status" "$(jq -n \
             --arg provider "$provider" \
+            --arg model "$model" \
             --arg status "$provider_status" \
             --arg detail "$detail" \
-            '{provider:$provider, status:$status, detail:$detail}')"
+            '{provider:$provider, status:$status, detail:$detail}
+             + if ($model | length) > 0 then {model:$model} else {} end')"
 
         case "$provider_status" in
             fallback|auth-failed)
@@ -165,10 +176,12 @@ octo_proof_capture_provider_status() {
                 fi
                 octo_proof_event "$run_dir" "provider_substitution" "$(jq -n \
                     --arg provider "$provider" \
+                    --arg model "$model" \
                     --arg status "$provider_status" \
                     --arg detail "$detail" \
                     --arg replacement "$replacement" \
-                    '{provider:$provider, status:$status, detail:$detail, replacement:$replacement}')"
+                    '{provider:$provider, status:$status, detail:$detail, replacement:$replacement}
+                     + if ($model | length) > 0 then {model:$model} else {} end')"
                 ;;
         esac
     done < "$status_file"

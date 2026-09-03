@@ -18,4 +18,10 @@ if [[ -z "${prompt//[[:space:]]/}" ]]; then
     exit 64
 fi
 
-exec vibe "$@" -p "$prompt"
+model_args=()
+case "${OCTOPUS_VIBE_MODEL:-default}" in
+    ''|default) ;;
+    *) model_args=(--model "$OCTOPUS_VIBE_MODEL") ;;
+esac
+
+exec vibe "$@" "${model_args[@]+"${model_args[@]}"}" -p "$prompt"

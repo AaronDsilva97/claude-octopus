@@ -277,12 +277,15 @@ run_agent_sync() {
     fi
     local _sync_seat_id
     _sync_seat_id="sync-${phase:-unknown}-$(octo_agent_spec_slug "$agent_type")-${_progress_unique}"
+    local _contract_provider _contract_requested_model
+    _contract_provider="$(octo_agent_spec_contract_provider "$agent_type")" || return 74
+    _contract_requested_model="$(octo_agent_spec_contract_model "$agent_type" "${OCTOPUS_REQUESTED_MODEL:-}")" || return 74
     if [[ "${OCTOPUS_PERSISTENCE_AVAILABLE:-true}" == "false" ]]; then
         log ERROR "Persistence unavailable; refusing untracked provider dispatch for $agent_type"
     fi
     run_contract_transition "$_sync_seat_id" planned \
-        "requested_provider=$agent_type" \
-        "requested_model=${OCTOPUS_REQUESTED_MODEL:-}" \
+        "requested_provider=$_contract_provider" \
+        "requested_model=$_contract_requested_model" \
         "requested_effort=${OCTOPUS_REQUESTED_EFFORT:-}" \
         "phase=${phase:-unknown}" "role=${role:-none}" \
         "attempt_id=${_sync_seat_id}-attempt-1" || return 74
@@ -389,7 +392,7 @@ ${provider_ctx}"
         _estimated_cost=$(estimate_agent_call_cost "$agent_type" "$model" "$enhanced_prompt")
     fi
     run_contract_transition "$_sync_seat_id" starting \
-        "resolved_provider=$agent_type" "resolved_model=$model" \
+        "resolved_provider=$_contract_provider" "resolved_model=$model" \
         "resolved_effort=${OCTOPUS_RESOLVED_EFFORT:-${OCTOPUS_REQUESTED_EFFORT:-}}" \
         "estimated_cost_usd=$_estimated_cost" || return 74
 

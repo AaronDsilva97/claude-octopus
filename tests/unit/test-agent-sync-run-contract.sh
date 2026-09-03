@@ -24,7 +24,7 @@ attempt=0
 attempt=$((attempt + 1))
 printf '%s\n' "$attempt" >> "$FIXTURE_CALLS"
 case "$FIXTURE_SCENARIO" in
-    success) printf '%s\n' 'Substantive provider result.' ;;
+    success|exact-seat) printf '%s\n' 'Substantive provider result.' ;;
     empty) : ;;
     whitespace) printf ' \n\t\n' ;;
     placeholder) printf '%s\n' 'Provider available' ;;
@@ -71,13 +71,21 @@ octo_dispatch_command_model() {
 }
 get_agent_model() {
     [[ "${FIXTURE_SCENARIO:-}" == model-fail ]] && return 1
+    if [[ "${1:-}" == *:* ]]; then
+        printf '%s\n' "${1#*:}"
+        return 0
+    fi
     printf '%s\n' fixture-model
 }
 estimate_agent_call_cost() { printf '%s\n' 0.000000; }
 record_agent_call() { :; }
 get_agent_command() {
+    local command_model="routed-model"
+    if [[ "${1:-}" == *:* ]]; then
+        command_model="${1#*:}"
+    fi
     printf '%s\n' "${4:-missing}" > "$FIXTURE_ROOT/prompt-bytes"
-    printf '%s\n' "$fixture_provider --model routed-model"
+    printf '%s\n' "$fixture_provider --model $command_model"
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
 run_with_timeout() { shift; "$@"; }
@@ -100,6 +108,11 @@ export CODEX_SUBAGENT_PREAMBLE=""
 
 run_fixture() {
     local scenario="$1" agent_type="${2:-codex}"
+    local role="reviewer" phase="probe"
+    if [[ "$scenario" == exact-seat ]]; then
+        role="implementation-verifier"
+        phase="review"
+    fi
     export FIXTURE_SCENARIO="$scenario"
     export FIXTURE_ROOT="$TEST_TMP_DIR/$scenario"
     export FIXTURE_CALLS="$FIXTURE_ROOT/provider-calls"
@@ -114,7 +127,7 @@ run_fixture() {
     mkdir -p "$RESULTS_DIR"
 
     set +e
-    run_agent_sync "$agent_type" 'Review the fixture.' 5 reviewer probe \
+    run_agent_sync "$agent_type" 'Review the fixture.' 5 "$role" "$phase" \
         > "$FIXTURE_ROOT/stdout" 2> "$FIXTURE_ROOT/stderr"
     fixture_rc=$?
     set -e
@@ -161,6 +174,9 @@ assert_scenario() {
 assert_scenario success 0 1 \
     planned,starting,authenticated,running,output_received,validated,contributed \
     contributed eligible ''
+assert_scenario exact-seat 0 1 \
+    planned,starting,authenticated,running,output_received,validated,contributed \
+    contributed eligible '' 'command-code:thinkingmachines/inkling-small'
 assert_scenario auth-fail 1 0 planned,starting,failed failed none \
     'Provider unavailable: fixture authentication rejected'
 assert_scenario health-fail-qwen 1 0 planned,starting,failed failed none \
@@ -240,6 +256,79 @@ if [[ "$(jq -r '.seats[0].resolved.model' "$success_snapshot")" == routed-model 
     test_pass
 else
     test_fail "manifest retained the pre-routing model identity"
+fi
+
+test_case "exact synchronous seat records canonical provider and literal model"
+exact_sync_model="thinkingmachines/inkling-small"
+exact_sync_snapshot="$TEST_TMP_DIR/exact-seat/workspace/runs/sync-exact-seat/seats.json"
+if jq -e --arg model "$exact_sync_model" '
+    .seats[0].requested.provider == "commandcode" and
+    .seats[0].requested.model == $model and
+    .seats[0].resolved.provider == "commandcode" and
+    .seats[0].resolved.model == $model and
+    .seats[0].execution.phase == "review" and
+    .seats[0].execution.role == "implementation-verifier"
+' "$exact_sync_snapshot" >/dev/null; then
+    test_pass
+else
+    test_fail "exact synchronous lifecycle did not split canonical provider from literal model"
+fi
+
+test_case "exact synchronous Fable SDK seat executes with no retry and retains lifecycle identity"
+if (
+    export FIXTURE_SCENARIO=exact-fable-runtime
+    export FIXTURE_ROOT="$TEST_TMP_DIR/exact-fable-runtime"
+    export FIXTURE_CALLS="$FIXTURE_ROOT/provider-calls"
+    export WORKSPACE_DIR="$FIXTURE_ROOT/workspace"
+    export RESULTS_DIR="$FIXTURE_ROOT/results"
+    export OCTOPUS_RUN_ID=sync-exact-fable-runtime
+    export OCTOPUS_PERSISTENCE_AVAILABLE=true
+    export OCTOPUS_AGENT_MAX_OUTPUT_BYTES=262144
+    export CLAUDE_SDK_API_KEY=fixture-key
+    export PLUGIN_DIR="$PROJECT_ROOT"
+    mkdir -p "$RESULTS_DIR" "$FIXTURE_ROOT/bin"
+    sdk_capture="$FIXTURE_ROOT/sdk-capture"
+    export SDK_CAPTURE="$sdk_capture"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'printf "%s\n" "no_retry=${OCTOPUS_FABLE5_NO_RETRY:-unset}" > "$SDK_CAPTURE"' \
+        'printf "%s\n" "$@" >> "$SDK_CAPTURE"' \
+        'cat >/dev/null' \
+        'printf "%s\n" "Substantive exact Fable SDK result."' > "$FIXTURE_ROOT/bin/claude-agent"
+    chmod 755 "$FIXTURE_ROOT/bin/claude-agent"
+    export PATH="$FIXTURE_ROOT/bin:$PATH"
+    source "$PROJECT_ROOT/scripts/lib/provider-registry.sh"
+    source "$PROJECT_ROOT/scripts/lib/validation.sh"
+    source "$PROJECT_ROOT/scripts/lib/model-cache-path.sh"
+    source "$PROJECT_ROOT/scripts/lib/model-resolver.sh"
+    source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
+    source "$PROJECT_ROOT/scripts/lib/dispatch.sh"
+    apply_persona() { printf '%s\n' "$2"; }
+    load_earned_skills() { :; }
+    build_provider_context() { :; }
+    enforce_context_budget() { printf '%s\n' "$1"; }
+    build_provider_env() { PROVIDER_ENV_ARRAY=(); }
+    sync_rc=0
+    run_agent_sync 'claude-sdk:claude-fable-5' 'Review the exact Fable fixture.' 5 \
+        implementation-logic-reviewer review > "$FIXTURE_ROOT/stdout" 2> "$FIXTURE_ROOT/stderr" || sync_rc=$?
+    if [[ "$sync_rc" -ne 0 ]]; then
+        printf 'exact Fable sync rc=%s stderr=%s\n' "$sync_rc" "$(tr '\n' ';' < "$FIXTURE_ROOT/stderr")" >&2
+        exit 1
+    fi
+    snapshot="$WORKSPACE_DIR/runs/$OCTOPUS_RUN_ID/seats.json"
+    grep -Fxq 'no_retry=1' "$sdk_capture" &&
+    grep -Fxq 'claude-fable-5' "$sdk_capture" &&
+    jq -e '
+        .seats[0].requested.provider == "claude-sdk" and
+        .seats[0].requested.model == "claude-fable-5" and
+        .seats[0].resolved.provider == "claude-sdk" and
+        .seats[0].resolved.model == "claude-fable-5" and
+        .seats[0].transition == "contributed"
+    ' "$snapshot" >/dev/null
+); then
+    test_pass
+else
+    test_fail "synchronous exact Fable execution retried or lost its lifecycle identity"
 fi
 
 test_summary

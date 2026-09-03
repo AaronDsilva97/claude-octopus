@@ -33,7 +33,10 @@ octo_spawn_contract_seat_id() {
 octo_spawn_contract_plan() {
     local task_id="${1:-}" agent_type="${2:-unknown}" model="${3:-}"
     local effort="${4:-}" phase="${5:-unknown}" role="${6:-none}" seat_id
+    local contract_provider contract_model
     local source_root source_sha="" source_dirty="not-a-git-worktree" worktree=""
+    contract_provider="$(octo_agent_spec_contract_provider "$agent_type")" || return 74
+    contract_model="$(octo_agent_spec_contract_model "$agent_type" "$model")" || return 74
     seat_id="$(octo_spawn_contract_seat_id "$task_id")"
     source_root="${OCTOPUS_PROJECT_DIR:-$PWD}"
     worktree="$(git -C "$source_root" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -51,7 +54,7 @@ octo_spawn_contract_plan() {
     fi
 
     run_contract_transition "$seat_id" planned \
-        "requested_provider=$agent_type" "requested_model=$model" \
+        "requested_provider=$contract_provider" "requested_model=$contract_model" \
         "requested_effort=$effort" "phase=$phase" "role=$role" \
         "isolation=background" "attempt_id=${seat_id}-attempt-1" \
         "checkpoint=$phase" "source_sha=$source_sha" \
@@ -60,9 +63,10 @@ octo_spawn_contract_plan() {
 
 octo_spawn_contract_resolve() {
     local seat_id="${1:-}" agent_type="${2:-unknown}" model="${3:-unresolved}"
-    local effort="${4:-}" estimated_cost="${5:-}"
+    local effort="${4:-}" estimated_cost="${5:-}" contract_provider
+    contract_provider="$(octo_agent_spec_contract_provider "$agent_type")" || return 74
     run_contract_transition "$seat_id" starting \
-        "resolved_provider=$agent_type" "resolved_model=$model" \
+        "resolved_provider=$contract_provider" "resolved_model=$model" \
         "resolved_effort=$effort" "estimated_cost_usd=$estimated_cost" || return 74
 }
 
@@ -731,6 +735,7 @@ ${heuristic_ctx}"
     case "$agent_type" in
         codex*) _provider_for_health="codex" ;;
         gemini*|agy*|antigravity) _provider_for_health="agy" ;;
+        claude-sdk*) _provider_for_health="claude-sdk" ;;
         claude*) _provider_for_health="claude" ;;
         openrouter*) _provider_for_health="openrouter" ;;
         perplexity*) _provider_for_health="perplexity" ;;

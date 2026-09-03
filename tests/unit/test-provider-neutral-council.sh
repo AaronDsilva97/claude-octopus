@@ -58,13 +58,13 @@ case "$provider_ids" in
     ;;
 esac
 
-test_case "review council emits four seats in deterministic policy order"
+test_case "review fleet inspection emits all eight effective seats in deterministic order"
 seat_count="$(printf '%s\n' "$provider_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
-expected_provider_ids="$(printf '%s\n' claude-sonnet codex commandcode claude-sonnet)"
-if [[ "$seat_count" != "4" ]]; then
-  test_fail "expected four review seats, got $seat_count: $output"
+expected_provider_ids="$(printf '%s\n' claude-sonnet codex commandcode claude-sonnet codex codex codex claude-sonnet)"
+if [[ "$seat_count" != "8" ]]; then
+  test_fail "expected eight review seats, got $seat_count: $output"
 elif [[ "$provider_ids" != "$expected_provider_ids" ]]; then
-  test_fail "expected provider order [claude-sonnet,codex,commandcode,claude-sonnet], got [$(printf '%s' "$provider_ids" | paste -sd, -)]"
+  test_fail "unexpected effective provider order: [$(printf '%s' "$provider_ids" | paste -sd, -)]"
 else
   test_pass
 fi
@@ -79,7 +79,7 @@ fi
 test_case "review seats remain role labels rather than provider identities"
 labels="$(echo "$output" | cut -d'|' -f2 | tr '\n' '|')"
 case "$labels" in
-  *"Logic Reviewer"*"Security Reviewer"*"Architecture Reviewer"*"CVE Reviewer"*) test_pass ;;
+  *"Logic Reviewer"*"Security Reviewer"*"Architecture Reviewer"*"CVE Reviewer"*"Diversity Reviewer"*"Verifier"*"Debater"*"Synthesizer"*) test_pass ;;
   *) test_fail "review role labels changed: $labels" ;;
 esac
 

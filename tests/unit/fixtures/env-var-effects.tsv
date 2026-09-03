@@ -51,6 +51,15 @@ OCTOPUS_RELEASE_SMOKE_MAX_BUDGET_USD	skip	release-smoke harness only; not reacha
 OCTOPUS_RELEASE_SMOKE_PORT	skip	release-smoke harness only; not reachable from unit scope
 OCTOPUS_REQUIRE_ALL	covered-by	test-agent-summary.sh
 OCTOPUS_RESEARCH_BREADTH	skip	changes how many provider seats a research run fans out to
+OCTOPUS_REVIEW_ARCHITECTURE_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_CVE_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_DEBATER_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_DIVERSITY_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_LOGIC_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_SECURITY_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_SINGLE_PROVIDER	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_SYNTHESIZER_AGENT	covered-by	test-contextual-review-seat-overrides.sh
+OCTOPUS_REVIEW_VERIFIER_AGENT	covered-by	test-contextual-review-seat-overrides.sh
 OCTOPUS_REVIEWER_FLIP	covered-by	test-fable5-escalation.sh
 OCTOPUS_ROUTING_POLICY	covered-by	test-routing-evals-v10.sh
 OCTOPUS_RUN_ID	covered-by	test-agent-summary.sh

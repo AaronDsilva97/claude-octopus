@@ -14,7 +14,12 @@ mkdir -p "$HOME/.claude-octopus/config"
 export PLUGIN_DIR="$PROJECT_ROOT"
 export PWD="$TEST_TMP_DIR/project"
 mkdir -p "$PWD"
-log() { :; }
+log() {
+  local level="$1"
+  shift
+  [[ "$level" == ERROR ]] && printf '[%s] %s\n' "$level" "$*" >&2
+  return 0
+}
 get_agent_model() { printf '%s\n' 'deepseek-ai/DeepSeek-V4-Pro'; }
 validate_model_name() { return 0; }
 octopus_resolve_reasoning_level() { printf '%s\n' 'none'; }
@@ -58,6 +63,46 @@ if get_agent_command openai-compatible-agent tangle implementer >/dev/null 2>&1;
   test_fail "missing credential was accepted"
 else
   test_pass
+fi
+
+test_case "credentialed public HTTP endpoint is rejected before helper launch"
+write_config <<'JSON'
+{"providers":{"openai-compatible-agent":{"default":"deepseek-ai/DeepSeek-V4-Pro","base_url":"http://api.example.com/v1","api_key_env":"DEEPSEEK_API_KEY"}}}
+JSON
+export DEEPSEEK_API_KEY="test-secret"
+http_error="$TEST_TMP_DIR/public-http.err"
+if get_agent_command openai-compatible-agent tangle implementer >/dev/null 2>"$http_error"; then
+  test_fail "credentialed public HTTP endpoint was accepted"
+elif grep -Fc "requires HTTPS for non-loopback endpoints" "$http_error" >/dev/null; then
+  test_pass
+else
+  test_fail "credentialed public HTTP endpoint failed for an unexpected reason"
+fi
+
+test_case "loopback HTTP endpoints remain available for local development"
+loopback_ok=true
+for loopback_url in http://localhost:8000/v1 http://127.0.0.1:8000/v1; do
+  printf '%s\n' '{"providers":{"openai-compatible-agent":{"default":"deepseek-ai/DeepSeek-V4-Pro","base_url":"'"$loopback_url"'","api_key_env":"DEEPSEEK_API_KEY"}}}' > "$HOME/.claude-octopus/config/providers.json"
+  cmd=$(get_agent_command openai-compatible-agent tangle implementer)
+  [[ "$cmd" == *"--base-url $loopback_url"* ]] || loopback_ok=false
+done
+if [[ "$loopback_ok" == true ]]; then
+  test_pass
+else
+  test_fail "a loopback OpenAI-compatible endpoint was rejected"
+fi
+
+test_case "lookalike loopback authority cannot bypass HTTPS"
+write_config <<'JSON'
+{"providers":{"openai-compatible-agent":{"default":"deepseek-ai/DeepSeek-V4-Pro","base_url":"http://localhost:8000@api.example.com/v1","api_key_env":"DEEPSEEK_API_KEY"}}}
+JSON
+lookalike_error="$TEST_TMP_DIR/lookalike-http.err"
+if get_agent_command openai-compatible-agent tangle implementer >/dev/null 2>"$lookalike_error"; then
+  test_fail "lookalike loopback authority was accepted"
+elif grep -Fc "requires HTTPS for non-loopback endpoints" "$lookalike_error" >/dev/null; then
+  test_pass
+else
+  test_fail "lookalike loopback authority failed for an unexpected reason"
 fi
 
 test_case "legacy environment fallback remains supported"

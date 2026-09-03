@@ -35,6 +35,7 @@ else
 fi
 
 for fn in \
+    octo_parse_provider_status_record \
     octo_proof_enabled \
     octo_proof_sanitize_id \
     octo_proof_init \
@@ -47,6 +48,42 @@ for fn in \
 do
     assert_function_exists "$fn"
 done
+
+test_case "shared provider-status parser preserves v2 legacy and failure contracts"
+if declare -F octo_parse_provider_status_record >/dev/null 2>&1; then
+    parser_ok=true
+    octo_parse_provider_status_record 'v2|commandcode|model-one.v1|fallback|detail|with|pipes' || parser_ok=false
+    [[ "${OCTO_PROVIDER_STATUS_PROVIDER:-}" == commandcode && \
+       "${OCTO_PROVIDER_STATUS_MODEL:-}" == model-one.v1 && \
+       "${OCTO_PROVIDER_STATUS_VALUE:-}" == fallback && \
+       "${OCTO_PROVIDER_STATUS_DETAIL:-}" == 'detail|with|pipes' ]] || parser_ok=false
+
+    octo_parse_provider_status_record 'codex|auth-failed|legacy|detail|with|pipes' || parser_ok=false
+    [[ "${OCTO_PROVIDER_STATUS_PROVIDER:-}" == codex && \
+       -z "${OCTO_PROVIDER_STATUS_MODEL:-}" && \
+       "${OCTO_PROVIDER_STATUS_VALUE:-}" == auth-failed && \
+       "${OCTO_PROVIDER_STATUS_DETAIL:-}" == 'legacy|detail|with|pipes' ]] || parser_ok=false
+
+    OCTO_PROVIDER_STATUS_PROVIDER=stale
+    OCTO_PROVIDER_STATUS_MODEL=stale
+    OCTO_PROVIDER_STATUS_VALUE=stale
+    OCTO_PROVIDER_STATUS_DETAIL=stale
+    empty_rc=0
+    octo_parse_provider_status_record '' || empty_rc=$?
+    [[ "$empty_rc" -eq 1 && \
+       -z "${OCTO_PROVIDER_STATUS_PROVIDER:-}" && \
+       -z "${OCTO_PROVIDER_STATUS_MODEL:-}" && \
+       -z "${OCTO_PROVIDER_STATUS_VALUE:-}" && \
+       -z "${OCTO_PROVIDER_STATUS_DETAIL:-}" ]] || parser_ok=false
+
+    if [[ "$parser_ok" == true ]]; then
+        test_pass
+    else
+        test_fail "shared provider-status parser changed field or failure semantics"
+    fi
+else
+    test_fail "shared provider-status parser is unavailable"
+fi
 
 test_case "OCTOPUS_PROOF_PACKET=0 disables proof packets"
 if declare -F octo_proof_enabled >/dev/null 2>&1; then
@@ -134,6 +171,59 @@ if declare -F octo_proof_capture_provider_status >/dev/null 2>&1; then
         test_pass
     else
         test_fail "provider status capture did not record fallback substitutions"
+    fi
+    rm -rf "$tmp_home"
+else
+    test_fail "octo_proof_capture_provider_status is not defined"
+fi
+
+test_case "provider status capture preserves distinct model identities"
+if declare -F octo_proof_capture_provider_status >/dev/null 2>&1; then
+    tmp_home=$(mktemp -d)
+    HOME="$tmp_home"
+    OCTOPUS_PROOF_ROOT="$tmp_home/proofs"
+    OCTOPUS_PROOF_RUN_ID="provider-models"
+    run_dir=$(octo_proof_init "review" "goal" '{}')
+    status_file="$tmp_home/provider-model-status.txt"
+    {
+        echo "v2|commandcode|model-one.v1|ok|Round 1 findings"
+        echo "v2|commandcode|model-two.v2|fallback|Round 1 failed"
+    } > "$status_file"
+    octo_proof_capture_provider_status "$run_dir" "$status_file"
+    if jq -s -e '
+        [.[] | select(.type == "provider_status" and .data.provider == "commandcode") | .data.model]
+        | sort == ["model-one.v1", "model-two.v2"]
+      ' "$run_dir/proof.jsonl" >/dev/null \
+       && jq -s -e '
+        [.[] | select(.type == "provider_substitution" and .data.provider == "commandcode" and .data.model == "model-two.v2")]
+        | length == 1
+      ' "$run_dir/proof.jsonl" >/dev/null; then
+        test_pass
+    else
+        test_fail "proof packet collapsed or misparsed model-qualified provider status"
+    fi
+    rm -rf "$tmp_home"
+else
+    test_fail "octo_proof_capture_provider_status is not defined"
+fi
+
+test_case "provider status capture delegates malformed-record handling to the shared parser"
+if declare -F octo_proof_capture_provider_status >/dev/null 2>&1; then
+    tmp_home=$(mktemp -d)
+    HOME="$tmp_home"
+    OCTOPUS_PROOF_ROOT="$tmp_home/proofs"
+    OCTOPUS_PROOF_RUN_ID="provider-parser-delegation"
+    run_dir=$(octo_proof_init "review" "goal" '{}')
+    status_file="$tmp_home/provider-status-delegation.txt"
+    printf '%s\n' 'v2|commandcode|model-one.v1|ok|completed' > "$status_file"
+    octo_parse_provider_status_record() { return 1; }
+    octo_proof_capture_provider_status "$run_dir" "$status_file"
+    provider_event_count=$(jq -s '[.[] | select(.type == "provider_status")] | length' "$run_dir/proof.jsonl")
+    unset -f octo_parse_provider_status_record
+    if [[ "$provider_event_count" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "proof packet bypassed the shared provider-status parser"
     fi
     rm -rf "$tmp_home"
 else

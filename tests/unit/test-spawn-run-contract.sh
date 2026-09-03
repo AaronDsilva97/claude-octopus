@@ -280,12 +280,18 @@ octo_dispatch_command_model() {
 }
 is_provider_available() { return 0; }
 get_agent_command() {
-    if [[ "${FAKE_SCENARIO:-}" == claude-contract ]]; then
-        octo_real_get_agent_command "$@"
-        return
+    case "${FAKE_SCENARIO:-}" in
+        claude-contract|exact-fable-contract)
+            octo_real_get_agent_command "$@"
+            return
+            ;;
+    esac
+    local command_model="routed-model"
+    if [[ "${1:-}" == *:* ]]; then
+        command_model="${1#*:}"
     fi
     printf '%s\n' "${4:-missing}" > "$TEST_TMP_DIR/background-prompt-bytes"
-    printf '%s\n' "$fake_provider --model routed-model"
+    printf '%s\n' "$fake_provider --model $command_model"
 }
 validate_agent_command() {
     if [[ "$1" == "$fake_provider "* || "$1" == "$fake_provider" ]]; then
@@ -295,6 +301,10 @@ validate_agent_command() {
 }
 get_agent_model() {
     [[ "${FAKE_SCENARIO:-}" == model-fail ]] && return 1
+    if [[ "${1:-}" == *:* ]]; then
+        printf '%s\n' "${1#*:}"
+        return 0
+    fi
     printf '%s\n' fixture-model
 }
 record_agent_call() { :; }
@@ -336,9 +346,10 @@ octopus_capture_provider_output() {
 }
 
 run_external_fixture() {
-    local scenario="$1" task="$2" pid
+    local scenario="$1" task="$2" agent_type="${3:-fake-api}"
+    local role="${4:-reviewer}" phase="${5:-probe}" pid
     export FAKE_SCENARIO="$scenario"
-    pid="$(spawn_agent fake-api "External $scenario fixture" "$task" reviewer probe)" || return $?
+    pid="$(spawn_agent "$agent_type" "External $scenario fixture" "$task" "$role" "$phase")" || return $?
     wait "$pid" 2>/dev/null || true
 }
 
@@ -392,6 +403,71 @@ if [[ "$external_success_transitions" == "planned,starting,authenticated,running
     test_pass
 else
     test_fail "supervised success contract mismatch (transitions=${external_success_transitions:-missing}, eligible=$external_success_eligible, model=${external_success_model:-missing}, reason=${external_success_reason:-none})"
+fi
+
+test_case "exact background seat records canonical provider and literal model"
+exact_background_model="thinkingmachines/inkling-small"
+run_external_fixture success external-exact "command-code:${exact_background_model}" \
+    implementation-logic-reviewer review
+if jq -e --arg model "$exact_background_model" '
+    .seats[] |
+    select(.seat_id == "spawn-external-exact") |
+    .requested.provider == "commandcode" and
+    .requested.model == $model and
+    .resolved.provider == "commandcode" and
+    .resolved.model == $model and
+    .execution.phase == "review" and
+    .execution.role == "implementation-logic-reviewer"
+' "$WORKSPACE_DIR/runs/$OCTOPUS_RUN_ID/seats.json" >/dev/null; then
+    test_pass
+else
+    test_fail "exact background lifecycle did not split canonical provider from literal model"
+fi
+
+test_case "exact background Fable SDK seat executes with no retry and retains lifecycle identity"
+sdk_stub_dir="$TEST_TMP_DIR/fable-sdk-bin"
+sdk_capture="$TEST_TMP_DIR/spawn-fable-sdk-capture"
+sdk_health_capture="$TEST_TMP_DIR/spawn-fable-sdk-health-capture"
+mkdir -p "$sdk_stub_dir"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "%s\n" "no_retry=${OCTOPUS_FABLE5_NO_RETRY:-unset}" > "$SDK_CAPTURE"' \
+    'printf "%s\n" "$@" >> "$SDK_CAPTURE"' \
+    'cat >/dev/null' \
+    'printf "%s\n" "Substantive exact Fable background result."' > "$sdk_stub_dir/claude-agent"
+chmod 755 "$sdk_stub_dir/claude-agent"
+export SDK_CAPTURE="$sdk_capture" CLAUDE_SDK_API_KEY=fixture-key
+old_path="$PATH"
+PATH="$sdk_stub_dir:$PATH"
+eval "$(declare -f check_provider_health | sed '1s/check_provider_health/octo_real_check_provider_health/')"
+check_provider_health() {
+    printf '%s\n' "$1" >> "$sdk_health_capture"
+    octo_real_check_provider_health "$@"
+}
+exact_fable_ran=false
+if run_external_fixture exact-fable-contract external-exact-fable \
+    'claude-sdk:claude-fable-5' implementation-logic-reviewer review; then
+    exact_fable_ran=true
+fi
+eval "$(declare -f octo_real_check_provider_health | sed '1s/octo_real_check_provider_health/check_provider_health/')"
+PATH="$old_path"
+unset CLAUDE_SDK_API_KEY SDK_CAPTURE
+if [[ "$exact_fable_ran" == true ]] && \
+   grep -Fxq 'claude-sdk' "$sdk_health_capture" && \
+   grep -Fxq 'no_retry=1' "$sdk_capture" && \
+   grep -Fxq 'claude-fable-5' "$sdk_capture" && \
+   jq -e '
+       .seats[] |
+       select(.seat_id == "spawn-external-exact-fable") |
+       .requested.provider == "claude-sdk" and
+       .requested.model == "claude-fable-5" and
+       .resolved.provider == "claude-sdk" and
+       .resolved.model == "claude-fable-5" and
+       .transition == "contributed"
+   ' "$WORKSPACE_DIR/runs/$OCTOPUS_RUN_ID/seats.json" >/dev/null; then
+    test_pass
+else
+    test_fail "background exact Fable execution retried or lost its lifecycle identity"
 fi
 
 test_case "background model-resolution failure terminalizes before provider execution"

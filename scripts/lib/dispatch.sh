@@ -46,9 +46,26 @@ _octopus_claude_reasoning_fragment() {
     octopus_reasoning_cli_fragment claude "$level" "$policy"
 }
 
+# Exact model pins must stay exact, so an unsafe Fable security pin is rejected
+# instead of being silently rerouted to a different model.
+_octopus_validate_exact_claude_dispatch_model() {
+    local role="${2:-}" agent_type="${3:-}" phase="${4:-}"
+    [[ "$agent_type" == *:* ]] || return 0
+    if ! octo_agent_spec_exact_role_allowed "$agent_type" "$role" "$phase"; then
+        log "ERROR" "Exact Fable 5 model pins cannot be used for security dispatches"
+        return 1
+    fi
+    return 0
+}
+
 _octopus_openai_compatible_runtime_config() {
     local provider="$1"
     local config_provider="$provider" base_url api_key_env credential_value
+    provider="${provider%%:*}"
+    if declare -f octo_provider_canonical >/dev/null 2>&1; then
+        provider="$(octo_provider_canonical "$provider" 2>/dev/null || printf '%s' "$provider")"
+    fi
+    config_provider="$provider"
     case "$provider" in
         openai-compatible|openai-tools|openai-compatible-agent) config_provider="openai-compatible-agent" ;;
     esac
@@ -72,6 +89,11 @@ _octopus_openai_compatible_runtime_config() {
     esac
     if ! _octopus_is_safe_openai_compatible_dispatch_value "$base_url"; then
         log ERROR "Invalid OpenAI-compatible base_url for provider '$provider'"
+        return 1
+    fi
+    if [[ "$base_url" == http://* ]] &&
+       [[ ! "$base_url" =~ ^http://(localhost|127\.0\.0\.1)(:[0-9]+)?(/|$) ]]; then
+        log ERROR "OpenAI-compatible provider '$config_provider' requires HTTPS for non-loopback endpoints"
         return 1
     fi
     if ! _octopus_is_safe_env_var_name "$api_key_env"; then
@@ -220,7 +242,14 @@ get_agent_command() {
         # gemini* is a compatibility alias for stale saved workflows. It must
         # never invoke gemini-cli; all Google seats execute through AGY.
         gemini|gemini-fast|gemini-image|agy|agy-research|antigravity)
-            echo "${PLUGIN_DIR}/scripts/helpers/agy-exec.sh"
+            if [[ "$agent_type" == *:* ]]; then
+                if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
+                    return 1
+                fi
+                echo "env OCTOPUS_AGY_MODEL=${model} ${PLUGIN_DIR}/scripts/helpers/agy-exec.sh"
+            else
+                echo "${PLUGIN_DIR}/scripts/helpers/agy-exec.sh"
+            fi
             ;;
         codex-review)
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
@@ -240,7 +269,8 @@ get_agent_command() {
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
                 return 1
             fi
-            model="${model//./-}"
+            _octopus_validate_exact_claude_dispatch_model "$model" "$role" "$agent_type" "$phase" || return 1
+            [[ "$agent_type" == *:* ]] || model="${model//./-}"
             echo "${_claude_bin}${_BARE_OPT} --print --model ${model} ${reasoning_fragment} ${claude_perm}" ;;
         claude-sonnet)
             local reasoning_level reasoning_policy reasoning_fragment
@@ -250,7 +280,8 @@ get_agent_command() {
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
                 return 1
             fi
-            model="${model//./-}"
+            _octopus_validate_exact_claude_dispatch_model "$model" "$role" "$agent_type" "$phase" || return 1
+            [[ "$agent_type" == *:* ]] || model="${model//./-}"
             echo "${_claude_bin}${_BARE_OPT} --print --model ${model} ${reasoning_fragment} ${claude_perm}" ;;
         claude-opus|claude-opus-fast)
             # Resolve a concrete model so current-host detection and user pins
@@ -270,36 +301,39 @@ get_agent_command() {
                 opus_effort="$OCTOPUS_EFFORT_OVERRIDE"
             fi
             local opus_model_flag
-            opus_model_flag="$(opus_default_model)"
-            # Selective Fable 5 escalation for judgment-class roles, before the
-            # security reroute so a security dispatch can never end up on Fable
-            # even if the allowlist is later widened. Escalation is applied here
-            # rather than in the model resolver because the resolver's cache has
-            # no liveness component and would keep serving a cached Fable model
-            # after the seat was marked quota-dead.
-            if declare -f fable5_resolve_dispatch_model >/dev/null 2>&1; then
-                local fable_decision fable_requested fable_reason
-                if ! fable_decision="$(fable5_resolve_dispatch_model "$opus_model_flag" "$role" "$agent_type" "$phase" "$prompt_bytes")"; then
-                    log "ERROR" "Invalid Fable 5 input-gate configuration"
-                    return 1
-                fi
-                fable_requested="$(jq -r '.requested_model' <<< "$fable_decision")"
-                opus_model_flag="$(jq -r '.resolved_model' <<< "$fable_decision")"
-                fable_reason="$(jq -r '.reason' <<< "$fable_decision")"
-                if [[ "${OCTOPUS_DISPATCH_PREVIEW:-false}" != "true" ]] && \
-                   declare -f run_contract_record_event >/dev/null 2>&1; then
-                    run_contract_record_event "routing.decision" \
-                        "requested_model=$fable_requested" \
-                        "resolved_model=$opus_model_flag" \
-                        "reason=$fable_reason" "prompt_bytes=$prompt_bytes" \
-                        "phase=${phase:-unknown}" "role=${role:-none}" >/dev/null 2>&1 || true
-                fi
+            if [[ "$agent_type" == *:* ]]; then
+                opus_model_flag="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+                _octopus_validate_exact_claude_dispatch_model "$opus_model_flag" "$role" "$agent_type" "$phase" || return 1
             else
-                if declare -f fable5_maybe_escalate >/dev/null 2>&1; then
-                    opus_model_flag="$(fable5_maybe_escalate "$opus_model_flag" "$role" "$agent_type" "$phase")"
-                fi
-                if declare -f fable5_maybe_reroute >/dev/null 2>&1; then
-                    opus_model_flag="$(fable5_maybe_reroute "$opus_model_flag" "$role" "$agent_type" "$phase")"
+                opus_model_flag="$(opus_default_model)"
+                # Selective Fable 5 escalation for judgment-class roles, before
+                # the security reroute so a security dispatch can never end up
+                # on Fable even if the allowlist is later widened. Exact seats
+                # bypass escalation because changing their model breaks the pin.
+                if declare -f fable5_resolve_dispatch_model >/dev/null 2>&1; then
+                    local fable_decision fable_requested fable_reason
+                    if ! fable_decision="$(fable5_resolve_dispatch_model "$opus_model_flag" "$role" "$agent_type" "$phase" "$prompt_bytes")"; then
+                        log "ERROR" "Invalid Fable 5 input-gate configuration"
+                        return 1
+                    fi
+                    fable_requested="$(jq -r '.requested_model' <<< "$fable_decision")"
+                    opus_model_flag="$(jq -r '.resolved_model' <<< "$fable_decision")"
+                    fable_reason="$(jq -r '.reason' <<< "$fable_decision")"
+                    if [[ "${OCTOPUS_DISPATCH_PREVIEW:-false}" != "true" ]] && \
+                       declare -f run_contract_record_event >/dev/null 2>&1; then
+                        run_contract_record_event "routing.decision" \
+                            "requested_model=$fable_requested" \
+                            "resolved_model=$opus_model_flag" \
+                            "reason=$fable_reason" "prompt_bytes=$prompt_bytes" \
+                            "phase=${phase:-unknown}" "role=${role:-none}" >/dev/null 2>&1 || true
+                    fi
+                else
+                    if declare -f fable5_maybe_escalate >/dev/null 2>&1; then
+                        opus_model_flag="$(fable5_maybe_escalate "$opus_model_flag" "$role" "$agent_type" "$phase")"
+                    fi
+                    if declare -f fable5_maybe_reroute >/dev/null 2>&1; then
+                        opus_model_flag="$(fable5_maybe_reroute "$opus_model_flag" "$role" "$agent_type" "$phase")"
+                    fi
                 fi
             fi
             # Clamp on the resolved model, so an escalated dispatch is clamped
@@ -327,14 +361,28 @@ get_agent_command() {
                     return 1
                     ;;
             esac
-            opus_model_flag="${opus_model_flag//./-}"
+            [[ "$agent_type" == *:* ]] || opus_model_flag="${opus_model_flag//./-}"
             local opus_reasoning_fragment=""
             opus_reasoning_fragment="$(_octopus_claude_reasoning_fragment "$opus_effort" best_effort)" || return 1
             echo "${_claude_bin}${_BARE_OPT} --print --model ${opus_model_flag}${opus_reasoning_fragment:+ ${opus_reasoning_fragment}} ${claude_perm}"
             ;;
         claude-opus-legacy) echo "${_claude_bin}${_BARE_OPT} --print --model claude-opus-4-6 ${claude_perm}" ;; # v9.23: explicit 4.6 opt-in
-        openrouter) echo "openrouter_execute" ;;                 # OpenRouter API (v4.8)
-        orcarouter) echo "orcarouter_execute" ;;                 # OrcaRouter gateway (OpenAI-compatible)
+        openrouter)
+            if [[ "$agent_type" == *:* ]]; then
+                model="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+                echo "openrouter_execute_model ${model}"
+            else
+                echo "openrouter_execute"
+            fi
+            ;;                 # OpenRouter API (v4.8)
+        orcarouter)
+            if [[ "$agent_type" == *:* ]]; then
+                model="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+                echo "orcarouter_execute_model ${model}"
+            else
+                echo "orcarouter_execute"
+            fi
+            ;;                 # OrcaRouter gateway (OpenAI-compatible)
         openrouter-glm5) echo "openrouter_execute_model z-ai/glm-5" ;;           # v8.11.0: GLM-5 via OpenRouter
         openrouter-kimi) echo "openrouter_execute_model moonshotai/kimi-k2.5" ;; # v8.11.0: Kimi K2.5 via OpenRouter
         openrouter-deepseek) echo "openrouter_execute_model deepseek/deepseek-v4-pro" ;;
@@ -364,13 +412,17 @@ get_agent_command() {
             echo "${PLUGIN_DIR}/scripts/helpers/openai-compatible-agent.py --provider generic --base-url ${base_url} --api-key-env ${api_key_env} --model ${model} ${reasoning_fragment} ${tool_fragment} --cwd ${PWD}"
             ;;
         atlascloud-agent)  # Atlas Cloud via the OpenAI-compatible tool-loop agent
-            model="${ATLASCLOUD_MODEL:-${OCTOPUS_ATLASCLOUD_MODEL:-${OPENAI_COMPAT_MODEL:-}}}"
-            if [[ -z "$model" && -f "${HOME}/.claude-octopus/config/providers.json" ]] && command -v jq &>/dev/null; then
-                model="$(jq -r '.providers.atlascloud.default // empty' "${HOME}/.claude-octopus/config/providers.json" 2>/dev/null || true)"
-            fi
-            if [[ -z "$model" ]]; then
-                log ERROR "ATLASCLOUD_MODEL, OCTOPUS_ATLASCLOUD_MODEL, OPENAI_COMPAT_MODEL, or providers.json atlascloud.default is required"
-                return 1
+            if [[ "$agent_type" == *:* ]]; then
+                model="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+            else
+                model="${ATLASCLOUD_MODEL:-${OCTOPUS_ATLASCLOUD_MODEL:-${OPENAI_COMPAT_MODEL:-}}}"
+                if [[ -z "$model" && -f "${HOME}/.claude-octopus/config/providers.json" ]] && command -v jq &>/dev/null; then
+                    model="$(jq -r '.providers.atlascloud.default // empty' "${HOME}/.claude-octopus/config/providers.json" 2>/dev/null || true)"
+                fi
+                if [[ -z "$model" ]]; then
+                    log ERROR "ATLASCLOUD_MODEL, OCTOPUS_ATLASCLOUD_MODEL, OPENAI_COMPAT_MODEL, or providers.json atlascloud.default is required"
+                    return 1
+                fi
             fi
             if ! validate_model_name "$model"; then
                 log ERROR "Invalid Atlas Cloud model name: ${model}"
@@ -456,8 +508,13 @@ get_agent_command() {
             # unlocks Opus 5 + 1M context independent of the host session. Model
             # wiring mirrors grok: env prefix so providers.json picks reach the shim.
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then return 1; fi
+            _octopus_validate_exact_claude_dispatch_model "$model" "$role" "$agent_type" "$phase" || return 1
             if [[ -n "$model" && "$model" != "default" ]]; then
-                echo "env OCTOPUS_CLAUDE_SDK_MODEL=${model} ${PLUGIN_DIR}/scripts/helpers/claude-sdk-exec.sh"
+                if [[ "$agent_type" == *:* && "$model" == "${FABLE5_MODEL_ID:-claude-fable-5}" ]]; then
+                    echo "env OCTOPUS_CLAUDE_SDK_MODEL=${model} OCTOPUS_FABLE5_NO_RETRY=1 ${PLUGIN_DIR}/scripts/helpers/claude-sdk-exec.sh"
+                else
+                    echo "env OCTOPUS_CLAUDE_SDK_MODEL=${model} ${PLUGIN_DIR}/scripts/helpers/claude-sdk-exec.sh"
+                fi
             else
                 echo "${PLUGIN_DIR}/scripts/helpers/claude-sdk-exec.sh"
             fi
@@ -500,7 +557,12 @@ get_agent_command() {
             # prompt as argv (stdin yields "No prompt provided"), so the shim
             # reads stdin and re-passes it as `-p "<prompt>"`. Keeps spawn.sh's
             # uniform stdin contract intact (Issue #173).
-            echo "${PLUGIN_DIR}/scripts/helpers/vibe-exec.sh --output text"
+            if [[ "$agent_type" == *:* ]]; then
+                model="$(get_agent_model "$agent_type" "$phase" "$role")" || return 1
+                echo "env OCTOPUS_VIBE_MODEL=${model} ${PLUGIN_DIR}/scripts/helpers/vibe-exec.sh --output text"
+            else
+                echo "${PLUGIN_DIR}/scripts/helpers/vibe-exec.sh --output text"
+            fi
             ;;
         opencode|opencode-fast|opencode-research)  # v9.11.0: OpenCode CLI — multi-provider router
             if ! model=$(get_agent_model "$agent_type" "$phase" "$role"); then
@@ -753,15 +815,21 @@ get_agent_model() {
 
     # v8.31.0: Apply model restriction service if configured
     if [[ -n "$provider" ]]; then
-        local fallback
-        fallback=$(validate_model_allowed "$provider" "$resolved_model")
-        if [[ $? -ne 0 && -n "$fallback" ]]; then
+        local fallback=""
+        if fallback=$(validate_model_allowed "$provider" "$resolved_model"); then
+            :
+        elif [[ "$agent_type" == *:* ]]; then
+            log ERROR "Explicit model '$resolved_model' is blocked for provider '$provider'; refusing to substitute '$fallback'"
+            return 1
+        elif [[ -n "$fallback" ]]; then
             if ! validate_model_name "$fallback"; then
                 log ERROR "Invalid fallback model name for $provider"
                 return 1
             fi
             echo "$fallback"
             return 0
+        else
+            return 1
         fi
     fi
     echo "$resolved_model"
@@ -773,32 +841,9 @@ get_agent_model() {
 validate_model_allowed() {
     local provider="$1"
     local model="$2"
-
-    case "$provider" in
-        gemini|gemini-*) provider="agy" ;;
-        antigravity|agy-research) provider="agy" ;;
-    esac
-
     local allowlist_var=""
-    case "$provider" in
-        codex)      allowlist_var="OCTOPUS_CODEX_ALLOWED_MODELS" ;;
-        agy)        allowlist_var="OCTOPUS_AGY_ALLOWED_MODELS" ;;
-        claude-sdk) allowlist_var="OCTOPUS_CLAUDE_SDK_ALLOWED_MODELS" ;;
-        claude)     allowlist_var="OCTOPUS_CLAUDE_ALLOWED_MODELS" ;;
-        openrouter) allowlist_var="OCTOPUS_OPENROUTER_ALLOWED_MODELS" ;;
-        orcarouter) allowlist_var="OCTOPUS_ORCAROUTER_ALLOWED_MODELS" ;;
-        atlascloud) allowlist_var="ATLASCLOUD_ALLOWED_MODELS" ;;
-        openai-compatible|openai-tools|openai-compatible-agent) allowlist_var="OPENAI_COMPAT_ALLOWED_MODELS" ;;
-        perplexity) allowlist_var="OCTOPUS_PERPLEXITY_ALLOWED_MODELS" ;;
-        qwen)       allowlist_var="OCTOPUS_QWEN_ALLOWED_MODELS" ;;
-        cursor-agent) allowlist_var="OCTOPUS_CURSOR_AGENT_ALLOWED_MODELS" ;;
-        commandcode) allowlist_var="OCTOPUS_COMMANDCODE_ALLOWED_MODELS" ;;
-        opencode)   allowlist_var="OCTOPUS_OPENCODE_ALLOWED_MODELS" ;;
-        ollama)     allowlist_var="OCTOPUS_OLLAMA_ALLOWED_MODELS" ;;
-        copilot)    allowlist_var="OCTOPUS_COPILOT_ALLOWED_MODELS" ;;
-        vibe)       allowlist_var="OCTOPUS_VIBE_ALLOWED_MODELS" ;;
-        *)          return 0 ;;  # Unknown provider — allow
-    esac
+    allowlist_var="$(octo_provider_model_allowlist_var "$provider" 2>/dev/null || true)"
+    [[ -n "$allowlist_var" ]] || return 0
 
     local allowlist="${!allowlist_var:-}"
     [[ -z "$allowlist" ]] && return 0  # No allowlist = all allowed

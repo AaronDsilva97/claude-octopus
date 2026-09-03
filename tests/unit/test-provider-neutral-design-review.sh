@@ -380,10 +380,16 @@ multiline_prompt=$'line one\r\nPROJECT_DOCUMENTATION_PATH:\r/data/example\nline 
 fleet_output="$(bash "$PROJECT_ROOT/scripts/helpers/build-fleet.sh" review standard "$multiline_prompt" 2>/dev/null)"
 record_count="$(printf '%s\n' "$fleet_output" | grep -c '|')"
 line_count="$(printf '%s\n' "$fleet_output" | wc -l | tr -d ' ')"
-if [[ "$record_count" -eq 4 && "$line_count" -eq 4 ]] && ! printf '%s\n' "$fleet_output" | grep -q '^PROJECT_DOCUMENTATION_PATH:$' && ! printf '%s' "$fleet_output" | grep -q $'\r'; then
+expected_labels=$'Logic Reviewer\nSecurity Reviewer\nArchitecture Reviewer\nCVE Reviewer\nDiversity Reviewer\nVerifier\nDebater\nSynthesizer'
+actual_labels="$(printf '%s\n' "$fleet_output" | cut -d'|' -f2)"
+expected_count="$(printf '%s\n' "$expected_labels" | wc -l | tr -d ' ')"
+if [[ "$record_count" -eq "$expected_count" && "$line_count" -eq "$expected_count" ]] && \
+   [[ "$actual_labels" == "$expected_labels" ]] && \
+   ! printf '%s\n' "$fleet_output" | grep -q '^PROJECT_DOCUMENTATION_PATH:$' && \
+   ! printf '%s' "$fleet_output" | grep -q $'\r'; then
   test_pass
 else
-  test_fail "multiline prompt escaped fleet record boundaries: records=$record_count lines=$line_count"
+  test_fail "review fleet records did not match the eight semantic seats: records=$record_count lines=$line_count labels=[$(tr '\n' ';' <<< "$actual_labels")]"
 fi
 
 test_summary

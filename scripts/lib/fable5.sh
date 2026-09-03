@@ -113,6 +113,12 @@ fable5_clamp_effort() {
 # the dispatch identifiers indicate security work (security-auditor persona,
 # squeeze red/blue workflow, red-team roles).
 fable5_is_security_dispatch() {
+    if declare -f octo_agent_spec_is_security_dispatch >/dev/null 2>&1; then
+        if octo_agent_spec_is_security_dispatch "${1:-}" "${2:-}" "${3:-}"; then
+            return 0
+        fi
+        return 1
+    fi
     local combined="${1:-} ${2:-} ${3:-}"
     case "$combined" in
         *security*|*squeeze*|*red-team*|*redteam*) return 0 ;;

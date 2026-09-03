@@ -31,6 +31,8 @@ fi
 source "${SCRIPT_DIR}/../lib/provider-registry.sh"
 source "${SCRIPT_DIR}/../lib/provider-policy.sh"
 source "${SCRIPT_DIR}/../lib/agent-spec.sh"
+source "${SCRIPT_DIR}/../lib/model-resolver.sh"
+source "${SCRIPT_DIR}/../lib/review.sh"
 
 WORKFLOW="${1:-research}"
 INTENSITY="${2:-standard}"
@@ -93,6 +95,28 @@ is_available() {
     local p="$1"
     p="${p%%:*}"
     _contains "${AVAILABLE_CLI[*]:-}" "$p"
+}
+
+# review.sh validates identity, capability, and policy. This caller supplies
+# the authoritative live admission decision produced by check-providers.sh.
+review_single_provider_is_available() {
+    local canonical="$1" executor="$2" status_provider="$1" available_executor="$2"
+    case "$canonical" in
+        claude)
+            # Claude is the host runtime and is intentionally absent from
+            # AVAILABLE_CLI/check-providers admission.
+            return 0
+            ;;
+        atlascloud)
+            status_provider=atlascloud
+            available_executor=atlascloud-agent
+            ;;
+        openai-tools|openai-compatible-agent)
+            status_provider=openai-compatible
+            available_executor=openai-compatible
+            ;;
+    esac
+    provider_status_is_available "$status_provider" && is_available "$available_executor"
 }
 
 # Pick first available provider from a preference list, with fallback
@@ -328,6 +352,38 @@ build_council_order() {
 }
 
 build_review_fleet() {
+    review_validate_configured_seat_overrides || return $?
+    local roles=(
+        implementation-logic-reviewer
+        implementation-security-reviewer
+        implementation-architecture-reviewer
+        implementation-cve-reviewer
+        implementation-diversity-reviewer
+        implementation-verifier
+        implementation-debater
+        implementation-synthesizer
+    )
+    local labels=("Logic Reviewer" "Security Reviewer" "Architecture Reviewer" "CVE Reviewer" "Diversity Reviewer" "Verifier" "Debater" "Synthesizer")
+    local prompts=(
+        "Review for correctness and logic bugs, edge cases, regressions in: $PROMPT"
+        "Review for OWASP vulnerabilities, injection, auth flaws, data exposure in: $PROMPT"
+        "Review architecture, integration, API contracts, breaking changes in: $PROMPT"
+        "Check for known CVEs, library advisories, and security bulletins related to: $PROMPT"
+        "Review for blind spots, missed assumptions, and provider-family divergence in: $PROMPT"
+        "Verify confirmed findings against the code and evidence in: $PROMPT"
+        "Challenge disputed findings and test competing interpretations in: $PROMPT"
+        "Synthesize the verified review findings for: $PROMPT"
+    )
+
+    local i provider
+    if [[ -n "${OCTOPUS_REVIEW_SINGLE_PROVIDER:-}" ]]; then
+        provider="$(review_single_provider_override)" || return $?
+        for ((i=0; i<8; i++)); do
+            emit "$provider" "${labels[$i]}" "${prompts[$i]}"
+        done
+        return 0
+    fi
+
     local order
     order="$(build_council_order)" || return $?
     # shellcheck disable=SC2206
@@ -335,16 +391,26 @@ build_review_fleet() {
     local count=${#providers[@]}
     [[ $count -gt 0 ]] || return 0
 
-    local labels=("Logic Reviewer" "Security Reviewer" "Architecture Reviewer" "CVE Reviewer")
-    local prompts=(
-        "Review for correctness and logic bugs, edge cases, regressions in: $PROMPT"
-        "Review for OWASP vulnerabilities, injection, auth flaws, data exposure in: $PROMPT"
-        "Review architecture, integration, API contracts, breaking changes in: $PROMPT"
-        "Check for known CVEs, library advisories, and security bulletins related to: $PROMPT"
+    local verifier_default="${providers[0]}" synthesis_default="${providers[0]}"
+    if is_available codex && octo_provider_allowed codex; then
+        verifier_default=codex
+    fi
+    if octo_provider_allowed claude-sonnet; then
+        synthesis_default=claude-sonnet
+    fi
+
+    local defaults=(
+        "${providers[0]}"
+        "${providers[$((1 % count))]}"
+        "${providers[$((2 % count))]}"
+        "${providers[$((3 % count))]}"
+        "${providers[$((4 % count))]}"
+        "$verifier_default"
+        "$verifier_default"
+        "$synthesis_default"
     )
-    local i provider
-    for ((i=0; i<4; i++)); do
-        provider="${providers[$((i % count))]}"
+    for ((i=0; i<8; i++)); do
+        provider="$(review_agent_for_seat "${defaults[$i]}" "${roles[$i]}")" || return $?
         emit "$provider" "${labels[$i]}" "${prompts[$i]}"
     done
     return 0

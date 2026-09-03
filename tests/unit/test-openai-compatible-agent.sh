@@ -93,6 +93,32 @@ if assert_contains "$cmd" "scripts/helpers/openai-compatible-agent.py" "helper p
     test_pass
 fi
 
+test_case "qualified openai-compatible seat uses provider-file runtime config and exact model"
+CONFIG_ONLY_HOME="$TEST_TMP_DIR/config-only-home"
+mkdir -p "$CONFIG_ONLY_HOME/.claude-octopus/config"
+cat > "$CONFIG_ONLY_HOME/.claude-octopus/config/providers.json" <<'JSON'
+{
+  "version": "3.0",
+  "providers": {
+    "openai-compatible-agent": {
+      "base_url": "https://config-only.invalid/v1",
+      "api_key_env": "CONFIG_ONLY_COMPAT_KEY"
+    }
+  }
+}
+JSON
+qualified_cmd="$({
+    unset OPENAI_COMPAT_BASE_URL OPENAI_COMPAT_API_KEY_ENV OPENAI_API_KEY
+    HOME="$CONFIG_ONLY_HOME" USER="octo-test-$$" CLAUDE_CODE_SESSION="compat-qualified" \
+      CONFIG_ONLY_COMPAT_KEY="config-key" \
+      get_agent_command 'openai-compatible-agent:vendor/exact-model' review code-reviewer
+} 2>/dev/null || true)"
+if assert_contains "$qualified_cmd" "--base-url https://config-only.invalid/v1" "provider-file base URL" &&
+   assert_contains "$qualified_cmd" "--api-key-env CONFIG_ONLY_COMPAT_KEY" "provider-file credential name" &&
+   assert_contains "$qualified_cmd" "--model vendor/exact-model" "exact qualified model"; then
+    test_pass
+fi
+
 test_case "openai-compatible review dispatch disables model tools"
 cmd=$(HOME="$TEST_HOME" USER="octo-test-$$" CLAUDE_CODE_SESSION="compat-review-no-tools" PWD="/tmp/octo-cwd" OPENAI_COMPAT_MODEL="vendor/model-fast" get_agent_command openai-compatible-agent review code-reviewer 2>/dev/null)
 if assert_contains "$cmd" "--tool-policy none" "review tool policy"; then

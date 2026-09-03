@@ -43,6 +43,17 @@ else
     test_fail "helper failed unexpectedly: $output"
 fi
 
+test_case "vibe-exec forwards an exact contextual model"
+if output=$(printf 'Reply ACK' | PATH="$MOCK_BIN_DIR:$PATH" OCTOPUS_VIBE_MODEL=mistral-large-latest "$HELPER" --output text 2>&1); then
+    if [[ "$output" == *"--output text --model mistral-large-latest -p Reply ACK"* ]]; then
+        test_pass
+    else
+        test_fail "expected exact model to be forwarded; got: $output"
+    fi
+else
+    test_fail "helper failed unexpectedly: $output"
+fi
+
 test_case "vibe-exec fails clearly on empty stdin prompt"
 set +e
 empty_output=$(printf '' | PATH="$MOCK_BIN_DIR:$PATH" "$HELPER" --output text 2>&1)

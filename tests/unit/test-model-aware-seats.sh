@@ -30,9 +30,15 @@ if [[ "$(octo_model_family 'commandcode:minimaxai/minimax-m3')" == minimax ]] &&
 
 log(){ :; }
 PLUGIN_DIR="$PROJECT_ROOT"
+_BARE_OPT=""
+source scripts/lib/utils.sh
 source scripts/lib/validation.sh
 source scripts/lib/model-resolver.sh
 source scripts/lib/dispatch.sh
+
+# Keep exact-model command-shape coverage independent of the host AGY catalog.
+# Provider catalog membership is covered by test-agy-provider.sh.
+validate_agy_model_name() { validate_model_name "$1"; }
 
 test_case "model-qualified dispatch preserves CommandCode and Codex pins"
 cc_model="$(get_agent_model 'commandcode:stealth/ox-alpha' ceremony code-reviewer)"
@@ -40,6 +46,86 @@ codex_model="$(get_agent_model 'codex:gpt-5.6-luna' ceremony code-reviewer)"
 cc_cmd="$(get_agent_command 'commandcode:stealth/ox-alpha' ceremony code-reviewer)"
 codex_cmd="$(get_agent_command 'codex:gpt-5.6-luna' ceremony code-reviewer)"
 if [[ "$cc_model" == stealth/ox-alpha && "$codex_model" == gpt-5.6-luna && "$cc_cmd" == *'commandcode-exec.sh stealth/ox-alpha'* && "$codex_cmd" == *'--model gpt-5.6-luna'* ]]; then test_pass; else test_fail "model-qualified dispatch mismatch"; fi
+
+test_case "qualified contextual providers carry the exact model into dispatch"
+exact_model='vendor/seat-exact-model'
+agy_cmd="$(get_agent_command "agy:${exact_model}" review implementation-security-reviewer 2>/dev/null || true)"
+claude_cmd="$(get_agent_command "claude:${exact_model}" review implementation-architecture-reviewer 2>/dev/null || true)"
+opus_cmd="$(get_agent_command "claude-opus:${exact_model}" review implementation-architecture-reviewer 2>/dev/null || true)"
+openrouter_cmd="$(get_agent_command "openrouter:${exact_model}" review implementation-diversity-reviewer 2>/dev/null || true)"
+orcarouter_cmd="$(get_agent_command "orcarouter:${exact_model}" review implementation-diversity-reviewer 2>/dev/null || true)"
+vibe_cmd="$(get_agent_command "vibe:${exact_model}" review implementation-diversity-reviewer 2>/dev/null || true)"
+atlas_cmd="$(get_agent_command "atlascloud-agent:${exact_model}" review implementation-cve-reviewer 2>/dev/null || true)"
+if [[ "$agy_cmd" == *"OCTOPUS_AGY_MODEL=${exact_model}"* ]] && \
+   [[ "$claude_cmd" == *"--model ${exact_model}"* ]] && \
+   [[ "$opus_cmd" == *"--model ${exact_model}"* ]] && \
+   [[ "$openrouter_cmd" == "openrouter_execute_model ${exact_model}" ]] && \
+   [[ "$orcarouter_cmd" == "orcarouter_execute_model ${exact_model}" ]] && \
+   [[ "$vibe_cmd" == *"OCTOPUS_VIBE_MODEL=${exact_model}"* ]] && \
+   [[ "$atlas_cmd" == *"--provider atlascloud --model ${exact_model}"* ]] && \
+   validate_agent_command "$agy_cmd" && \
+   validate_agent_command "$claude_cmd" && \
+   validate_agent_command "$opus_cmd" && \
+   validate_agent_command "$openrouter_cmd" && \
+   validate_agent_command "$orcarouter_cmd" && \
+   validate_agent_command "$vibe_cmd" && \
+   validate_agent_command "$atlas_cmd"; then
+  test_pass
+else
+  test_fail "an exact contextual model was omitted: agy=[$agy_cmd] claude=[$claude_cmd] opus=[$opus_cmd] openrouter=[$openrouter_cmd] orcarouter=[$orcarouter_cmd] vibe=[$vibe_cmd] atlas=[$atlas_cmd]"
+fi
+
+test_case "explicit Claude seats preserve dotted model IDs byte-for-byte"
+claude_dotted_cmd="$(get_agent_command 'claude:claude-3.5-sonnet' review implementation-architecture-reviewer 2>/dev/null || true)"
+opus_dotted_cmd="$(get_agent_command 'claude-opus:claude-3.5-sonnet' review implementation-architecture-reviewer 2>/dev/null || true)"
+if [[ "$claude_dotted_cmd" == *'--model claude-3.5-sonnet'* ]] &&
+   [[ "$opus_dotted_cmd" == *'--model claude-3.5-sonnet'* ]] &&
+   [[ "$claude_dotted_cmd" != *'--model claude-3-5-sonnet'* ]] &&
+   [[ "$opus_dotted_cmd" != *'--model claude-3-5-sonnet'* ]]; then
+  test_pass
+else
+  test_fail "explicit dotted Claude model was normalized: claude=[$claude_dotted_cmd] opus=[$opus_dotted_cmd]"
+fi
+
+test_case "unqualified Claude routes retain legacy dotted-model normalization"
+legacy_claude_cmd="$(OCTOPUS_CLAUDE_MODEL='claude-3.5-sonnet' get_agent_command claude review implementation-architecture-reviewer 2>/dev/null || true)"
+legacy_opus_cmd="$(OCTOPUS_OPUS_MODEL='claude-3.5-sonnet' get_agent_command claude-opus review implementation-architecture-reviewer 2>/dev/null || true)"
+if [[ "$legacy_claude_cmd" == *'--model claude-3-5-sonnet'* ]] &&
+   [[ "$legacy_opus_cmd" == *'--model claude-3-5-sonnet'* ]]; then
+  test_pass
+else
+  test_fail "legacy Claude normalization changed: claude=[$legacy_claude_cmd] opus=[$legacy_opus_cmd]"
+fi
+
+test_case "an explicit model blocked by restrictions fails instead of falling back"
+OCTOPUS_CODEX_ALLOWED_MODELS='gpt-5.6-luna'
+restricted_rc=0
+restricted_out="$(get_agent_model 'codex:gpt-5.6-sol' review implementation-logic-reviewer 2>/dev/null)" || restricted_rc=$?
+unset OCTOPUS_CODEX_ALLOWED_MODELS
+if [[ "$restricted_rc" -ne 0 && -z "$restricted_out" ]]; then
+  test_pass
+else
+  test_fail "explicit model restriction silently substituted rc=$restricted_rc out=[$restricted_out]"
+fi
+
+test_case "an exact Fable model fails closed for security dispatches"
+fable_security_rc=0
+fable_security_out="$(get_agent_command 'claude-opus:claude-fable-5' review implementation-security-reviewer 2>/dev/null)" || fable_security_rc=$?
+if [[ "$fable_security_rc" -ne 0 && -z "$fable_security_out" ]]; then
+  test_pass
+else
+  test_fail "unsafe exact Fable security pin was dispatched rc=$fable_security_rc out=[$fable_security_out]"
+fi
+
+test_case "an exact Claude SDK Fable seat disables the shim retry without changing compatibility routes"
+exact_fable_sdk_cmd="$(get_agent_command 'claude-sdk:claude-fable-5' review implementation-logic-reviewer 2>/dev/null || true)"
+compat_fable_sdk_cmd="$(OCTOPUS_CLAUDE_SDK_MODEL=claude-fable-5 get_agent_command claude-sdk review implementation-logic-reviewer 2>/dev/null || true)"
+if [[ "$exact_fable_sdk_cmd" == "env OCTOPUS_CLAUDE_SDK_MODEL=claude-fable-5 OCTOPUS_FABLE5_NO_RETRY=1 $PROJECT_ROOT/scripts/helpers/claude-sdk-exec.sh" ]] && \
+   [[ "$compat_fable_sdk_cmd" == "env OCTOPUS_CLAUDE_SDK_MODEL=claude-fable-5 $PROJECT_ROOT/scripts/helpers/claude-sdk-exec.sh" ]]; then
+  test_pass
+else
+  test_fail "exact/default Fable retry contract mismatch: exact=[$exact_fable_sdk_cmd] compatibility=[$compat_fable_sdk_cmd]"
+fi
 
 test_case "review order keeps same-provider model variants and Ox Alpha before Luna"
 fake="$TEST_TMP_DIR/provider-check.sh"

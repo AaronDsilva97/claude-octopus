@@ -39,6 +39,51 @@ does not count as independent provider diversity.
 4. Model choice never changes permissions, repository rules, or quality gates.
 5. User and project configuration always beats release defaults.
 
+### Contextual review seat overrides
+
+The contextual code-review pipeline supports explicit model-qualified seat identities
+using the same `provider:model` convention as the design-review ceremony. These
+overrides are useful when a curated lineup must preserve semantic roles across
+providers instead of inheriting the review fleet's provider defaults:
+
+| Review seat | Environment override |
+|---|---|
+| Logic | `OCTOPUS_REVIEW_LOGIC_AGENT` |
+| Security | `OCTOPUS_REVIEW_SECURITY_AGENT` |
+| Architecture | `OCTOPUS_REVIEW_ARCHITECTURE_AGENT` |
+| CVE research | `OCTOPUS_REVIEW_CVE_AGENT` |
+| Diversity / independent perspective | `OCTOPUS_REVIEW_DIVERSITY_AGENT` |
+| Verifier | `OCTOPUS_REVIEW_VERIFIER_AGENT` |
+| Debater | `OCTOPUS_REVIEW_DEBATER_AGENT` |
+| Synthesizer | `OCTOPUS_REVIEW_SYNTHESIZER_AGENT` |
+
+For example, `OCTOPUS_REVIEW_SYNTHESIZER_AGENT=commandcode:thinkingmachines/inkling-small`
+keeps the synthesis seat on that exact provider and model. Registered aliases
+such as `command-code` and `anthropic` are accepted at the configuration boundary
+and normalized to executable provider names.
+
+Each seat override must contain both a provider and a model. Blank values,
+provider-only values, unsafe whitespace, unknown providers, and models blocked by
+the provider's model restriction are rejected. Exact seat overrides never use a
+restriction-service fallback because that would run a different model than the
+one requested. Update the seat or its model allowlist instead. The Fable 5
+security guard follows the same rule: an exact Fable pin on a security seat is
+rejected rather than rerouted to another model.
+
+Review lifecycle records and the final provider report keep the canonical
+provider and exact model as separate fields, so two models served by one
+provider remain distinct. Legacy provider-only status records are still read.
+
+Provider admission still applies independently. A seat fails closed when its
+provider is not admitted by the active provider allowlist.
+`OCTOPUS_REVIEW_SINGLE_PROVIDER` remains the global compatibility override and
+takes precedence over individual seat overrides. Run `octopus fleet review` to
+inspect the effective logic, security, architecture, CVE, diversity, verifier,
+debater, and synthesizer seats before starting a review.
+
+Round-1 seat overrides are additive when their semantic role is absent from the
+configured review fleet; unconfigured seats retain the existing fleet behavior.
+
 ## Eval-backed routing in v10
 
 V10 exposes deterministic routing decisions through
