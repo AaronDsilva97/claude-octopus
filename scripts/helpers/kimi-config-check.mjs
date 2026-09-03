@@ -264,15 +264,17 @@ function inspectConfig(binary, configPath) {
     return undefined;
   }
   const dispatchedModel = process.env.OCTOPUS_KIMI_MODEL;
+  const configuredDefaultModel = nonBlank(process.env.KIMI_MODEL_NAME)
+    ? '__kimi_env_model__'
+    : nonBlank(routing.defaultModel)
+      ? routing.defaultModel
+      : undefined;
   const config = {
-    defaultModel:
+    defaultModel: configuredDefaultModel,
+    credentialModel:
       nonBlank(dispatchedModel) && dispatchedModel !== 'default'
         ? dispatchedModel
-        : nonBlank(process.env.KIMI_MODEL_NAME)
-          ? '__kimi_env_model__'
-          : nonBlank(routing.defaultModel)
-            ? routing.defaultModel
-            : undefined,
+        : configuredDefaultModel,
     defaultProvider: nonBlank(routing.defaultProvider) ? routing.defaultProvider : undefined,
     providers: listed.providers,
     models: listed.models,
@@ -348,7 +350,8 @@ function storageName(oauthKey) {
 
 function credentialRecord(config) {
   if (!nonBlank(config.defaultModel)) return undefined;
-  const model = config.models[config.defaultModel];
+  if (!nonBlank(config.credentialModel)) return undefined;
+  const model = config.models[config.credentialModel];
   if (!plainObject(model)) return undefined;
   const providerName = modelProviderName(model, config.defaultProvider);
   const modelName = model.name !== undefined ? model.name : model.model;

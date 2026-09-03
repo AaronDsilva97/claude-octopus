@@ -6,6 +6,9 @@
 [[ -n "${_OCTOPUS_UTILS_LOADED:-}" ]] && return 0
 _OCTOPUS_UTILS_LOADED=true
 
+_utils_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_utils_lib_dir}/kimi-model-name.sh" || { echo "utils: failed to load kimi-model-name.sh" >&2; return 1 2>/dev/null || exit 1; }
+
 # Internal log helper — uses orchestrate.sh's log() if available, falls back to stderr
 _utils_log() {
     if type log &>/dev/null 2>&1; then
@@ -227,7 +230,7 @@ _validate_env_prefixed_shim_command() {
     [[ "${parts[2]}" == *"$shim_suffix" ]] || return 1
     if [[ "$encoding" == hex ]]; then
         local encoded="${parts[1]#*=}"
-        [[ "$encoded" =~ ^([0-9A-Fa-f][0-9A-Fa-f])+$ ]] || return 1
+        octopus_kimi_model_from_hex "$encoded" >/dev/null || return 1
     fi
     return 0
 }

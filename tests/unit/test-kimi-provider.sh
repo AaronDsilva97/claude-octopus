@@ -747,6 +747,69 @@ MOCK
     fi
 }
 
+test_kimi_shim_validates_encoded_and_plaintext_models() {
+    test_case "Kimi shim validates encoded and direct model names before array dispatch"
+    local tmp_bin capture old_path encoded value rc failures=""
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-model-transport"
+    capture="$tmp_bin/argv"
+    mkdir -p "$tmp_bin"
+    cat > "$tmp_bin/kimi" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${0%/*}/argv"
+printf '%s\n' "model transport dispatched"
+MOCK
+    chmod +x "$tmp_bin/kimi"
+    old_path="$PATH"
+    PATH="$tmp_bin:$PATH"
+
+    for encoded in "" 00 0a 0a41 3b 20 09 64656661756c74; do
+        rc=0
+        OCTOPUS_KIMI_MODEL_HEX="$encoded" /bin/bash \
+            "$PROJECT_ROOT/scripts/helpers/kimi-exec.sh" <<<"probe" >/dev/null 2>&1 || rc=$?
+        [[ "$rc" -eq 64 ]] || failures="$failures hex-$encoded=$rc"
+    done
+
+    rc=0
+    OCTOPUS_KIMI_MODEL_HEX=5465616d204d6f64656c OCTOPUS_KIMI_MODEL="Other Model" \
+        /bin/bash "$PROJECT_ROOT/scripts/helpers/kimi-exec.sh" <<<"probe" >/dev/null 2>&1 || rc=$?
+    [[ "$rc" -eq 64 ]] || failures="$failures mismatch=$rc"
+
+    for encoded in 5465616d204d6f64656c 5465616d094d6f64656c; do
+        rc=0
+        OCTOPUS_KIMI_MODEL_HEX="$encoded" /bin/bash \
+            "$PROJECT_ROOT/scripts/helpers/kimi-exec.sh" <<<"probe" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -ne 0 ]] || ! grep -A1 -x -- '--model' "$capture" | tail -1 | \
+            grep -q "^$([[ "$encoded" == *09* ]] && printf 'Team\tModel' || printf 'Team Model')$"; then
+            failures="$failures valid-hex-$encoded=$rc"
+        fi
+    done
+
+    for value in "" " " $'\t' $'A\nB' $'A\rB' ';' 'A|B' 'A&B' 'A$B' 'A`B' \
+        "A'B" 'A"B' 'A(B)' 'A<B' 'A>B' 'A!B' 'A?B' 'A[B' 'A]B' 'A{B' 'A}B' \
+        'A*B' 'A\B' '/absolute/model'; do
+        rc=0
+        OCTOPUS_KIMI_MODEL="$value" /bin/bash \
+            "$PROJECT_ROOT/scripts/helpers/kimi-exec.sh" <<<"probe" >/dev/null 2>&1 || rc=$?
+        [[ "$rc" -eq 64 ]] || failures="$failures plaintext-$(printf '%s' "$value" | od -An -v -tx1 | tr -d '[:space:]')=$rc"
+    done
+
+    for value in "Team Model" $'Team\tModel'; do
+        rc=0
+        OCTOPUS_KIMI_MODEL="$value" /bin/bash \
+            "$PROJECT_ROOT/scripts/helpers/kimi-exec.sh" <<<"probe" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -ne 0 ]] || ! grep -A1 -x -- '--model' "$capture" | tail -1 | grep -Fqx "$value"; then
+            failures="$failures valid-plaintext=$rc"
+        fi
+    done
+
+    PATH="$old_path"
+    if [[ -z "$failures" ]]; then
+        test_pass
+    else
+        test_fail "Kimi model transport validation failures:$failures"
+    fi
+}
+
 test_kimi_default_provider_and_flat_model_readiness() {
     test_case "default_provider inheritance and flat model credentials match Kimi runtime"
     local root inherited_rc=0 flat_key_rc=0 flat_oauth_rc=0 explicit_rc=0
@@ -1953,10 +2016,19 @@ test_kimi_pin_is_not_readiness() {
     source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
     unset KIMI_API_KEY
 
-    # A model alias declared but no default_model: kimi resolves -m against its
-    # own config, so a pin here is not evidence a dispatch can succeed.
-    printf '[models."kimi-k2.5"]\nprovider = "kimi"\n' > "$HOME/.kimi-code/config.toml"
-    rc_pin_only=0; OCTOPUS_KIMI_MODEL="kimi-k2.5" kimi_is_available >/dev/null 2>&1 || rc_pin_only=$?
+    # The pinned alias and its provider are complete and credentialed. Kimi
+    # 0.40.1 still requires a real top-level default_model before dispatch.
+    cat > "$HOME/.kimi-code/config.toml" <<'TOML'
+[models."Pinned Complete"]
+provider = "kimi"
+model = "kimi-k2.5"
+max_context_size = 262144
+[providers.kimi]
+type = "kimi"
+base_url = "https://fixture.invalid/v1"
+api_key = "fixture-not-a-secret"
+TOML
+    rc_pin_only=0; OCTOPUS_KIMI_MODEL="Pinned Complete" kimi_is_available >/dev/null 2>&1 || rc_pin_only=$?
 
     cat > "$HOME/.kimi-code/config.toml" <<'TOML'
 default_model = "kimi-k2.5"
@@ -2142,6 +2214,7 @@ test_kimi_model_level_auth_precedes_provider_auth
 test_kimi_effective_dispatch_model_drives_health
 test_kimi_routing_parser_accepts_multiline_quote_endings
 test_kimi_whitespace_alias_dispatch_is_safe
+test_kimi_shim_validates_encoded_and_plaintext_models
 test_kimi_default_provider_and_flat_model_readiness
 test_kimi_rejects_malformed_or_duplicate_toml
 test_kimi_validates_unselected_records

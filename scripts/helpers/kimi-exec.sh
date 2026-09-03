@@ -10,16 +10,10 @@
 # auto-approve.
 set -euo pipefail
 
-_kimi_decode_model_hex() {
-    local encoded="$1" decoded="" byte
-    local index=0
-    [[ "$encoded" =~ ^([0-9A-Fa-f][0-9A-Fa-f])+$ ]] || return 1
-    while [[ "$index" -lt "${#encoded}" ]]; do
-        printf -v byte '%b' "\\x${encoded:index:2}" || return 1
-        decoded="${decoded}${byte}"
-        index=$((index + 2))
-    done
-    printf '%s' "$decoded"
+_kimi_exec_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${_kimi_exec_dir}/../lib/kimi-model-name.sh" || {
+    echo "kimi-exec: model validator unavailable" >&2
+    exit 64
 }
 
 prompt=""
@@ -30,17 +24,29 @@ if [[ -z "${prompt//[[:space:]]/}" ]]; then
     echo "kimi-exec: no prompt provided on stdin" >&2
     exit 64
 fi
-if [[ -n "${OCTOPUS_KIMI_MODEL_HEX:-}" ]]; then
-    model="$(_kimi_decode_model_hex "$OCTOPUS_KIMI_MODEL_HEX")" || {
+plaintext_model_set=false
+plaintext_model=""
+if [[ "${OCTOPUS_KIMI_MODEL+x}" == x ]]; then
+    plaintext_model_set=true
+    plaintext_model="$OCTOPUS_KIMI_MODEL"
+    if ! octopus_kimi_model_name_is_safe "$plaintext_model"; then
+        echo "kimi-exec: invalid model" >&2
+        exit 64
+    fi
+fi
+if [[ "${OCTOPUS_KIMI_MODEL_HEX+x}" == x ]]; then
+    model="$(octopus_kimi_model_from_hex "$OCTOPUS_KIMI_MODEL_HEX")" || {
         echo "kimi-exec: invalid encoded model" >&2
         exit 64
     }
-    if [[ -n "${OCTOPUS_KIMI_MODEL:-}" && "$OCTOPUS_KIMI_MODEL" != "$model" ]]; then
+    if [[ "$plaintext_model_set" == true && "$plaintext_model" != "$model" ]]; then
         echo "kimi-exec: encoded model does not match isolated model" >&2
         exit 64
     fi
+elif [[ "$plaintext_model_set" == true ]]; then
+    model="$plaintext_model"
 else
-    model="${OCTOPUS_KIMI_MODEL:-default}"
+    model="default"
 fi
 cmd=(kimi -p "$prompt" --output-format text)
 if [[ -n "$model" && "$model" != "default" ]]; then

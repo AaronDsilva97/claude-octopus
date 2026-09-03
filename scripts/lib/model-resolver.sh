@@ -21,6 +21,7 @@ _model_resolver_load_error() {
     fi
 }
 source "${_model_resolver_lib_dir}/provider-registry.sh" || { _model_resolver_load_error "failed to load provider-registry.sh"; return 1 2>/dev/null || exit 1; }
+source "${_model_resolver_lib_dir}/kimi-model-name.sh" || { _model_resolver_load_error "failed to load kimi-model-name.sh"; return 1 2>/dev/null || exit 1; }
 if ! declare -f octo_model_cache_file >/dev/null 2>&1; then
     source "${_model_resolver_lib_dir}/model-cache-path.sh" 2>/dev/null || true
 fi
@@ -201,16 +202,7 @@ validate_agy_model_name() {
 # They still cross an Octopus command boundary, so retain the generic model
 # validator's metacharacter, line-break, backslash, and absolute-path guards.
 validate_kimi_model_name() {
-    local model="$1"
-
-    [[ -n "$model" ]] || return 1
-    [[ "$model" != *$'\n'* && "$model" != *$'\r'* ]] || return 1
-    case "$model" in
-        *\\*|*\*|*";"*|*"|"*|*"&"*|*'$'*|*'`'*|*"'"*|*'"'*|*"("*|*")"*|*"<"*|*">"*|*"!"*|*"?"*|*"["*|*"]"*|*"{"*|*"}"*)
-            return 1
-            ;;
-    esac
-    [[ "$model" != /* ]]
+    octopus_kimi_model_name_is_safe "$1"
 }
 
 validate_model_name_for_provider() {
