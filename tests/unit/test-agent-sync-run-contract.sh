@@ -17,6 +17,8 @@ source "$PROJECT_ROOT/scripts/lib/error-tracking.sh"
 source "$PROJECT_ROOT/scripts/lib/agent-sync.sh"
 # shellcheck source=/dev/null
 source "$PROJECT_ROOT/scripts/lib/validation.sh"
+# shellcheck source=/dev/null
+source "$PROJECT_ROOT/scripts/lib/kimi.sh"
 
 fixture_provider="$TEST_TMP_DIR/fixture-provider.sh"
 cat > "$fixture_provider" <<'EOF'
@@ -60,6 +62,21 @@ case "$FIXTURE_SCENARIO" in
 esac
 EOF
 chmod 755 "$fixture_provider"
+
+kimi_config_bin="$TEST_TMP_DIR/kimi-config-bin"
+mkdir -p "$kimi_config_bin"
+cat > "$kimi_config_bin/kimi" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    __plugin_run_node) shift; exec "${KIMI_TEST_NODE:?}" "$@" ;;
+    doctor|provider) exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "$@" ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod 755 "$kimi_config_bin/kimi"
+export KIMI_TEST_NODE="$(command -v node)"
+export KIMI_TEST_DRIVER="$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.mjs"
+PATH="$kimi_config_bin:$PATH"
 
 log() { :; }
 classify_task() { printf '%s\n' standard; }
@@ -109,6 +126,14 @@ write_agent_status() {
 check_provider_health() {
     if [[ "$1" == kimi ]]; then
         printf '%s\n' "${2:-missing}" > "$FIXTURE_ROOT/health-model"
+    fi
+    if [[ "$FIXTURE_SCENARIO" == kimi-dangling-default ]]; then
+        if ! KIMI_CODE_HOME="$PROJECT_ROOT/tests/fixtures/kimi-dangling-default" \
+            OCTOPUS_KIMI_MODEL="${2:-}" \
+            kimi_configured_credential_method >/dev/null 2>&1; then
+            printf '%s\n' 'fixture dangling Kimi default'
+            return 1
+        fi
     fi
     if [[ "$FIXTURE_SCENARIO" == auth-fail || "$FIXTURE_SCENARIO" == health-fail-qwen ]]; then
         printf '%s\n' 'fixture authentication rejected'
@@ -203,6 +228,8 @@ if grep -q '<external-cli-output provider="kimi-research".*trust="untrusted">' \
 else
     test_fail "run_agent_sync did not health-check the resolved Kimi model or returned unwrapped output"
 fi
+assert_scenario kimi-dangling-default 1 0 planned,starting,failed failed none \
+    'Provider unavailable: fixture dangling Kimi default' kimi
 assert_scenario auth-fail 1 0 planned,starting,failed failed none \
     'Provider unavailable: fixture authentication rejected'
 assert_scenario health-fail-qwen 1 0 planned,starting,failed failed none \

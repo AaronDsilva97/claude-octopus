@@ -638,6 +638,26 @@ TOML
     fi
 }
 
+test_kimi_dangling_default_rejects_credentialed_pin() {
+    test_case "dangling default_model blocks a complete credentialed Kimi pin"
+    local root helper_rc=0 health_rc=0 issue
+    root="$PROJECT_ROOT/tests/fixtures/kimi-dangling-default"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+
+    KIMI_CODE_HOME="$root" OCTOPUS_KIMI_MODEL="Pinned Complete" \
+        kimi_configured_credential_method >/dev/null 2>&1 || helper_rc=$?
+    KIMI_CODE_HOME="$root" check_provider_health kimi "Pinned Complete" \
+        >/dev/null 2>&1 || health_rc=$?
+    issue="$(KIMI_CODE_HOME="$root" OCTOPUS_KIMI_MODEL="Pinned Complete" \
+        kimi_credential_issue 2>/dev/null || true)"
+
+    if [[ "$helper_rc" -ne 0 && "$health_rc" -ne 0 && "$issue" == config-invalid ]]; then
+        test_pass
+    else
+        test_fail "dangling default passed helper or health: helper=$helper_rc health=$health_rc issue=$issue"
+    fi
+}
+
 test_kimi_routing_parser_accepts_multiline_quote_endings() {
     test_case "routing parser accepts Kimi-valid multiline strings ending in one or two quotes"
     local tmp_bin root suffix method rc failures=""
@@ -2212,6 +2232,7 @@ test_kimi_accepts_current_provider_types_and_capabilities
 test_kimi_accepts_current_v2_model_reference_shape
 test_kimi_model_level_auth_precedes_provider_auth
 test_kimi_effective_dispatch_model_drives_health
+test_kimi_dangling_default_rejects_credentialed_pin
 test_kimi_routing_parser_accepts_multiline_quote_endings
 test_kimi_whitespace_alias_dispatch_is_safe
 test_kimi_shim_validates_encoded_and_plaintext_models

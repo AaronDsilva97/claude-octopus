@@ -322,6 +322,12 @@ function configSemanticsAreValid(config) {
       return false;
     }
   }
+  if (
+    nonBlank(config.defaultModel) &&
+    resolveModelConfiguration(config, config.defaultModel) === undefined
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -329,6 +335,25 @@ function modelProviderName(model, defaultProvider) {
   if (model.providerId !== undefined) return model.providerId;
   if (model.provider !== undefined) return model.provider;
   return defaultProvider;
+}
+
+function resolveModelConfiguration(config, alias) {
+  if (!nonBlank(alias)) return undefined;
+  const model = config.models[alias];
+  if (!plainObject(model)) return undefined;
+
+  const providerName = modelProviderName(model, config.defaultProvider);
+  const modelName = model.name !== undefined ? model.name : model.model;
+  if (!nonBlank(modelName)) return undefined;
+  if (!Number.isInteger(model.maxContextSize) || model.maxContextSize < 1) return undefined;
+
+  const provider = nonBlank(providerName) ? config.providers[providerName] : undefined;
+  if (provider === undefined) {
+    if (!nonBlank(model.baseUrl) || !nonBlank(model.protocol)) return undefined;
+  } else if (!plainObject(provider)) {
+    return undefined;
+  }
+  return { model, provider };
 }
 
 function oauthRecord(oauth) {
@@ -350,20 +375,9 @@ function storageName(oauthKey) {
 
 function credentialRecord(config) {
   if (!nonBlank(config.defaultModel)) return undefined;
-  if (!nonBlank(config.credentialModel)) return undefined;
-  const model = config.models[config.credentialModel];
-  if (!plainObject(model)) return undefined;
-  const providerName = modelProviderName(model, config.defaultProvider);
-  const modelName = model.name !== undefined ? model.name : model.model;
-  if (!nonBlank(modelName)) return undefined;
-  if (!Number.isInteger(model.maxContextSize) || model.maxContextSize < 1) return undefined;
-
-  const provider = nonBlank(providerName) ? config.providers[providerName] : undefined;
-  if (provider === undefined) {
-    if (!nonBlank(model.baseUrl) || !nonBlank(model.protocol)) return undefined;
-  } else if (!plainObject(provider)) {
-    return undefined;
-  }
+  const resolved = resolveModelConfiguration(config, config.credentialModel);
+  if (resolved === undefined) return undefined;
+  const { model, provider } = resolved;
 
   if (nonBlank(model.apiKey)) return 'config:api-key';
   if (model.oauth !== undefined) return oauthRecord(model.oauth);

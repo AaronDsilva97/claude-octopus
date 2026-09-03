@@ -328,6 +328,14 @@ write_agent_status() { :; }
 check_provider_health() {
     printf '%s\n' "$1" >> "$TEST_TMP_DIR/background-health-calls"
     [[ "$1" != kimi ]] || printf '%s\n' "${2:-missing}" > "$TEST_TMP_DIR/background-kimi-health-model"
+    if [[ "${FAKE_SCENARIO:-}" == kimi-dangling-default ]]; then
+        if ! KIMI_CODE_HOME="$PROJECT_ROOT/tests/fixtures/kimi-dangling-default" \
+            OCTOPUS_KIMI_MODEL="${2:-}" \
+            kimi_configured_credential_method >/dev/null 2>&1; then
+            printf '%s\n' 'fixture dangling Kimi default'
+            return 1
+        fi
+    fi
     [[ "${FAKE_SCENARIO:-}" != health-fail ]]
 }
 build_provider_env() { PROVIDER_ENV_ARRAY=(); }
@@ -459,6 +467,22 @@ else
     test_fail "spawn_agent rejected or mis-executed the generated Claude command"
 fi
 unset FAKE_SCENARIO
+
+source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+kimi_config_bin="$TEST_TMP_DIR/kimi-config-bin"
+mkdir -p "$kimi_config_bin"
+cat > "$kimi_config_bin/kimi" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    __plugin_run_node) shift; exec "${KIMI_TEST_NODE:?}" "$@" ;;
+    doctor|provider) exec "${KIMI_TEST_NODE:?}" "${KIMI_TEST_DRIVER:?}" "$@" ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod 755 "$kimi_config_bin/kimi"
+export KIMI_TEST_NODE="$(command -v node)"
+export KIMI_TEST_DRIVER="$PROJECT_ROOT/tests/fixtures/kimi-code-cli-mock.mjs"
+PATH="$kimi_config_bin:$PATH"
 
 test_case "real supervised success follows the complete contract"
 run_external_fixture success external-success
@@ -607,6 +631,22 @@ if [[ "$kimi_health_rc" -ne 0 ]] && \
     test_pass
 else
     test_fail "Kimi async health failure did not fail closed before dispatch"
+fi
+unset FAKE_SCENARIO
+
+test_case "background Kimi health rejects a dangling default before dispatch"
+: > "$TEST_TMP_DIR/background-health-calls"
+export FAKE_SCENARIO=kimi-dangling-default
+set +e
+spawn_agent kimi "Kimi dangling default" external-kimi-dangling reviewer probe >/dev/null
+kimi_dangling_rc=$?
+set -e
+if [[ "$kimi_dangling_rc" -ne 0 ]] && \
+   [[ "$(grep -cx 'kimi' "$TEST_TMP_DIR/background-health-calls")" -eq 1 ]] && \
+   [[ ! -e "$RESULTS_DIR/kimi-external-kimi-dangling.md" ]]; then
+    test_pass
+else
+    test_fail "Kimi dangling default reached background provider dispatch"
 fi
 unset FAKE_SCENARIO
 
