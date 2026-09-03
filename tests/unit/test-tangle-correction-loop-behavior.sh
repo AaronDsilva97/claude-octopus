@@ -137,6 +137,14 @@ else
     test_fail "expected rounds=0 rc=0, got '$out'"
 fi
 
+test_case "warning-only initial review stays fatal without a no-op correction"
+out=$(REVIEW_RC_SEQUENCE="1" run_gate "0")
+if [[ "$out" == "rounds=0 rc=1" ]]; then
+    test_pass
+else
+    test_fail "expected rounds=0 rc=1, got '$out'"
+fi
+
 test_case "decreasing blockers converge to zero: exit 0 after 3 rounds"
 out=$(run_gate "3 2 1 0")
 if [[ "$out" == "rounds=3 rc=0" ]]; then

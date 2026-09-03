@@ -1945,18 +1945,25 @@ tangle_review_warning_text() {
     jq -r '(.warning // (if ((.message // "") | test("No changes found to review"; "i")) then .message else "" end)) // ""' "$findings_file" 2>/dev/null || true
 }
 
+tangle_review_findings_valid() {
+    local findings_file="$1"
+    [[ -f "$findings_file" ]] || return 1
+    jq -e -s '
+        length == 1
+        and (.[0] | type == "object")
+        and (.[0].findings | type == "array")
+        and all(.[0].findings[]; type == "object")
+    ' "$findings_file" >/dev/null 2>&1
+}
+
 tangle_review_blocking_count() {
     local findings_file="$1"
-    [[ -f "$findings_file" ]] || { echo 0; return 0; }
-    local review_warning
-    review_warning=$(tangle_review_warning_text "$findings_file")
-    if [[ -n "$review_warning" ]]; then
-        echo 1
-        return 0
-    fi
+    [[ -f "$findings_file" ]] || { echo 1; return 0; }
     local count
-    if ! count=$(jq '[.findings[]? | select((.severity // "") == "normal")] | length' "$findings_file" 2>/dev/null); then
-        # fail closed: malformed/truncated findings must block delivery.
+    if ! tangle_review_findings_valid "$findings_file" \
+          || ! count=$(jq '[.findings[] | select((.severity // "") == "normal")] | length' "$findings_file" 2>/dev/null); then
+        # Fail closed for callers that only consume the count. The contextual
+        # gate rejects the invalid artifact before attempting corrections.
         echo 1
         return 0
     fi
@@ -3750,6 +3757,10 @@ tangle_contextual_review_gate() {
     local review_rc=0
     tangle_run_context_code_review "$task_group" "$review_context_file" "initial" || review_rc=$?
     local findings_file="$TANGLE_REVIEW_FINDINGS_FILE"
+    if ! tangle_review_findings_valid "$findings_file"; then
+        log ERROR "Contextual code review produced an invalid findings document: ${findings_file}"
+        return 1
+    fi
     local normal_count
     normal_count=$(tangle_review_blocking_count "$findings_file")
 
@@ -3832,6 +3843,10 @@ tangle_contextual_review_gate() {
         review_rc=0
         tangle_run_context_code_review "$task_group" "$review_context_file" "correction-${correction_round}" || review_rc=$?
         findings_file="$TANGLE_REVIEW_FINDINGS_FILE"
+        if ! tangle_review_findings_valid "$findings_file"; then
+            log ERROR "Contextual code review produced an invalid findings document after correction round ${correction_round}: ${findings_file}"
+            return 1
+        fi
         normal_count=$(tangle_review_blocking_count "$findings_file")
         local current_signature
         current_signature=$(tangle_findings_signature "$findings_file")
