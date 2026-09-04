@@ -262,16 +262,43 @@ _octo_timeout_supervisor() {
     # Keep both process-group leaders unreaped until a winner is known. This
     # preserves their PGID identities while descendant cleanup is still needed.
     while :; do
-        if ! _octo_timeout_job_is_running "$provider_pid"; then
-            break
-        fi
-        if ! _octo_timeout_job_is_running "$timer_pid"; then
-            # Completion wins if both jobs stopped before the same observation.
-            # This second check closes the old poll-to-trap race.
-            if ! _octo_timeout_job_is_running "$provider_pid"; then
-                break
-            fi
+        local provider_running=true timer_running=true
+        _octo_timeout_job_is_running "$provider_pid" || provider_running=false
+        _octo_timeout_job_is_running "$timer_pid" || timer_running=false
 
+        if [[ "$provider_running" == false ]]; then
+            # Reap an already-completed timer before choosing the provider path.
+            # A failed timer is an infrastructure failure even if the provider
+            # also finished; a successful deadline tie deliberately defers to
+            # the provider's result. Both PGID leaders remain unreaped until all
+            # descendants have been contained.
+            trap '' TERM INT HUP
+            kill -KILL -- "-$timer_pid" 2>/dev/null || true
+            if wait "$timer_pid" 2>/dev/null; then
+                timer_status=0
+            else
+                timer_status=$?
+            fi
+            kill -KILL -- "-$provider_pid" 2>/dev/null || true
+            if wait "$provider_pid" 2>/dev/null; then
+                provider_status=0
+            else
+                provider_status=$?
+            fi
+            trap - TERM INT HUP
+            set +m
+            if [[ "$timer_running" == false && "$timer_status" -ne 0 ]]; then
+                if declare -f log >/dev/null 2>&1; then
+                    log ERROR "Portable timeout timer failed with status $timer_status"
+                else
+                    printf 'ERROR: portable timeout timer failed with status %s\n' "$timer_status" >&2
+                fi
+                return 125
+            fi
+            return "$provider_status"
+        fi
+
+        if [[ "$timer_running" == false ]]; then
             trap '' TERM INT HUP
             kill -KILL -- "-$timer_pid" 2>/dev/null || true
             if wait "$timer_pid" 2>/dev/null; then
@@ -300,20 +327,6 @@ _octo_timeout_supervisor() {
         fi
         /bin/sleep 0.02
     done
-
-    # Stop the deadline before releasing the provider leader/PGID identity.
-    trap '' TERM INT HUP
-    kill -KILL -- "-$timer_pid" 2>/dev/null || true
-    wait "$timer_pid" 2>/dev/null || true
-    kill -KILL -- "-$provider_pid" 2>/dev/null || true
-    if wait "$provider_pid" 2>/dev/null; then
-        provider_status=0
-    else
-        provider_status=$?
-    fi
-    trap - TERM INT HUP
-    set +m
-    return "$provider_status"
 }
 
 # Normalize a decimal timeout without evaluating untrusted digits as shell

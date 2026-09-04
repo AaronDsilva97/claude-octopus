@@ -164,13 +164,15 @@ build_diverse_order() {
 
 emit() {
     local provider="$1" label="$2" perspective="$3"
+    # Keep allowlist enforcement at the final output boundary so defaults,
+    # fallbacks, and future fleet builders cannot emit an unauthorized seat.
+    octo_provider_allowed "$provider" || return 0
     perspective="${perspective//$'\r'/ }"
     perspective="${perspective//$'\n'/ }"
     printf '%s|%s|%s\n' "$provider" "$label" "$perspective"
 }
 
 emit_if_allowed() {
-    octo_provider_allowed "$1" || return 0
     emit "$@"
 }
 

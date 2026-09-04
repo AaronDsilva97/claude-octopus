@@ -115,9 +115,19 @@ test_timeout_timer_does_not_depend_on_path_sleep() {
     fi
 }
 
-test_completed_provider_cannot_be_changed_by_late_timer_signal() {
-    test_case "provider completion wins at the old asynchronous deadline boundary"
-    local original_job_check rc=0
+test_completed_timer_failure_outranks_provider_success() {
+    test_case "completed timer failure outranks provider success and contains descendants"
+    local original_job_check original_timer target child_file rc=0 child_pid="" child_alive=false
+    target="$TEST_TMP_DIR/simultaneous-timer-failure-provider.sh"
+    child_file="$TEST_TMP_DIR/simultaneous-timer-failure-child.pid"
+    cat > "$target" <<'EOF'
+#!/bin/bash
+/bin/sh -c 'trap "" TERM; exec /bin/sleep 30' &
+printf '%s\n' "$!" > "$1"
+exit 0
+EOF
+    chmod +x "$target"
+
     command() {
         if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
             return 1
@@ -125,27 +135,62 @@ test_completed_provider_cannot_be_changed_by_late_timer_signal() {
         builtin command "$@"
     }
 
-    # Reproduce the old race exactly: the provider job has stopped, the polling
-    # loop is about to return, and the signal-based timer fires before the
-    # supervisor can ignore USR1. A polling-only timer has no signal to inject.
     original_job_check="$(declare -f _octo_timeout_job_is_running)"
     eval "${original_job_check/_octo_timeout_job_is_running/_octo_timeout_job_is_running_real}"
+    original_timer="$(declare -f _octo_timeout_timer)"
+    _octo_timeout_timer() { return 71; }
     _octo_timeout_job_is_running() {
-        if _octo_timeout_job_is_running_real "$@"; then
-            return 0
+        if [[ "${_octo_delayed_first_poll:-false}" == false ]]; then
+            _octo_delayed_first_poll=true
+            /bin/sleep 0.2
         fi
-        if grep -q 'kill -USR1.*PPID' "$PROJECT_ROOT/scripts/lib/heartbeat.sh"; then
-            kill -USR1 "$(/bin/sh -c 'printf "%s\n" "$PPID"')"
-        fi
-        return 1
+        _octo_timeout_job_is_running_real "$@"
     }
-    run_with_timeout 2 /usr/bin/true >/dev/null 2>&1 || rc=$?
-    unset -f command _octo_timeout_job_is_running _octo_timeout_job_is_running_real
+    run_with_timeout 30 "$target" "$child_file" >/dev/null 2>&1 || rc=$?
+    unset -f command _octo_timeout_job_is_running _octo_timeout_job_is_running_real _octo_timeout_timer
     eval "$original_job_check"
-    if [[ "$rc" -eq 0 ]]; then
+    eval "$original_timer"
+
+    [[ -s "$child_file" ]] && child_pid="$(< "$child_file")"
+    /bin/sleep 0.2
+    _pid_is_live "$child_pid" && child_alive=true
+    if [[ "$child_alive" == true ]]; then kill -KILL "$child_pid" 2>/dev/null || true; fi
+
+    if [[ "$rc" -eq 125 && -n "$child_pid" && "$child_alive" == false ]]; then
         test_pass
     else
-        test_fail "deadline delivery changed a completed provider result: rc=$rc"
+        test_fail "expected timer rc=71 to yield rc=125 with no descendant; got rc=$rc child=${child_pid:-missing}/$child_alive"
+    fi
+}
+
+test_simultaneous_successful_deadline_defers_to_provider_completion() {
+    test_case "simultaneous successful deadline defers to provider completion"
+    local original_job_check original_timer rc=0
+    command() {
+        if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    original_job_check="$(declare -f _octo_timeout_job_is_running)"
+    eval "${original_job_check/_octo_timeout_job_is_running/_octo_timeout_job_is_running_real}"
+    original_timer="$(declare -f _octo_timeout_timer)"
+    _octo_timeout_timer() { return 0; }
+    _octo_timeout_job_is_running() {
+        if [[ "${_octo_delayed_first_poll:-false}" == false ]]; then
+            _octo_delayed_first_poll=true
+            /bin/sleep 0.2
+        fi
+        _octo_timeout_job_is_running_real "$@"
+    }
+    run_with_timeout 30 /bin/sh -c 'exit 7' >/dev/null 2>&1 || rc=$?
+    unset -f command _octo_timeout_job_is_running _octo_timeout_job_is_running_real _octo_timeout_timer
+    eval "$original_job_check"
+    eval "$original_timer"
+    if [[ "$rc" -eq 7 ]]; then
+        test_pass
+    else
+        test_fail "expected provider completion rc=7 to win the successful deadline tie; got rc=$rc"
     fi
 }
 
@@ -438,7 +483,8 @@ test_elapsed_measurement_is_single_shell_portable() {
 test_timeout_signals_root_without_ps
 test_supervisor_isolates_provider_group_without_mutating_caller
 test_timeout_timer_does_not_depend_on_path_sleep
-test_completed_provider_cannot_be_changed_by_late_timer_signal
+test_completed_timer_failure_outranks_provider_success
+test_simultaneous_successful_deadline_defers_to_provider_completion
 test_malformed_timeout_fails_before_provider_launch
 test_timeout_overflow_fails_before_provider_launch
 test_timeout_decimal_normalization_is_bounded

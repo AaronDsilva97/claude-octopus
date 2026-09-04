@@ -1473,15 +1473,15 @@ test_agy_debate_skill_uses_runtime_advisors() {
     stale=$(grep -nE 'ADVISORS="gemini,codex"|Consult Gemini|gemini -p|r001_gemini|GEMINI_RESPONSE|Gemini/Codex CLI|Codex/Gemini|codex exec --skip-git-repo-check|when available when available' "${debate_files[@]}" || true)
 
     if [[ -z "$stale" ]] && \
-       grep -q 'orchestrate.sh" spawn "$advisor"' "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" && \
-       grep -q 'command -v agy' "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" && \
-       grep -q 'claude\*|codex\*|gemini\*|agy\*' "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" && \
-       grep -q 'orchestrate.sh" spawn "$advisor"' "$PROJECT_ROOT/skills/skill-debate/SKILL.md" && \
-       grep -q 'command -v agy' "$PROJECT_ROOT/skills/skill-debate/SKILL.md" && \
-       grep -q 'claude\*|codex\*|gemini\*|agy\*' "$PROJECT_ROOT/skills/skill-debate/SKILL.md"; then
+       grep -q 'consultative-advisors.sh' "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" && \
+       grep -q 'octo_launch_advisors' "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" && \
+       grep -q 'consultative-advisors.sh' "$PROJECT_ROOT/skills/skill-debate/SKILL.md" && \
+       grep -q 'octo_launch_advisors' "$PROJECT_ROOT/skills/skill-debate/SKILL.md" && \
+       grep -q 'codex|commandcode|grok|agy|gemini|antigravity' \
+           "$PROJECT_ROOT/scripts/lib/consultative-advisors.sh"; then
         test_pass
     else
-        test_fail "debate skill should dispatch runtime advisors through orchestrate.sh and include agy fallback; stale copy: $stale"
+        test_fail "debate skill should dispatch through the shared runtime advisor contract; stale copy: $stale"
     fi
 }
 
@@ -1631,7 +1631,8 @@ test_provider_workflow_review_regressions() {
     for file in "${brainstorm_files[@]}"; do
         grep -q 'ORCH_HELP="$("$ORCH" 2>&1 || true)"' "$file" || missing+="${file}: missing pipefail-safe orchestrator probe"$'\n'
         grep -q 'trap '\''rm -rf "$RUN_DIR"'\'' EXIT' "$file" || missing+="${file}: missing tempdir cleanup trap"$'\n'
-        grep -q 'claude\*|codex\*|gemini\*|agy\*' "$file" || missing+="${file}: missing claude advisor allowlist"$'\n'
+        grep -q 'consultative-advisors.sh' "$file" || missing+="${file}: missing shared advisor allowlist"$'\n'
+        grep -q 'octo_launch_advisors' "$file" || missing+="${file}: missing counted advisor launch"$'\n'
     done
 
     grep -q 'CLAUDE_PLUGIN_ROOT:-' "$PROJECT_ROOT/commands/setup.md" || missing+="commands/setup.md: setup root not plugin-anchored"$'\n'

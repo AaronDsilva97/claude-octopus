@@ -147,34 +147,39 @@ printf '%s\n' "$ORCH_HELP" | grep -c 'spawn <agent>' >/dev/null || { echo "Octop
 
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/octopus-brainstorm.XXXXXX")"
 trap 'rm -rf "$RUN_DIR"' EXIT
+CONSULTATIVE_LIB="${HOME}/.claude-octopus/plugin/scripts/lib/consultative-advisors.sh"
 ADVISOR_SELECTOR="${HOME}/.claude-octopus/plugin/scripts/helpers/select-fleet-advisors.sh"
+source "$CONSULTATIVE_LIB" || exit 1
+HOST_CLAUDE_ALLOWED=false
+HOST_ADVISOR_SUCCESS=0
+if octo_consultative_host_allowed; then
+  HOST_CLAUDE_ALLOWED=true
+fi
+REQUIRED_EXTERNAL_ADVISORS=$(octo_consultative_required_external_count)
 if ! ADVISORS=$("$ADVISOR_SELECTOR" research standard "$TOPIC"); then
   echo "No eligible external brainstorm advisors are available." >&2
   exit 1
 fi
 
-IFS=',' read -r -a ADVISOR_LIST <<< "$ADVISORS"
-for advisor in "${ADVISOR_LIST[@]}"; do
-  case "$advisor" in
-    claude*|codex*|gemini*|agy*|antigravity|copilot*|qwen*|opencode*|ollama*|cursor-agent*|vibe*|grok*) ;;
-    *) echo "Skipping unsupported advisor: $advisor"; continue ;;
-  esac
-  safe_advisor=$(printf '%s' "$advisor" | tr -c '[:alnum:]_-' '_')
-  "$ORCH" spawn "$advisor" \
-    "Think creatively about: ${TOPIC}
+BRAINSTORM_PROMPT="Think creatively about: ${TOPIC}
 
-Your role: independent brainstorm advisor.
+You are {{advisor}}, an independent brainstorm advisor.
 - Suggest concrete, specific ideas.
 - Identify implementation tradeoffs and non-obvious constraints.
 - Include at least one unconventional approach.
 
-Be specific and creative. Avoid generic advice." \
-    > "${RUN_DIR}/octopus-brainstorm-${safe_advisor}.md" &
-done
-wait
+Be specific and creative. Avoid generic advice."
+if ! SUCCESSFUL_EXTERNAL_ADVISORS=$(octo_launch_advisors "$ORCH" "$ADVISORS" \
+    "$RUN_DIR" octopus-brainstorm- "$BRAINSTORM_PROMPT" "$REQUIRED_EXTERNAL_ADVISORS"); then
+  echo "The required external brainstorm advisors did not complete successfully." >&2
+  exit 1
+fi
 ```
 
-**Claude Agent** (always available — use Agent tool with run_in_background):
+**Claude Agent**: Launch this advisor only when `HOST_CLAUDE_ALLOWED=true`. If
+Claude is disallowed, do not invoke the Agent tool. Set `HOST_ADVISOR_SUCCESS=1`
+only after the allowed host advisor completes with usable output; otherwise set
+it to `0`.
 
 ```text
 Think creatively about: [TOPIC]
@@ -187,6 +192,16 @@ Your role: Pattern spotter and paradox hunter.
 - Suggest at least 3 ideas that challenge conventional thinking.
 
 Be specific and creative. Avoid generic advice.
+```
+
+After all allowed advisors finish, enforce the two-provider minimum:
+
+```bash
+if ! octo_consultative_provider_count_is_sufficient \
+    "$SUCCESSFUL_EXTERNAL_ADVISORS" "$HOST_ADVISOR_SUCCESS"; then
+  echo "Team brainstorm requires two successful, allowlisted providers." >&2
+  exit 1
+fi
 ```
 
 #### Step 2d: Collect and Synthesize Perspectives

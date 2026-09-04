@@ -5,7 +5,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-ALLOWLIST_LIB="${SCRIPT_DIR}/../lib/provider-allowlist.sh"
+CONSULTATIVE_LIB="${SCRIPT_DIR}/../lib/consultative-advisors.sh"
 FLEET_BUILDER="${OCTOPUS_FLEET_BUILDER:-${SCRIPT_DIR}/build-fleet.sh}"
 
 if [[ $# -lt 3 ]]; then
@@ -24,12 +24,12 @@ case "$workflow" in
         ;;
 esac
 
-if [[ ! -r "$ALLOWLIST_LIB" ]]; then
-    printf 'ERROR: required provider allowlist library is not readable: %s\n' "$ALLOWLIST_LIB" >&2
+if [[ ! -r "$CONSULTATIVE_LIB" ]]; then
+    printf 'ERROR: consultative advisor library is not readable: %s\n' "$CONSULTATIVE_LIB" >&2
     exit 1
 fi
-# shellcheck source=../lib/provider-allowlist.sh
-source "$ALLOWLIST_LIB"
+# shellcheck source=../lib/consultative-advisors.sh
+source "$CONSULTATIVE_LIB"
 
 if [[ ! -r "$FLEET_BUILDER" ]]; then
     printf 'ERROR: fleet builder is not readable: %s\n' "$FLEET_BUILDER" >&2
@@ -49,13 +49,7 @@ while IFS='|' read -r provider label _perspective; do
         debate:Debater) ;;
         debate:*) continue ;;
     esac
-    case "$provider" in
-        claude*|kimi*) continue ;;
-        codex*|commandcode*|grok*|agy*|gemini*|antigravity|copilot*|qwen*|\
-        cursor-agent*|opencode*|ollama*|vibe*|openrouter*|\
-        openai-compatible*|atlascloud-agent*|perplexity*) ;;
-        *) continue ;;
-    esac
+    octo_consultative_provider_is_launchable "$provider" || continue
     octo_provider_allowed "$provider" || continue
     case ",$advisors," in
         *",$provider,"*) continue ;;

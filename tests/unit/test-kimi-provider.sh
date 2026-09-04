@@ -203,8 +203,8 @@ test_kimi_dispatch_wires_model() {
 }
 
 test_kimi_rejects_read_only_roles() {
-    test_case "Kimi dispatch rejects read-only roles but permits implementation"
-    local review_rc=0 research_rc=0 implementation_cmd=""
+    test_case "Kimi dispatch rejects read-only roles and permits all six write roles"
+    local review_rc=0 research_rc=0 role implementation_cmd=""
     (
         get_agent_model() { printf '%s\n' default; }
         get_agent_command kimi review code-reviewer 10 >/dev/null 2>&1
@@ -213,16 +213,21 @@ test_kimi_rejects_read_only_roles() {
         get_agent_model() { printf '%s\n' default; }
         get_agent_command kimi-research probe researcher 10 >/dev/null 2>&1
     ) || research_rc=$?
-    implementation_cmd="$({
-        get_agent_model() { printf '%s\n' default; }
-        get_agent_command kimi tangle implementer 10
-    } 2>/dev/null)"
-    if [[ "$review_rc" -ne 0 && "$research_rc" -ne 0 && \
-          "$implementation_cmd" == *"scripts/helpers/kimi-exec.sh"* ]]; then
-        test_pass
-    else
-        test_fail "expected read-only rejection and implementation command, got review=$review_rc research=$research_rc implementation='$implementation_cmd'"
+    if [[ "$review_rc" -eq 0 || "$research_rc" -eq 0 ]]; then
+        test_fail "expected read-only rejection, got review=$review_rc research=$research_rc"
+        return
     fi
+    for role in implementer tdd-orchestrator debugger python-pro typescript-pro frontend-developer; do
+        implementation_cmd="$({
+            get_agent_model() { printf '%s\n' default; }
+            get_agent_command kimi tangle "$role" 10
+        } 2>/dev/null)"
+        if [[ "$implementation_cmd" != *"scripts/helpers/kimi-exec.sh"* ]]; then
+            test_fail "expected Kimi shim for write role '$role', got '$implementation_cmd'"
+            return
+        fi
+    done
+    test_pass
 }
 
 test_kimi_rejects_every_non_write_capable_role() {
