@@ -205,27 +205,26 @@ _octo_timeout_stop_process_group() {
 }
 
 _octo_timeout_supervisor_handle_signal() {
-    local signal_name="$1" exit_status initial_signal allow_term_grace=false
+    local signal_name="$1" exit_status initial_signal
     exit_status="$(_octo_timeout_signal_status "$signal_name")"
     initial_signal="$signal_name"
-    if [[ "$signal_name" == "USR1" ]]; then
-        exit_status=124
-        initial_signal=TERM
-        allow_term_grace=true
-    fi
 
     # Prevent nested signals from interrupting cleanup. Reap the timer first to
     # suppress Bash job-status output, then terminate the private provider PGID.
-    trap '' USR1 TERM INT HUP
+    trap '' TERM INT HUP
     if [[ "${timer_pid:-}" =~ ^[1-9][0-9]*$ ]]; then
         kill -KILL -- "-$timer_pid" 2>/dev/null || true
         wait "$timer_pid" 2>/dev/null || true
     fi
     if [[ "${provider_pid:-}" =~ ^[1-9][0-9]*$ ]]; then
-        _octo_timeout_stop_process_group "$provider_pid" "$initial_signal" "$allow_term_grace"
+        _octo_timeout_stop_process_group "$provider_pid" "$initial_signal" false
         wait "$provider_pid" 2>/dev/null || true
     fi
     exit "$exit_status"
+}
+
+_octo_timeout_timer() {
+    /bin/sleep "$1"
 }
 
 # Bash 3.2/macOS-compatible timeout supervisor. Monitor mode gives the provider
@@ -236,10 +235,9 @@ _octo_timeout_supervisor_handle_signal() {
 _octo_timeout_supervisor() {
     local timeout_secs="$1"
     shift
-    local provider_pid="" timer_pid="" provider_status=0
+    local provider_pid="" timer_pid="" provider_status=0 timer_status=0
 
     set -m
-    trap '_octo_timeout_supervisor_handle_signal USR1' USR1
     trap '_octo_timeout_supervisor_handle_signal TERM' TERM
     trap '_octo_timeout_supervisor_handle_signal HUP' HUP
 
@@ -249,33 +247,91 @@ _octo_timeout_supervisor() {
     ) <&0 &
     provider_pid=$!
 
-    # This must be a directly executed child, not command substitution: its
-    # PPID is the supervisor's real PID even in Bash 3.2 subshells.
-    /bin/sh -c 'sleep "$1"; kill -USR1 "$PPID"' octo-timer "$timeout_secs" &
+    # Keep the timer as a supervised job instead of delivering an asynchronous
+    # signal. Bash 3.2 lacks wait -n, so the loop below polls both child jobs and
+    # can distinguish provider completion, deadline expiry, and timer failure.
+    (
+        set +m
+        _octo_timeout_timer "$timeout_secs"
+    ) &
     timer_pid=$!
     # The jobs retain their private groups after monitor mode is disabled, and
     # Bash no longer prints asynchronous "Done" notices into provider output.
     set +m
 
-    # Keep the process-group leader as an unreaped child until the command job
-    # finishes. This lets us terminate any background descendants under the
-    # still-owned PGID before wait releases that identity for reuse.
-    while _octo_timeout_job_is_running "$provider_pid"; do
+    # Keep both process-group leaders unreaped until a winner is known. This
+    # preserves their PGID identities while descendant cleanup is still needed.
+    while :; do
+        if ! _octo_timeout_job_is_running "$provider_pid"; then
+            break
+        fi
+        if ! _octo_timeout_job_is_running "$timer_pid"; then
+            # Completion wins if both jobs stopped before the same observation.
+            # This second check closes the old poll-to-trap race.
+            if ! _octo_timeout_job_is_running "$provider_pid"; then
+                break
+            fi
+
+            trap '' TERM INT HUP
+            kill -KILL -- "-$timer_pid" 2>/dev/null || true
+            if wait "$timer_pid" 2>/dev/null; then
+                timer_status=0
+            else
+                timer_status=$?
+            fi
+            if [[ "$timer_status" -eq 0 ]]; then
+                _octo_timeout_stop_process_group "$provider_pid" TERM true
+                wait "$provider_pid" 2>/dev/null || true
+                trap - TERM INT HUP
+                set +m
+                return 124
+            fi
+
+            if declare -f log >/dev/null 2>&1; then
+                log ERROR "Portable timeout timer failed with status $timer_status"
+            else
+                printf 'ERROR: portable timeout timer failed with status %s\n' "$timer_status" >&2
+            fi
+            _octo_timeout_stop_process_group "$provider_pid" TERM false
+            wait "$provider_pid" 2>/dev/null || true
+            trap - TERM INT HUP
+            set +m
+            return 125
+        fi
         /bin/sleep 0.02
     done
+
+    # Stop the deadline before releasing the provider leader/PGID identity.
+    trap '' TERM INT HUP
+    kill -KILL -- "-$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
     kill -KILL -- "-$provider_pid" 2>/dev/null || true
     if wait "$provider_pid" 2>/dev/null; then
         provider_status=0
     else
         provider_status=$?
     fi
-
-    trap '' USR1 TERM INT HUP
-    kill -KILL -- "-$timer_pid" 2>/dev/null || true
-    wait "$timer_pid" 2>/dev/null || true
-    trap - USR1 TERM INT HUP
+    trap - TERM INT HUP
     set +m
     return "$provider_status"
+}
+
+# Normalize a decimal timeout without evaluating untrusted digits as shell
+# arithmetic. The portable maximum is 1,073,741,823 seconds: doubling it for
+# timeout guidance remains within signed 32-bit arithmetic used by Bash 3.2.
+_octo_timeout_normalize_seconds() {
+    local value="$1" max_seconds="1073741823" LC_ALL=C
+    case "$value" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    while [[ "${#value}" -gt 1 && "${value#0}" != "$value" ]]; do
+        value="${value#0}"
+    done
+    if [[ "${#value}" -gt "${#max_seconds}" ]] ||
+       { [[ "${#value}" -eq "${#max_seconds}" ]] && [[ "$value" > "$max_seconds" ]]; }; then
+        return 1
+    fi
+    printf '%s\n' "$value"
 }
 
 _octo_timeout_handle_caller_signal() {
@@ -308,8 +364,18 @@ run_with_timeout() {
         force_portable_supervisor=true
         shift
     fi
-    local timeout_secs="$1"
+    local timeout_input="${1:-}" timeout_secs
     shift
+
+    if ! timeout_secs="$(_octo_timeout_normalize_seconds "$timeout_input")"; then
+        if declare -f log >/dev/null 2>&1; then
+            log ERROR "Invalid timeout '${timeout_input:-empty}': expected 0..1073741823 seconds"
+        else
+            printf 'ERROR: invalid timeout %s; expected 0..1073741823 seconds\n' \
+                "${timeout_input:-empty}" >&2
+        fi
+        return 2
+    fi
 
     # Preserving the caller's process group requires our private-process-group
     # supervisor. GNU timeout --foreground does not provide containment, and a

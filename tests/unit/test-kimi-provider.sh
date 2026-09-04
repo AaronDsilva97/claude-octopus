@@ -149,31 +149,29 @@ MOCK
     done
 }
 
-# A mock that enforces the current CLI's argument contract, so a permissive mock
-# cannot green-light an invocation Kimi would reject. --quiet provides the
-# non-interactive, final-message-only print contract.
+# A mock that enforces the current standalone CLI's argument contract, so a
+# permissive mock cannot green-light an invocation Kimi would reject.
 #   unknown flags are rejected ("error: unknown option '<flag>'")
 _kimi_strict_mock_bin() {
     local dir="$1"
     mkdir -p "$dir"
     cat > "$dir/kimi" <<'MOCK'
 #!/usr/bin/env bash
-have_prompt=0; have_auto=0
+have_prompt=0; have_conflicting_mode=0
 args=("$@")
 i=0
 while [[ $i -lt ${#args[@]} ]]; do
     case "${args[$i]}" in
         -p|--prompt)        have_prompt=1; i=$((i+2)); continue ;;
-        --auto)             have_auto=1 ;;
+        --auto|-y|--yolo|--plan) have_conflicting_mode=1 ;;
         --output-format)    i=$((i+2)); continue ;;
         -m|--model)         i=$((i+2)); continue ;;
-        -y|--yolo|--plan|--quiet) ;;
         *) echo "error: unknown option '${args[$i]}'" >&2; exit 1 ;;
     esac
     i=$((i+1))
 done
-if [[ $have_prompt -eq 1 && $have_auto -eq 1 ]]; then
-    echo "error: Cannot combine --prompt with --auto." >&2; exit 1
+if [[ $have_prompt -eq 1 && $have_conflicting_mode -eq 1 ]]; then
+    echo "error: Cannot combine --prompt with an interactive permission mode." >&2; exit 1
 fi
 [[ $have_prompt -eq 1 ]] || { echo "error: no prompt" >&2; exit 1; }
 printf 'MOCK_KIMI_OK\n'
@@ -225,6 +223,58 @@ test_kimi_rejects_read_only_roles() {
     else
         test_fail "expected read-only rejection and implementation command, got review=$review_rc research=$research_rc implementation='$implementation_cmd'"
     fi
+}
+
+test_kimi_rejects_every_non_write_capable_role() {
+    test_case "Kimi dispatch fails closed for readonly, mapped review, and unknown roles"
+    local role rc
+    for role in backend-architect design-feasibility-reviewer \
+        implementation-logic-reviewer implementation-security-reviewer \
+        implementation-architecture-reviewer implementation-cve-reviewer \
+        implementation-diversity-reviewer unknown-role; do
+        rc=0
+        (
+            get_agent_model() { printf '%s\n' default; }
+            get_agent_command kimi spawn "$role" 10 >/dev/null 2>&1
+        ) || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+            test_fail "expected Kimi to reject role '$role'"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_kimi_is_excluded_from_consultative_fleets() {
+    test_case "consultative fleets exclude Kimi before seat construction"
+    local checker="$TEST_TMP_DIR/kimi-only-provider-checker.sh" fleet rc=0
+    cat > "$checker" <<'MOCK'
+#!/bin/bash
+printf '%s\n' 'kimi:available'
+MOCK
+    chmod +x "$checker"
+    fleet="$(OCTOPUS_PROVIDER_CHECKER="$checker" OCTO_ALLOWED_PROVIDERS="kimi" \
+        bash "$PROJECT_ROOT/scripts/helpers/build-fleet.sh" research quick fixture 2>/dev/null)" || rc=$?
+    if [[ "$rc" -ne 0 && "$fleet" != *'kimi|'* ]]; then
+        test_pass
+    else
+        test_fail "Kimi-only read-only fleet must fail explicitly: rc=$rc fleet='$fleet'"
+    fi
+}
+
+test_kimi_direct_execution_rejects_restricted_types() {
+    test_case "direct Kimi execution rejects research and role-like agent types"
+    local agent_type rc
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh"
+    for agent_type in kimi-research code-reviewer unknown-role; do
+        rc=0
+        kimi_execute "$agent_type" probe >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+            test_fail "direct Kimi execution accepted restricted type '$agent_type'"
+            return
+        fi
+    done
+    test_pass
 }
 
 # ── 3. provider-routing env isolation parity ──────────────────────────────────
@@ -784,7 +834,7 @@ MOCK
     source "$PROJECT_ROOT/scripts/lib/provider-routing.sh"
 
     model="$(get_agent_model kimi 2>/dev/null || true)"
-    cmd="$(get_agent_command kimi 2>/dev/null || true)"
+    cmd="$(get_agent_command kimi tangle implementer 2>/dev/null || true)"
     build_provider_env kimi
     if [[ -n "$cmd" ]]; then
         read -r -a inner_cmd_array <<< "$cmd"
@@ -2308,7 +2358,7 @@ test_kimi_dispatch_command_is_valid() {
     # Take the command dispatch.sh actually builds, strip any env prefix, and
     # run it exactly as spawn.sh would: flags as argv, prompt on stdin.
     PLUGIN_DIR="$PROJECT_ROOT"
-    cmd="$(get_agent_command kimi 2>/dev/null)"
+    cmd="$(get_agent_command kimi tangle implementer 2>/dev/null)"
     cmd="${cmd#env *MODEL=* }"
     # `|| rc=$?` not `; rc=$?` — the suite runs under `set -e`, which would
     # abort on a failing assignment and make this test unable to fail at all.
@@ -2412,6 +2462,9 @@ test_kimi_configured_provider_resolution() {
 test_kimi_dispatch_shim
 test_kimi_dispatch_wires_model
 test_kimi_rejects_read_only_roles
+test_kimi_rejects_every_non_write_capable_role
+test_kimi_is_excluded_from_consultative_fleets
+test_kimi_direct_execution_rejects_restricted_types
 test_kimi_env_isolation
 test_kimi_config_credentials
 test_kimi_native_runtime_config_bridge

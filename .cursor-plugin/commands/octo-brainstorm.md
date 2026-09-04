@@ -147,13 +147,10 @@ printf '%s\n' "$ORCH_HELP" | grep -c 'spawn <agent>' >/dev/null || { echo "Octop
 
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/octopus-brainstorm.XXXXXX")"
 trap 'rm -rf "$RUN_DIR"' EXIT
-FLEET_OUTPUT=$("${HOME}/.claude-octopus/plugin/scripts/helpers/build-fleet.sh" research standard "$TOPIC" 2>/dev/null || true)
-ADVISORS=$(echo "$FLEET_OUTPUT" | awk -F'|' '$1 !~ /^claude/ {print $1}' | paste -sd',' -)
-if [[ -z "$ADVISORS" ]]; then
-  fallback_advisors=()
-  command -v codex >/dev/null 2>&1 && fallback_advisors+=(codex)
-  command -v agy >/dev/null 2>&1 && fallback_advisors+=(agy)
-  ADVISORS=$(IFS=,; echo "${fallback_advisors[*]}")
+ADVISOR_SELECTOR="${HOME}/.claude-octopus/plugin/scripts/helpers/select-fleet-advisors.sh"
+if ! ADVISORS=$("$ADVISOR_SELECTOR" research standard "$TOPIC"); then
+  echo "No eligible external brainstorm advisors are available." >&2
+  exit 1
 fi
 
 IFS=',' read -r -a ADVISOR_LIST <<< "$ADVISORS"

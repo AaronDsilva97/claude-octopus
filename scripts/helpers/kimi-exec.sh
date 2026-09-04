@@ -4,7 +4,7 @@
 # stdin and re-pass it. Model via OCTOPUS_KIMI_MODEL (default: kimi's own default
 # from ~/.kimi-code/config.toml).
 #
-# Current Kimi Code requires --print for non-interactive output and auto-approves
+# Current Kimi Code uses -p/--prompt for non-interactive output and auto-approves
 # tools in that mode. dispatch.sh therefore rejects Kimi for read-only roles.
 set -euo pipefail
 
@@ -38,7 +38,7 @@ elif [[ "${OCTOPUS_KIMI_MODEL+x}" == x ]]; then
 else
     model="default"
 fi
-cmd=(kimi -p "$prompt" --quiet)
+cmd=(kimi -p "$prompt")
 if [[ -n "$model" && "$model" != "default" ]]; then
     cmd+=(--model "$model")
 fi

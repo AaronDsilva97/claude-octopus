@@ -62,8 +62,8 @@ Kimi only for write-capable implementation roles and rejects it for research,
 review, and other read-only roles. Use a provider with an enforceable sandbox
 for those seats. Direct `kimi_execute` calls use the same environment allowlist
 as normal dispatch unless `OCTOPUS_ALLOW_FULL_KIMI_ENV=true` is explicitly set.
-The integration uses the current `--quiet` headless contract; update Kimi Code
-if that option is unavailable.
+The integration uses the current `-p` non-interactive contract; update Kimi
+Code if that option is unavailable.
 
 Readiness validates the complete TOML document with Kimi Code's own runtime and
 built-in `doctor` command, then uses `provider list --json` for provider and

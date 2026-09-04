@@ -95,6 +95,166 @@ test_supervisor_isolates_provider_group_without_mutating_caller() {
     fi
 }
 
+test_timeout_timer_does_not_depend_on_path_sleep() {
+    test_case "portable timeout uses an absolute sleep under a restricted PATH"
+    local rc=0 elapsed_seconds
+    command() {
+        if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    SECONDS=0
+    PATH=/nonexistent run_with_timeout 2 /bin/sleep 1 >/dev/null 2>&1 || rc=$?
+    elapsed_seconds=$SECONDS
+    unset -f command
+    if [[ "$rc" -eq 0 && "$elapsed_seconds" -ge 1 ]]; then
+        test_pass
+    else
+        test_fail "expected rc=0 after at least 1s; got rc=$rc elapsed=${elapsed_seconds}s"
+    fi
+}
+
+test_completed_provider_cannot_be_changed_by_late_timer_signal() {
+    test_case "provider completion wins at the old asynchronous deadline boundary"
+    local original_job_check rc=0
+    command() {
+        if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+
+    # Reproduce the old race exactly: the provider job has stopped, the polling
+    # loop is about to return, and the signal-based timer fires before the
+    # supervisor can ignore USR1. A polling-only timer has no signal to inject.
+    original_job_check="$(declare -f _octo_timeout_job_is_running)"
+    eval "${original_job_check/_octo_timeout_job_is_running/_octo_timeout_job_is_running_real}"
+    _octo_timeout_job_is_running() {
+        if _octo_timeout_job_is_running_real "$@"; then
+            return 0
+        fi
+        if grep -q 'kill -USR1.*PPID' "$PROJECT_ROOT/scripts/lib/heartbeat.sh"; then
+            kill -USR1 "$(/bin/sh -c 'printf "%s\n" "$PPID"')"
+        fi
+        return 1
+    }
+    run_with_timeout 2 /usr/bin/true >/dev/null 2>&1 || rc=$?
+    unset -f command _octo_timeout_job_is_running _octo_timeout_job_is_running_real
+    eval "$original_job_check"
+    if [[ "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "deadline delivery changed a completed provider result: rc=$rc"
+    fi
+}
+
+test_malformed_timeout_fails_before_provider_launch() {
+    test_case "malformed timeout fails closed before launching the provider"
+    local marker="$TEST_TMP_DIR/malformed-timeout-provider-ran" rc=0
+    run_with_timeout not-a-timeout /bin/sh -c ': > "$1"' _ "$marker" >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" -eq 2 && ! -e "$marker" ]]; then
+        test_pass
+    else
+        test_fail "expected rc=2 and no provider launch; got rc=$rc marker=$([[ -e "$marker" ]] && echo yes || echo no)"
+    fi
+}
+
+test_timeout_overflow_fails_before_provider_launch() {
+    test_case "portable timeout rejects decimal overflow before provider launch"
+    local marker="$TEST_TMP_DIR/overflow-timeout-provider-ran" value rc
+    for value in 1073741824 18446744073709551616 999999999999999999999999999999; do
+        rc=0
+        run_with_timeout "$value" /bin/sh -c ': > "$1"' _ "$marker" >/dev/null 2>&1 || rc=$?
+        if [[ "$rc" -ne 2 || -e "$marker" ]]; then
+            test_fail "expected rc=2 and no provider launch for $value; got rc=$rc marker=$([[ -e "$marker" ]] && echo yes || echo no)"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_timeout_decimal_normalization_is_bounded() {
+    test_case "timeout normalization strips leading zeros and accepts its maximum"
+    local zero one maximum
+    zero="$(_octo_timeout_normalize_seconds 0000000000)"
+    one="$(_octo_timeout_normalize_seconds 0000000001)"
+    maximum="$(_octo_timeout_normalize_seconds 1073741823)"
+    if [[ "$zero" == 0 && "$one" == 1 && "$maximum" == 1073741823 ]]; then
+        test_pass
+    else
+        test_fail "unexpected normalized values: zero='$zero' one='$one' maximum='$maximum'"
+    fi
+}
+
+test_timer_failure_fails_closed_and_reaps_provider() {
+    test_case "portable timer failure stops and reaps the provider"
+    local target="$TEST_TMP_DIR/timer-failure-provider.sh"
+    local pid_file="$TEST_TMP_DIR/timer-failure-provider.pid"
+    local original_timer rc=0 elapsed_seconds provider_pid="" provider_alive=false
+
+    cat > "$target" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$$" > "$1"
+exec /bin/sleep 30
+EOF
+    chmod +x "$target"
+
+    command() {
+        if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    original_timer="$(declare -f _octo_timeout_timer)"
+    _octo_timeout_timer() { return 71; }
+
+    SECONDS=0
+    run_with_timeout 2 "$target" "$pid_file" >/dev/null 2>&1 || rc=$?
+    elapsed_seconds=$SECONDS
+    unset -f command _octo_timeout_timer
+    eval "$original_timer"
+
+    [[ -s "$pid_file" ]] && provider_pid="$(< "$pid_file")"
+    sleep 0.2
+    _pid_is_live "$provider_pid" && provider_alive=true
+    if [[ "$provider_alive" == true ]]; then kill -KILL "$provider_pid" 2>/dev/null || true; fi
+
+    if [[ "$rc" -eq 125 && "$provider_alive" == false && "$elapsed_seconds" -lt 2 ]]; then
+        test_pass
+    else
+        test_fail "expected rc=125, dead provider, and immediate failure; got rc=$rc pid=${provider_pid:-missing} alive=$provider_alive elapsed=${elapsed_seconds}s"
+    fi
+}
+
+test_timer_runtime_failure_fails_closed() {
+    test_case "portable timer runtime failure cannot leave a provider unbounded"
+    local original_timer rc=0 elapsed_seconds
+    command() {
+        if [[ "${1:-}" == "-v" && ( "${2:-}" == "gtimeout" || "${2:-}" == "timeout" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    original_timer="$(declare -f _octo_timeout_timer)"
+    _octo_timeout_timer() {
+        /bin/sleep 0.1
+        return 72
+    }
+
+    SECONDS=0
+    run_with_timeout 30 /bin/sleep 30 >/dev/null 2>&1 || rc=$?
+    elapsed_seconds=$SECONDS
+    unset -f command _octo_timeout_timer
+    eval "$original_timer"
+
+    if [[ "$rc" -eq 125 && "$elapsed_seconds" -lt 2 ]]; then
+        test_pass
+    else
+        test_fail "expected immediate rc=125 after timer runtime failure; got rc=$rc elapsed=${elapsed_seconds}s"
+    fi
+}
+
 test_timeout_kills_term_resistant_descendant_without_ps() {
     test_case "portable timeout kills a TERM-resistant descendant without ps"
     local target="$TEST_TMP_DIR/timeout-tree.sh"
@@ -277,6 +437,13 @@ test_elapsed_measurement_is_single_shell_portable() {
 
 test_timeout_signals_root_without_ps
 test_supervisor_isolates_provider_group_without_mutating_caller
+test_timeout_timer_does_not_depend_on_path_sleep
+test_completed_provider_cannot_be_changed_by_late_timer_signal
+test_malformed_timeout_fails_before_provider_launch
+test_timeout_overflow_fails_before_provider_launch
+test_timeout_decimal_normalization_is_bounded
+test_timer_failure_fails_closed_and_reaps_provider
+test_timer_runtime_failure_fails_closed
 test_timeout_kills_term_resistant_descendant_without_ps
 test_interruption_cleans_timeout_state_and_preserves_default_term
 test_interruption_restores_returning_caller_trap

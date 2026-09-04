@@ -344,16 +344,11 @@ QUESTION="Should we use Redis or in-memory cache?"
 ROUNDS=3
 STYLE="thorough"
 
-# Dynamic advisor selection — use build-fleet.sh for model family diversity
-DEBATE_FLEET=$("${HOME}/.claude-octopus/plugin/scripts/helpers/build-fleet.sh" debate standard "${QUESTION}" 2>/dev/null)
-# Extract debater agent types (exclude claude-sonnet Moderator)
-ADVISORS=$(echo "$DEBATE_FLEET" | grep '|Debater|' | cut -d'|' -f1 | paste -sd',' -)
-# Fallback if build-fleet.sh unavailable: use installed providers, including agy.
-if [[ -z "$ADVISORS" ]]; then
-  fallback_advisors=()
-  command -v codex >/dev/null 2>&1 && fallback_advisors+=(codex)
-  command -v agy >/dev/null 2>&1 && fallback_advisors+=(agy)
-  ADVISORS=$(IFS=,; echo "${fallback_advisors[*]}")
+# Dynamic advisor selection — the fleet builder remains the admission authority.
+ADVISOR_SELECTOR="${HOME}/.claude-octopus/plugin/scripts/helpers/select-fleet-advisors.sh"
+if ! ADVISORS=$("$ADVISOR_SELECTOR" debate standard "$QUESTION"); then
+  echo "No eligible external debate advisors are available." >&2
+  exit 1
 fi
 ```
 

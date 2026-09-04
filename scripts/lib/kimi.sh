@@ -4,9 +4,8 @@
 # (orchestrate.sh already sets `set -eo pipefail`).
 # Auth: selected-provider credentials in $KIMI_CODE_HOME/config.toml (default
 # ~/.kimi-code/config.toml), including file-backed OAuth from `kimi login`.
-# Headless: current Kimi Code uses -p with --quiet. Quiet mode implies print
-# mode, text output, and final-message-only output. It auto-approves tool calls,
-# so routing must limit this provider to write-capable roles.
+# Headless: current Kimi Code uses -p for non-interactive text output. This mode
+# auto-approves tool calls, so routing must limit it to write-capable roles.
 
 _kimi_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${_kimi_lib_dir}/bounded-probe.sh" 2>/dev/null || true
@@ -189,11 +188,15 @@ kimi_auth_method(){
 # kimi_execute AGENT_TYPE PROMPT [OUTFILE] — single-turn headless dispatch.
 kimi_execute(){
     local agent_type="$1" prompt="$2" output_file="${3:-}"
+    if [[ "$agent_type" != "kimi" ]]; then
+        _kimi_log ERROR "kimi: direct execution is limited to the write-capable 'kimi' provider"
+        return 1
+    fi
     [[ -z "$prompt" && ! -t 0 ]] && prompt="$(cat)"
     command -v kimi &>/dev/null || { _kimi_log ERROR "kimi: CLI not found"; return 1; }
     local timeout="${OCTOPUS_KIMI_TIMEOUT:-150}"
     local model="${OCTOPUS_KIMI_MODEL:-default}"
-    local -a cmd=(kimi -p "$prompt" --quiet)
+    local -a cmd=(kimi -p "$prompt")
     local -a execution_cmd
     declare -f octopus_build_kimi_provider_env >/dev/null 2>&1 || {
         _kimi_log ERROR "kimi: environment isolation unavailable"

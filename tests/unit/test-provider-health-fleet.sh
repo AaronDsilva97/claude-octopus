@@ -192,15 +192,13 @@ WORKSPACE_DIR="$WORKSPACE_DIR" bash -c "
     source '$QUOTA_LIB'
     octo_quota_mark_dead agy 0
     octo_quota_mark_dead codex 0"
-if fleet=$(HOME="$mock_home" PATH="$mock_bin:/usr/bin:/bin" WORKSPACE_DIR="$WORKSPACE_DIR" \
-    OCTO_ALLOWED_PROVIDERS="codex agy" "$BUILD_FLEET" review standard "x" 2>/dev/null); then
-    if ! grep -qE "^(agy|codex)\|" <<<"$fleet"; then
-        test_pass
-    else
-        test_fail "dead seats leaked into an all-dead fleet: $fleet"
-    fi
+fleet_rc=0
+fleet=$(HOME="$mock_home" PATH="$mock_bin:/usr/bin:/bin" WORKSPACE_DIR="$WORKSPACE_DIR" \
+    OCTO_ALLOWED_PROVIDERS="codex agy" "$BUILD_FLEET" review standard "x" 2>/dev/null) || fleet_rc=$?
+if [[ "$fleet_rc" -ne 0 && ! "$fleet" =~ ^(agy|codex)\| ]]; then
+    test_pass
 else
-    test_fail "build-fleet must not crash when all CLI seats are dead"
+    test_fail "all-dead fleet must fail explicitly without emitting dead seats: rc=$fleet_rc fleet='$fleet'"
 fi
 
 test_summary

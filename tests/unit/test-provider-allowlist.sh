@@ -20,6 +20,7 @@ test_suite "Provider allowlist"
 ALLOWLIST_LIB="$PROJECT_ROOT/scripts/lib/provider-allowlist.sh"
 CHECK_PROVIDERS="$PROJECT_ROOT/scripts/helpers/check-providers.sh"
 BUILD_FLEET="$PROJECT_ROOT/scripts/helpers/build-fleet.sh"
+SELECT_ADVISORS="$PROJECT_ROOT/scripts/helpers/select-fleet-advisors.sh"
 MODEL_CONFIG="$PROJECT_ROOT/scripts/helpers/octo-model-config.sh"
 
 test_case "allowlist helper has valid bash syntax"
@@ -136,6 +137,93 @@ if assert_contains "$fleet" "agy|" "legacy gemini token should make AGY eligible
    assert_contains "$fleet" "claude-sonnet|" "claude alias should allow claude-sonnet" &&
    assert_not_contains "$fleet" "codex|" "codex should not be emitted"; then
     test_pass
+fi
+
+advisor_builder="$TEST_TMP_DIR/advisor-builder.sh"
+
+test_case "advisor selection propagates fleet construction failure"
+cat > "$advisor_builder" <<'SH'
+#!/bin/bash
+printf '%s\n' 'codex|Debater|must not escape a failed fleet'
+exit 42
+SH
+chmod +x "$advisor_builder"
+set +e
+advisor_output=$(OCTOPUS_FLEET_BUILDER="$advisor_builder" "$SELECT_ADVISORS" debate standard fixture 2>/dev/null)
+advisor_rc=$?
+set -e
+if [[ "$advisor_rc" -eq 42 && -z "$advisor_output" ]]; then
+    test_pass
+else
+    test_fail "advisor selector must propagate fleet failure without output: rc=$advisor_rc output='$advisor_output'"
+fi
+
+test_case "advisor selection rejects an empty successful fleet"
+cat > "$advisor_builder" <<'SH'
+#!/bin/bash
+exit 0
+SH
+chmod +x "$advisor_builder"
+set +e
+advisor_output=$(OCTOPUS_FLEET_BUILDER="$advisor_builder" "$SELECT_ADVISORS" research standard fixture 2>/dev/null)
+advisor_rc=$?
+set -e
+if [[ "$advisor_rc" -ne 0 && -z "$advisor_output" ]]; then
+    test_pass
+else
+    test_fail "advisor selector must reject an empty fleet: rc=$advisor_rc output='$advisor_output'"
+fi
+
+test_case "advisor selection rejects a Kimi-only consultative fleet"
+cat > "$advisor_builder" <<'SH'
+#!/bin/bash
+printf '%s\n' 'kimi|Debater|unsafe consultative seat'
+SH
+chmod +x "$advisor_builder"
+set +e
+advisor_output=$(OCTOPUS_FLEET_BUILDER="$advisor_builder" OCTO_ALLOWED_PROVIDERS=kimi \
+    "$SELECT_ADVISORS" debate standard fixture 2>/dev/null)
+advisor_rc=$?
+set -e
+if [[ "$advisor_rc" -ne 0 && -z "$advisor_output" ]]; then
+    test_pass
+else
+    test_fail "advisor selector must reject Kimi-only fleets: rc=$advisor_rc output='$advisor_output'"
+fi
+
+test_case "advisor selection emits only allowlisted fleet providers"
+cat > "$advisor_builder" <<'SH'
+#!/bin/bash
+printf '%s\n' \
+    'codex|Debater|OpenAI view' \
+    'agy|Debater|Google view' \
+    'claude-sonnet|Moderator|host view'
+SH
+chmod +x "$advisor_builder"
+advisor_output=$(OCTOPUS_FLEET_BUILDER="$advisor_builder" OCTO_ALLOWED_PROVIDERS=agy \
+    "$SELECT_ADVISORS" debate standard fixture 2>/dev/null)
+if [[ "$advisor_output" == "agy" ]]; then
+    test_pass
+else
+    test_fail "advisor selector escaped the provider allowlist: output='$advisor_output'"
+fi
+
+test_case "brainstorm and debate consumers use fail-closed advisor selection"
+consumer_errors=""
+for consumer in \
+    "$PROJECT_ROOT/commands/brainstorm.md" \
+    "$PROJECT_ROOT/.cursor-plugin/commands/octo-brainstorm.md" \
+    "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" \
+    "$PROJECT_ROOT/skills/skill-debate/SKILL.md"; do
+    grep -q 'select-fleet-advisors.sh' "$consumer" || consumer_errors+="$consumer: missing advisor selector"$'\n'
+    if grep -q 'fallback_advisors' "$consumer"; then
+        consumer_errors+="$consumer: retains provider fallback"$'\n'
+    fi
+done
+if [[ -z "$consumer_errors" ]]; then
+    test_pass
+else
+    test_fail "workflow consumers must preserve fleet admission failures: $consumer_errors"
 fi
 
 # ── alias arms must not shadow one another (SC2221/SC2222) ───────────────────

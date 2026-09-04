@@ -199,6 +199,24 @@ get_tool_policy() {
     esac
 }
 
+# Kimi Code's non-interactive mode cannot enforce a read-only tool boundary.
+# Keep its eligibility fail-closed: a role must be explicitly write-capable,
+# and persona frontmatter can still narrow an otherwise write-capable role.
+octo_kimi_role_is_write_capable() {
+    local role="${1:-}"
+    [[ -n "$role" ]] || return 1
+    if declare -f get_agent_readonly >/dev/null 2>&1 && \
+       [[ "$(get_agent_readonly "$role")" == "true" ]]; then
+        return 1
+    fi
+    case "$role" in
+        implementer|tdd-orchestrator|debugger|python-pro|typescript-pro|frontend-developer)
+            return 0 ;;
+        *)
+            return 1 ;;
+    esac
+}
+
 get_agent_command() {
     local agent_type="$1"
     local phase="${2:-}"
@@ -531,10 +549,8 @@ get_agent_command() {
             # Kimi's non-interactive print mode auto-approves tool calls and has
             # no CLI permission allowlist. Prompt-only tool policies therefore
             # cannot make a review or research seat read-only.
-            local kimi_persona_role="${role:-}"
-            [[ -z "$kimi_persona_role" ]] || kimi_persona_role="$(octo_persona_role "$kimi_persona_role")"
             if [[ "$agent_type" == "kimi-research" || "$phase" == "review" ]] || \
-               { [[ -n "$kimi_persona_role" ]] && [[ "$(get_tool_policy "$kimi_persona_role")" != "full" ]]; }; then
+               ! octo_kimi_role_is_write_capable "$role"; then
                 log ERROR "Kimi Code cannot enforce a read-only tool policy; choose a sandboxed provider for role '${role:-unknown}'"
                 return 1
             fi
