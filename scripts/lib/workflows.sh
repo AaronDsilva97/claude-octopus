@@ -22,6 +22,11 @@ if ! type review_kill_process_tree_frozen >/dev/null 2>&1; then
     fi
     unset _octo_review_lib
 fi
+if ! type write_agent_result_prompt >/dev/null 2>&1; then
+    _octo_result_file_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/result-file.sh"
+    [[ -f "$_octo_result_file_lib" ]] && source "$_octo_result_file_lib"
+    unset _octo_result_file_lib
+fi
 
 # v8.54.0: Single-agent probe for multi-agentic skill dispatch
 # Runs one probe perspective synchronously and writes result to RESULTS_DIR.
@@ -106,14 +111,18 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
     # (probe dispatch has minimal variable content — context budget is the boundary)
 
     # v8.10.0: Enforce context budget AFTER all injections
-    local tokens_in
-    tokens_in=$(( ${#enhanced_prompt} / 4 ))
-    enhanced_prompt=$(enforce_context_budget "$enhanced_prompt" "$role" "$agent_type")
+    local tokens_in _budget_original_chars _budget_final_chars _budget_compression
+    _budget_original_chars=${#enhanced_prompt}
+    tokens_in=$(( _budget_original_chars / 4 ))
+    enhanced_prompt=$(enforce_context_budget "$enhanced_prompt" "$role" "$agent_type" "$phase")
     local _budget_rc=$?
     if [[ $_budget_rc -ne 0 ]]; then
         type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" 0 "Prompt exceeded context budget" 0 "" "$role" || true
         return "$_budget_rc"
     fi
+    _budget_final_chars=${#enhanced_prompt}
+    _budget_compression=none
+    [[ "$_budget_final_chars" -lt "$_budget_original_chars" ]] && _budget_compression=applied
 
     if declare -f octo_routing_policy >/dev/null 2>&1 &&
        [[ "$(octo_routing_policy 2>/dev/null || printf '%s' off)" == "eval" ]] &&
@@ -191,7 +200,15 @@ IMPORTANT: If you find yourself searching or grepping more than 3 times in a row
     echo "# Task ID: $task_id" >> "$result_file"
     echo "# Role: $role" >> "$result_file"
     echo "# Phase: $phase" >> "$result_file"
-    echo "# Prompt: ${perspective:0:200}" >> "$result_file"
+    printf '# Prompt metadata: original_chars=%s final_chars=%s compression=%s\n' \
+        "$_budget_original_chars" "$_budget_final_chars" "$_budget_compression" >> "$result_file"
+    if ! write_agent_result_prompt "$result_file" "$enhanced_prompt"; then
+        update_agent_status "$agent_type" "failed" 0 "$estimated_cost" "$TIMEOUT" "$task_id" "$phase" "$result_file"
+        type write_agent_status >/dev/null 2>&1 && write_agent_status \
+            "$agent_type" "failed" "$tokens_in" 0 "Failed to persist dispatched prompt" \
+            0 "$result_file" "$role" || true
+        return 74
+    fi
     echo "# Started: $(date)" >> "$result_file"
     echo "" >> "$result_file"
     echo "## Output" >> "$result_file"

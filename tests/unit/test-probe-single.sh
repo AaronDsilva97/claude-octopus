@@ -14,6 +14,8 @@ ORCHESTRATE="$PROJECT_ROOT/scripts/orchestrate.sh"
 ALL_SRC=$(mktemp)
 trap 'rm -f "$ALL_SRC"' EXIT
 cat "$ORCHESTRATE" "$PROJECT_ROOT/scripts/lib/"*.sh > "$ALL_SRC" 2>/dev/null
+PROBE_SINGLE_SRC="$(sed -n '/^probe_single_agent() {/,/^probe_discover() {/p' \
+  "$PROJECT_ROOT/scripts/lib/workflows.sh" | sed '$d')"
 
 pass() { test_case "$1"; test_pass; }
 fail() { test_case "$1"; test_fail "${2:-$1}"; }
@@ -39,50 +41,119 @@ assert_contains "$(grep -A40 'probe-single)' "$ALL_SRC" | head -45)" \
 
 # ── probe_single_agent writes result files ───────────────────────────────────
 
-assert_contains "$(grep -A200 'probe_single_agent()' "$ALL_SRC" | head -220)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   'RESULTS_DIR.*agent_type.*task_id.*\.md' "probe_single_agent: writes result file to RESULTS_DIR"
+
+assert_contains "$PROBE_SINGLE_SRC" \
+  'write_agent_result_prompt.*result_file.*enhanced_prompt' "probe_single_agent: length-frames the dispatched prompt"
+
+assert_contains "$PROBE_SINGLE_SRC" \
+  'Failed to persist dispatched prompt' "probe_single_agent: records prompt persistence failure reason"
+
+test_case "probe_single_agent: prompt persistence failure is terminal"
+prompt_failure_dir="$TEST_TMP_DIR/probe-prompt-persistence"
+prompt_failure_status="$prompt_failure_dir/status.log"
+mkdir -p "$prompt_failure_dir"
+set +e
+(
+  trap - EXIT
+  # shellcheck disable=SC1090
+  source "$PROJECT_ROOT/scripts/lib/workflows.sh"
+  export RESULTS_DIR="$prompt_failure_dir/results"
+  export LOGS_DIR="$prompt_failure_dir/logs"
+  export PROJECT_ROOT="$prompt_failure_dir"
+  export SUPPORTS_AGENT_TYPE_ROUTING=false
+  export OCTOPUS_PERSONA_PACKS=off
+  export OCTOPUS_BACKEND=api
+  export SUPPORTS_STABLE_AUTH=true
+  export TIMEOUT=0
+  PROVIDER_ENV_ARRAY=()
+
+  log() { :; }
+  preflight_check() { return 0; }
+  classify_task() { printf '%s\n' research; }
+  match_routing_rule() { return 1; }
+  apply_persona() { printf '%s\n' "$2"; }
+  enforce_context_budget() { printf '%s\n' "$1"; }
+  octo_routing_policy() { printf '%s\n' off; }
+  get_agent_model() { printf '%s\n' test-model; }
+  get_agent_command() { printf '%s\n' true; }
+  validate_agent_command() { return 0; }
+  record_agent_call() { :; }
+  estimate_agent_call_cost() { printf '%s\n' 0; }
+  update_metrics() { :; }
+  bridge_register_task() { :; }
+  build_provider_env() { PROVIDER_ENV_ARRAY=(); }
+  write_agent_result_prompt() { return 1; }
+  update_agent_status() {
+    printf 'update:%s:%s:%s\n' "$1" "$2" "$6" >> "$prompt_failure_status"
+  }
+  write_agent_status() {
+    printf 'write:%s:%s:%s\n' "$1" "$2" "$5" >> "$prompt_failure_status"
+  }
+
+  mkdir -p "$RESULTS_DIR" "$LOGS_DIR"
+  probe_rc=0
+  probe_single_agent codex "Review the fixture" prompt-failure || probe_rc=$?
+  [[ "$probe_rc" -eq 74 ]] &&
+    grep -Fq 'update:codex:failed:prompt-failure' "$prompt_failure_status" &&
+    grep -Fq 'write:codex:failed:Failed to persist dispatched prompt' "$prompt_failure_status"
+)
+prompt_failure_rc=$?
+set -e
+if [[ "$prompt_failure_rc" -eq 0 ]]; then
+  test_pass
+else
+  test_fail "prompt persistence failure must return 74 and record both failed statuses"
+fi
+
+if ! grep -q "printf '# Prompt:" <<< "$PROBE_SINGLE_SRC"; then
+  pass "probe_single_agent: does not use the ambiguous legacy prompt delimiter"
+else
+  fail "probe_single_agent: does not use the ambiguous legacy prompt delimiter" "legacy prompt writer remains"
+fi
 
 # ── probe_single_agent calls apply_persona ───────────────────────────────────
 
-assert_contains "$(grep -A100 'probe_single_agent()' "$ALL_SRC" | head -120)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "apply_persona" "probe_single_agent: calls apply_persona()"
 
 # ── probe_single_agent calls enforce_context_budget ──────────────────────────
 
-assert_contains "$(grep -A100 'probe_single_agent()' "$ALL_SRC" | head -120)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "enforce_context_budget" "probe_single_agent: calls enforce_context_budget()"
 
 # ── probe_single_agent calls get_agent_command ───────────────────────────────
 
-assert_contains "$(grep -A120 'probe_single_agent()' "$ALL_SRC" | head -140)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "get_agent_command" "probe_single_agent: calls get_agent_command()"
 
 # ── probe_single_agent has auth retry logic ──────────────────────────────────
 
-assert_contains "$(grep -A200 'probe_single_agent()' "$ALL_SRC" | head -220)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "auth_attempt|max_auth_retries" "probe_single_agent: has auth retry logic"
 
 # ── probe_single_agent outputs result file path ──────────────────────────────
 
-assert_contains "$(grep -A300 'probe_single_agent()' "$ALL_SRC" | head -310)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   'echo.*result_file' "probe_single_agent: outputs result file path on stdout"
 
 # ── probe_single_agent handles timeout status ────────────────────────────────
 
-assert_contains "$(grep -A300 'probe_single_agent()' "$ALL_SRC" | head -310)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "Status: TIMEOUT" "probe_single_agent: handles TIMEOUT status"
 
 # ── probe_single_agent handles failure status ────────────────────────────────
 
-assert_contains "$(grep -A300 'probe_single_agent()' "$ALL_SRC" | head -310)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "Status: FAILED" "probe_single_agent: handles FAILED status"
 
 # ── probe_single_agent preserves recovered Codex stderr transcript ───────────
 
-assert_contains "$(grep -A300 'probe_single_agent()' "$ALL_SRC" | head -310)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   "Errors transcript below" "probe_single_agent: announces recovered Codex stderr transcript"
 
-assert_contains "$(grep -A300 'probe_single_agent()' "$ALL_SRC" | head -310)" \
+assert_contains "$PROBE_SINGLE_SRC" \
   'cat "\$temp_errors" >> "\$result_file"' "probe_single_agent: appends recovered Codex stderr transcript"
 
 # ── flow-discover.md references probe-single ─────────────────────────────────

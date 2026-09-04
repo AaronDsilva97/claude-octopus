@@ -12,6 +12,12 @@ if ! type _octo_run_output_usable_file >/dev/null 2>&1; then
     [[ -f "$_octo_run_contract_lib" ]] && source "$_octo_run_contract_lib"
 fi
 
+# Initialize this in the sourcing shell so command substitutions inherit one
+# stable fallback instead of creating a different run id in each subshell.
+if [[ -z "${OCTO_ERROR_TRACKING_FALLBACK_ID:-}" ]]; then
+    OCTO_ERROR_TRACKING_FALLBACK_ID="run-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM:-0}"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # UX ENHANCEMENTS: Feature 1 - Enhanced Spinner Verbs (v7.16.0)
 # Dynamic task progress updates with context-aware verbs
@@ -168,15 +174,65 @@ ERREOF
 # Resolve the current run id for multi-provider diagnostics. Prefer the explicit
 # run id when a workflow sets one, then host/session ids, then a stable fallback.
 octo_current_run_id() {
-    local fallback
-    fallback="run-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-    printf '%s\n' "${OCTOPUS_RUN_ID:-${OCTOPUS_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION:-$fallback}}}}}"
+    if type octo_run_contract_id >/dev/null 2>&1; then
+        octo_run_contract_id
+        return
+    fi
+
+    # Standalone compatibility for unusually narrow source harnesses.
+    printf '%s\n' "${OCTOPUS_RUN_ID:-${OCTOPUS_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION:-$OCTO_ERROR_TRACKING_FALLBACK_ID}}}}}"
+}
+
+# Capture owners keep provider stdout and stderr separate. Budget warnings can
+# therefore use the ordinary diagnostic stream without a pathname-based side
+# channel or an inherited bypass descriptor.
+octo_notice_warn() {
+    log WARN "$*"
 }
 
 octo_run_dir() {
     local run_id
     run_id=$(octo_current_run_id)
     printf '%s\n' "${WORKSPACE_DIR:-${HOME}/.claude-octopus}/runs/${run_id}"
+}
+
+octo_json_quote() {
+    local value="${1-}" char encoded="" output="" code
+    local LC_ALL=C
+
+    while [[ -n "$value" ]]; do
+        char="${value:0:1}"
+        value="${value:1}"
+        case "$char" in
+            '"') output="${output}\\\"" ;;
+            \\) output="${output}\\\\" ;;
+            $'\b') output="${output}\\b" ;;
+            $'\f') output="${output}\\f" ;;
+            $'\n') output="${output}\\n" ;;
+            $'\r') output="${output}\\r" ;;
+            $'\t') output="${output}\\t" ;;
+            *)
+                printf -v code '%d' "'$char" 2>/dev/null || return 1
+                if [[ "$code" -ge 0 && "$code" -lt 32 ]]; then
+                    printf -v encoded '\\u%04x' "$code"
+                    output="${output}${encoded}"
+                else
+                    output="${output}${char}"
+                fi
+                ;;
+        esac
+    done
+
+    printf '"%s"' "$output"
+}
+
+octo_json_normalize_uint() {
+    local value="${1:-}"
+    [[ "$value" =~ ^[0-9]+$ ]] || return 1
+    while [[ "${#value}" -gt 1 && "${value:0:1}" == "0" ]]; do
+        value="${value:1}"
+    done
+    printf '%s\n' "$value"
 }
 
 octo_estimate_tokens_for_file() {
@@ -372,23 +428,43 @@ record_oversize_event() {
     local original_chars="$2"
     local final_chars="$3"
     local outcome="$4"
+    local role="${5:-}"
+    local phase="${6:-}"
+    local budget="${7:-0}"
 
-    local dir
+    local dir run_id budget_json original_chars_json final_chars_json
+    run_id=$(octo_current_run_id)
     dir=$(octo_run_dir)
     mkdir -p "$dir"
+
+    budget_json=$(octo_json_normalize_uint "$budget") || return 2
+    original_chars_json=$(octo_json_normalize_uint "$original_chars") || return 2
+    final_chars_json=$(octo_json_normalize_uint "$final_chars") || return 2
 
     if command -v jq >/dev/null 2>&1; then
         jq -nc \
             --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg run_id "$run_id" \
             --arg agent "$agent" \
+            --arg role "$role" \
+            --arg phase "$phase" \
             --arg outcome "$outcome" \
-            --argjson original_chars "${original_chars:-0}" \
-            --argjson final_chars "${final_chars:-0}" \
-            '{ts:$ts,agent:$agent,original_chars:$original_chars,final_chars:$final_chars,outcome:$outcome}' \
+            --argjson budget "$budget_json" \
+            --argjson original_chars "$original_chars_json" \
+            --argjson final_chars "$final_chars_json" \
+            '{ts:$ts,run_id:$run_id,agent:$agent,role:$role,phase:$phase,budget:$budget,original_chars:$original_chars,final_chars:$final_chars,outcome:$outcome}' \
             >> "$dir/oversize.jsonl" 2>/dev/null || true
     else
-        printf '{"ts":"%s","agent":"%s","original_chars":%d,"final_chars":%d,"outcome":"%s"}\n' \
-            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent" "$original_chars" "$final_chars" "$outcome" \
+        local ts_json run_id_json agent_json role_json phase_json outcome_json
+        ts_json=$(octo_json_quote "$(date -u +%Y-%m-%dT%H:%M:%SZ)") || return 2
+        run_id_json=$(octo_json_quote "$run_id") || return 2
+        agent_json=$(octo_json_quote "$agent") || return 2
+        role_json=$(octo_json_quote "$role") || return 2
+        phase_json=$(octo_json_quote "$phase") || return 2
+        outcome_json=$(octo_json_quote "$outcome") || return 2
+        printf '{"ts":%s,"run_id":%s,"agent":%s,"role":%s,"phase":%s,"budget":%s,"original_chars":%s,"final_chars":%s,"outcome":%s}\n' \
+            "$ts_json" "$run_id_json" "$agent_json" "$role_json" "$phase_json" \
+            "$budget_json" "$original_chars_json" "$final_chars_json" "$outcome_json" \
             >> "$dir/oversize.jsonl"
     fi
 }

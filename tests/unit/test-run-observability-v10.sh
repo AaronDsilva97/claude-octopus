@@ -162,4 +162,87 @@ else
     test_fail "status_rc=$cli_status_rc explain_rc=$cli_explain_rc ledger=$(<"$provider_ledger" 2>/dev/null || true)"
 fi
 
+test_case "proof-disabled compatibility records share the stable run-contract identity"
+proof_disabled_result="$(
+    unset OCTOPUS_RUN_ID OCTOPUS_SESSION_ID CLAUDE_CODE_SESSION_ID \
+        CLAUDE_SESSION_ID CLAUDE_CODE_SESSION OCTO_RUN_CONTRACT_FALLBACK_ID
+    export WORKSPACE_DIR="$TEST_TMP_DIR/proof-disabled-workspace"
+    export OCTOPUS_PROOF_PACKET=0
+    source "$PROJECT_ROOT/scripts/lib/run-contract.sh"
+    source "$PROJECT_ROOT/scripts/lib/error-tracking.sh"
+    first_id="$(octo_run_contract_id)"
+    second_id="$(octo_current_run_id)"
+    record_oversize_event codex 100 40 summarized implementation-verifier review 12
+    write_agent_status codex ok 25 10 "" 10 "$good_output" \
+        implementation-verifier verifier-seat contributed eligible
+    if [[ "$first_id" == "$second_id" ]] &&
+       [[ -s "$WORKSPACE_DIR/runs/$first_id/oversize.jsonl" ]] &&
+       [[ -s "$WORKSPACE_DIR/runs/$first_id/agents.jsonl" ]] &&
+       jq -e --arg run_id "$first_id" '
+           .run_id == $run_id and .agent == "codex" and
+           .role == "implementation-verifier" and .phase == "review" and
+           .budget == 12 and .original_chars == 100 and .final_chars == 40 and
+           (.ts | length) > 0
+       ' "$WORKSPACE_DIR/runs/$first_id/oversize.jsonl" >/dev/null 2>&1; then
+        printf 'pass\n'
+    else
+        printf 'fail:%s:%s\n' "$first_id" "$second_id"
+    fi
+)"
+if [[ "$proof_disabled_result" == pass ]]; then
+    test_pass
+else
+    test_fail "proof-disabled records diverged: $proof_disabled_result"
+fi
+
+test_case "standalone fallback identity survives command substitutions"
+standalone_ids="$(
+    unset OCTOPUS_RUN_ID OCTOPUS_SESSION_ID CLAUDE_CODE_SESSION_ID \
+        CLAUDE_SESSION_ID CLAUDE_CODE_SESSION
+    unset -f octo_run_contract_id
+    first_standalone_id="$(octo_current_run_id)"
+    second_standalone_id="$(octo_current_run_id)"
+    printf '%s\n%s\n' "$first_standalone_id" "$second_standalone_id"
+)"
+first_standalone_id="$(printf '%s\n' "$standalone_ids" | sed -n '1p')"
+second_standalone_id="$(printf '%s\n' "$standalone_ids" | sed -n '2p')"
+if [[ -n "$first_standalone_id" && "$first_standalone_id" == "$second_standalone_id" ]]; then
+    test_pass
+else
+    test_fail "standalone fallback identity changed across command substitutions"
+fi
+
+test_case "no-jq oversize writer JSON-escapes arbitrary string fields"
+no_jq_run_id=$'run"id\\tail\nnext'
+no_jq_agent=$'codex"agent\\tail\nnext'
+no_jq_role=$'review"role\\tail\nnext'
+no_jq_phase=$'review"phase\\tail\nnext'
+no_jq_outcome=$'summarized"outcome\\tail\nnext'
+(
+    export OCTOPUS_RUN_ID="$no_jq_run_id"
+    command() {
+        if [[ "${1:-}" == "-v" && "${2:-}" == "jq" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    record_oversize_event "$no_jq_agent" 00100 00040 "$no_jq_outcome" \
+        "$no_jq_role" "$no_jq_phase" 00012
+)
+no_jq_record="$WORKSPACE_DIR/runs/$no_jq_run_id/oversize.jsonl"
+if jq -e \
+    --arg run_id "$no_jq_run_id" \
+    --arg agent "$no_jq_agent" \
+    --arg role "$no_jq_role" \
+    --arg phase "$no_jq_phase" \
+    --arg outcome "$no_jq_outcome" '
+      .run_id == $run_id and .agent == $agent and .role == $role and
+      .phase == $phase and .outcome == $outcome and
+      .budget == 12 and .original_chars == 100 and .final_chars == 40
+    ' "$no_jq_record" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "no-jq writer emitted invalid or lossy JSON: $(cat "$no_jq_record" 2>/dev/null || true)"
+fi
+
 test_summary

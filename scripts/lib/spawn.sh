@@ -13,6 +13,9 @@ fi
 if ! type run_contract_transition >/dev/null 2>&1; then
     source "${_octopus_spawn_lib_dir}/run-contract.sh" 2>/dev/null || true
 fi
+if ! type write_agent_result_prompt >/dev/null 2>&1; then
+    source "${_octopus_spawn_lib_dir}/result-file.sh" 2>/dev/null || true
+fi
 
 quota_watcher_kill_spawn_children() {
     local spawn_pid="$1"
@@ -609,9 +612,10 @@ ${heuristic_ctx}"
     if [[ "$agent_type" == codex* && "$agent_type" != "codex-review" ]]; then
         enhanced_prompt="${CODEX_SUBAGENT_PREAMBLE}${enhanced_prompt}"
     fi
-    local tokens_in
-    tokens_in=$(( ${#enhanced_prompt} / 4 ))
-    enhanced_prompt=$(enforce_context_budget "$enhanced_prompt" "${role:-}" "$agent_type")
+    local tokens_in _budget_original_chars _budget_final_chars _budget_compression
+    _budget_original_chars=${#enhanced_prompt}
+    tokens_in=$(( _budget_original_chars / 4 ))
+    enhanced_prompt=$(enforce_context_budget "$enhanced_prompt" "${role:-}" "$agent_type" "${phase:-}")
     local _budget_rc=$?
     if [[ $_budget_rc -ne 0 ]]; then
         octo_spawn_contract_finish "$_contract_seat_id" failed "" "" \
@@ -619,6 +623,9 @@ ${heuristic_ctx}"
         type write_agent_status >/dev/null 2>&1 && write_agent_status "$agent_type" "failed" "$tokens_in" 0 "Prompt exceeded context budget" 0 "" "${role:-}" || true
         return "$_budget_rc"
     fi
+    _budget_final_chars=${#enhanced_prompt}
+    _budget_compression=none
+    [[ "$_budget_final_chars" -lt "$_budget_original_chars" ]] && _budget_compression=applied
 
     if declare -f octo_routing_policy >/dev/null 2>&1 &&
        [[ "$(octo_routing_policy 2>/dev/null || printf '%s' off)" == "eval" ]] &&
@@ -892,8 +899,15 @@ ${heuristic_ctx}"
                 "Failed to persist Agent Teams result header" 74 "" >/dev/null 2>&1 || true
             return 74
         fi
-        echo "# Dispatch: Agent Teams (native)" >> "$result_file"
+        printf '# Prompt metadata: original_chars=%s final_chars=%s compression=%s\n' \
+            "$_budget_original_chars" "$_budget_final_chars" "$_budget_compression" >> "$result_file"
+        if ! write_agent_result_prompt "$result_file" "$enhanced_prompt"; then
+            octo_spawn_contract_finish "$_contract_seat_id" failed "" "" \
+                "Failed to persist Agent Teams dispatched prompt" 74 "" >/dev/null 2>&1 || true
+            return 74
+        fi
         echo "# Started: $(date)" >> "$result_file"
+        echo "# Dispatch: Agent Teams (native)" >> "$result_file"
         if [[ "$SUPPORTS_HOOK_LAST_MESSAGE" == "true" ]]; then
             echo "# Result-capture: SubagentStop hook" >> "$result_file"
         fi
@@ -932,8 +946,18 @@ ${heuristic_ctx}"
         set -o pipefail  # v9.15.1: Pipeline exit code = first failure
         octo_capture_current_shell_pid || OCTO_CAPTURED_SHELL_PID="$$"
 
-        write_agent_result_header "$result_file" "$agent_type" "${model:-unresolved}" "$task_id" "${role:-none}" "${phase:-none}" "legacy"
-        echo "# Prompt: $prompt" >> "$result_file"
+        if ! write_agent_result_header "$result_file" "$agent_type" "${model:-unresolved}" "$task_id" "${role:-none}" "${phase:-none}" "legacy"; then
+            octo_spawn_contract_finish "$_contract_seat_id" failed "" "" \
+                "Failed to persist background result header" 74 "" >/dev/null 2>&1 || true
+            exit 74
+        fi
+        printf '# Prompt metadata: original_chars=%s final_chars=%s compression=%s\n' \
+            "$_budget_original_chars" "$_budget_final_chars" "$_budget_compression" >> "$result_file"
+        if ! write_agent_result_prompt "$result_file" "$enhanced_prompt"; then
+            octo_spawn_contract_finish "$_contract_seat_id" failed "" "" \
+                "Failed to persist background dispatched prompt" 74 "" >/dev/null 2>&1 || true
+            exit 74
+        fi
         echo "# Started: $(date)" >> "$result_file"
         echo "" >> "$result_file"
         echo "## Output" >> "$result_file"
@@ -1510,14 +1534,20 @@ spawn_agent_capture_pid() {
     local role="${4:-}"
     local phase="${5:-}"
     local use_fork="${6:-false}"
-
-    local pid_file
-    pid_file=$(mktemp "${TMPDIR:-/tmp}/octo-spawn-pid.XXXXXX") || return 1
+    local pid_file err_file
+    if ! pid_file=$(mktemp "${TMPDIR:-/tmp}/octo-spawn-pid.XXXXXX"); then
+        return 1
+    fi
+    if ! err_file=$(mktemp "${TMPDIR:-/tmp}/octo-spawn-stderr.XXXXXX"); then
+        rm -f "$pid_file" 2>/dev/null || true
+        return 1
+    fi
     if [[ "${OCTOPUS_SPAWN_PID_HANDOFF_FD:-}" == "9" ]]; then
         printf 'capture-file:%s\n' "$pid_file" >&9
     fi
 
-    spawn_agent "$agent_type" "$prompt" "$task_id" "$role" "$phase" "$use_fork" >"$pid_file" 2>&1 &
+    spawn_agent "$agent_type" "$prompt" "$task_id" "$role" "$phase" "$use_fork" \
+        8>&- >"$pid_file" 2>"$err_file" &
     local wrapper_pid=$!
     if [[ "${OCTOPUS_SPAWN_PID_HANDOFF_FD:-}" == "9" ]]; then
         printf 'wrapper:%s\n' "$wrapper_pid" >&9
@@ -1548,6 +1578,7 @@ spawn_agent_capture_pid() {
     done
 
     if [[ -z "$pid" ]]; then
+        cat "$err_file" >&2 2>/dev/null || true
         log "ERROR" "spawn_agent produced no provider PID for $task_id; refusing to track wrapper PID $wrapper_pid" >&2
         if [[ -s "$pid_file" ]]; then
             tail -20 "$pid_file" >&2 || true
@@ -1566,7 +1597,7 @@ spawn_agent_capture_pid() {
             kill "$wrapper_pid" 2>/dev/null || true
         fi
         wait "$wrapper_pid" 2>/dev/null || true
-        rm -f "$pid_file"
+        rm -f "$pid_file" "$err_file"
         return 1
     fi
 
@@ -1577,6 +1608,8 @@ spawn_agent_capture_pid() {
     if [[ "${OCTOPUS_SPAWN_PID_HANDOFF_FD:-}" == "9" ]]; then
         printf 'provider:%s\n' "$pid" >&9
     fi
-    rm -f "$pid_file"
+    wait "$wrapper_pid" 2>/dev/null || true
+    cat "$err_file" >&2 2>/dev/null || true
+    rm -f "$pid_file" "$err_file"
     echo "$pid"
 }

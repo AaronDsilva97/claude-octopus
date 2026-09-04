@@ -649,16 +649,25 @@ review_run_agent_sync_progress() {
     [[ "$poll_secs" -lt 1 ]] && poll_secs=1
     mkdir -p "$results_dir" 2>/dev/null || true
 
-    local start_epoch out_file rc_file pid rc last_progress last_fp current_fp now
+    local start_epoch out_file err_file rc_file pid rc last_progress last_fp current_fp now
     start_epoch=$(date +%s)
     out_file="${results_dir}/.tmp-review-sync-${label}-$$-${RANDOM}.out"
+    err_file="${out_file}.err"
     rc_file="${out_file}.rc"
-    : > "$out_file"
+    if ! (umask 077; : > "$out_file" && : > "$err_file"); then
+        rm -f "$out_file" "$err_file" "$rc_file" 2>/dev/null || true
+        return 1
+    fi
     rm -f "$rc_file" 2>/dev/null || true
 
     (
-        run_agent_sync "$agent_type" "$prompt" 0 "$role" "$phase" > "$out_file" 2>&1
-        echo "$?" > "$rc_file"
+        umask 077
+        set +e
+        run_agent_sync "$agent_type" "$prompt" 0 "$role" "$phase" \
+            8>&- > "$out_file" 2> "$err_file"
+        rc=$?
+        echo "$rc" > "$rc_file"
+        exit "$rc"
     ) &
     pid=$!
     last_progress=$(date +%s)
@@ -684,8 +693,9 @@ review_run_agent_sync_progress() {
     wait "$pid" 2>/dev/null || true
     rc=1
     [[ -f "$rc_file" ]] && rc=$(cat "$rc_file" 2>/dev/null || echo 1)
+    cat "$err_file" >&2 2>/dev/null || true
     cat "$out_file" 2>/dev/null || true
-    rm -f "$out_file" "$rc_file" 2>/dev/null || true
+    rm -f "$out_file" "$err_file" "$rc_file" 2>/dev/null || true
     return "$rc"
 }
 
