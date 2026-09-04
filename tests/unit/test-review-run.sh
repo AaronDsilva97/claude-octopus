@@ -241,6 +241,79 @@ assert_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
 assert_not_contains "$(cat "$TMPDIR_TEST/working-tree.diff")" \
   "noise.ignored" "review_collect_diff: working-tree excludes ignored untracked files"
 
+# ── all-changes diff includes staged, unstaged, and untracked files ───────────
+
+ALL_CHANGES_REPO="$TMPDIR_TEST/review-all-changes"
+mkdir -p "$ALL_CHANGES_REPO"
+(
+  cd "$ALL_CHANGES_REPO"
+  git init -q
+  git config user.email test@example.com
+  git config user.name "Octopus Test"
+  printf 'base staged\n' > staged.txt
+  printf 'base unstaged\n' > unstaged.txt
+  git add staged.txt unstaged.txt
+  git commit -q -m init
+  printf 'changed staged\n' > staged.txt
+  git add staged.txt
+  printf 'changed unstaged\n' > unstaged.txt
+  printf 'brand new\n' > untracked.txt
+  review_collect_diff all-changes > "$TMPDIR_TEST/all-changes.diff"
+)
+assert_contains "$(cat "$TMPDIR_TEST/all-changes.diff")" \
+  "staged.txt" "review_collect_diff: all-changes includes staged-only changes"
+assert_contains "$(cat "$TMPDIR_TEST/all-changes.diff")" \
+  "unstaged.txt" "review_collect_diff: all-changes includes unstaged changes"
+assert_contains "$(cat "$TMPDIR_TEST/all-changes.diff")" \
+  "untracked.txt" "review_collect_diff: all-changes includes untracked files"
+assert_contains "$(cat "$TMPDIR_TEST/all-changes.diff")" \
+  "\+changed staged" "review_collect_diff: all-changes includes staged content"
+
+# ── all-changes diff supports an unborn HEAD ─────────────────────────────────
+
+UNBORN_REPO="$TMPDIR_TEST/review-all-changes-unborn"
+mkdir -p "$UNBORN_REPO"
+(
+  cd "$UNBORN_REPO"
+  git init -q
+  printf 'first staged content\n' > first.txt
+  git add first.txt
+  review_collect_diff all-changes > "$TMPDIR_TEST/all-changes-unborn.diff"
+)
+assert_contains "$(cat "$TMPDIR_TEST/all-changes-unborn.diff")" \
+  "first.txt" "review_collect_diff: all-changes handles staged files with unborn HEAD"
+assert_contains "$(cat "$TMPDIR_TEST/all-changes-unborn.diff")" \
+  "\+first staged content" "review_collect_diff: unborn HEAD includes staged file content"
+
+# ── invocation-owned findings identity ───────────────────────────────────────
+
+ARTIFACT_REPO="$TMPDIR_TEST/review-artifact-id"
+ARTIFACT_RESULTS="$TMPDIR_TEST/review-artifact-results"
+mkdir -p "$ARTIFACT_REPO" "$ARTIFACT_RESULTS"
+(
+  cd "$ARTIFACT_REPO"
+  git init -q
+  git config user.email test@example.com
+  git config user.name "Octopus Test"
+  printf 'clean\n' > clean.txt
+  git add clean.txt
+  git commit -q -m init
+  log() { :; }
+  render_terminal_report() { :; }
+  check_codex_auth_freshness() { return 0; }
+  # The no-diff path writes its findings artifact before returning non-zero.
+  RESULTS_DIR="$ARTIFACT_RESULTS" \
+    review_run '{"target":"staged","artifactId":"unit-owned-token"}' >/dev/null 2>&1 || true
+)
+artifact_file=$(find "$ARTIFACT_RESULTS" -maxdepth 1 -type f \
+  -name 'review-findings-*-unit-owned-token.json' -print -quit)
+if [[ -n "$artifact_file" ]] &&
+   [[ "$(find "$ARTIFACT_RESULTS" -maxdepth 1 -type f -name 'review-findings-*.json' | wc -l | tr -d ' ')" == "1" ]]; then
+  pass "review_run: artifactId identifies exactly one findings file"
+else
+  fail "review_run: artifactId identifies exactly one findings file"
+fi
+
 # ── MCP schema ───────────────────────────────────────────────────────────────
 
 MCP_INDEX="$PROJECT_ROOT/mcp-server/src/index.ts"

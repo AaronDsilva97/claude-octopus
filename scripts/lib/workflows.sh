@@ -2466,56 +2466,542 @@ tangle_build_develop_review_context() {
 
 TANGLE_REVIEW_FINDINGS_FILE=""
 
+_tangle_review_capture() {
+    local review_profile="$1"
+    local review_log="$2"
+    local start_gate="${3:-}"
+    local pipe_dir="${review_log}.pipes"
+    local stdout_pipe="${pipe_dir}/stdout"
+    local stderr_pipe="${pipe_dir}/stderr"
+    local stdout_tee_pid stderr_tee_pid review_rc=0 gate_ticks=0
+
+    if [[ -n "$start_gate" ]]; then
+        while [[ ! -s "$start_gate" && "$gate_ticks" -lt 500 ]]; do
+            /bin/sleep 0.01
+            gate_ticks=$((gate_ticks + 1))
+        done
+        [[ -s "$start_gate" ]] || return 125
+    fi
+
+    mkdir -m 0700 "$pipe_dir" || return 1
+    if ! mkfifo "$stdout_pipe" "$stderr_pipe"; then
+        rm -f "$stdout_pipe" "$stderr_pipe" 2>/dev/null || true
+        rmdir "$pipe_dir" 2>/dev/null || true
+        return 1
+    fi
+    tee -a "$review_log" < "$stdout_pipe" &
+    stdout_tee_pid=$!
+    tee -a "$review_log" < "$stderr_pipe" >&2 &
+    stderr_tee_pid=$!
+    review_run "$review_profile" > "$stdout_pipe" 2> "$stderr_pipe" || review_rc=$?
+    wait "$stdout_tee_pid" 2>/dev/null || true
+    wait "$stderr_tee_pid" 2>/dev/null || true
+    rm -f "$stdout_pipe" "$stderr_pipe" 2>/dev/null || true
+    rmdir "$pipe_dir" 2>/dev/null || true
+    return "$review_rc"
+}
+
+_tangle_review_restore_traps() {
+    local previous_exit_trap="${1:-}"
+    local previous_int_trap="${2:-}"
+    local previous_term_trap="${3:-}"
+    if [[ -n "$previous_exit_trap" ]]; then eval "$previous_exit_trap"; else trap - EXIT; fi
+    if [[ -n "$previous_int_trap" ]]; then eval "$previous_int_trap"; else trap - INT; fi
+    if [[ -n "$previous_term_trap" ]]; then eval "$previous_term_trap"; else trap - TERM; fi
+}
+
+_tangle_review_invoke_saved_trap() {
+    local signal="$1"
+    local saved_trap="$2"
+    local relay_signal="" relay_trap=""
+    shift 2
+    [[ -n "$saved_trap" ]] || return 0
+
+    # Bash defers a nested INT while already running an INT trap. Relay that
+    # shell-quoted action through USR1; TERM can be re-signalled directly. This
+    # never decodes or evaluates the saved action as positional arguments.
+    case "$signal:$saved_trap" in
+        INT:*" SIGINT")
+            relay_signal="USR1"
+            relay_trap="${saved_trap% SIGINT} SIGUSR1"
+            ;;
+        TERM:*" SIGTERM")
+            relay_signal="TERM"
+            relay_trap="$saved_trap"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    (
+        local current_pid="" pid_file
+        eval "$relay_trap"
+        pid_file=$(mktemp "${TMPDIR:-/tmp}/octopus-tangle-trap-pid.XXXXXX") || exit 1
+        sh -c 'printf "%s\n" "$PPID" > "$1"' _ "$pid_file" 2>/dev/null || {
+            rm -f "$pid_file"
+            exit 1
+        }
+        IFS= read -r current_pid < "$pid_file" || true
+        rm -f "$pid_file"
+        kill -s "$relay_signal" "$current_pid" 2>/dev/null || true
+    ) || true
+}
+
+_tangle_review_read_pgid() {
+    local pid="$1"
+    ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]'
+}
+
+_tangle_review_start_capture() {
+    local review_profile="$1"
+    local review_log="$2"
+    local start_gate="$3"
+    local monitor_was_enabled=false parent_pgid="" capture_pgid="" attempt=0
+    [[ "$-" == *m* ]] && monitor_was_enabled=true
+    set -m
+    _tangle_review_capture "$review_profile" "$review_log" "$start_gate" &
+    _review_capture_pid=$!
+    [[ "$monitor_was_enabled" == true ]] || set +m
+
+    parent_pgid=$(_tangle_review_read_pgid "$$") || parent_pgid=""
+    while [[ "$attempt" -lt 50 ]]; do
+        capture_pgid=$(_tangle_review_read_pgid "$_review_capture_pid") || capture_pgid=""
+        [[ -n "$capture_pgid" ]] && break
+        kill -0 "$_review_capture_pid" 2>/dev/null || break
+        /bin/sleep 0.01
+        attempt=$((attempt + 1))
+    done
+    if [[ ! "$capture_pgid" =~ ^[1-9][0-9]*$ ]] ||
+       [[ "$capture_pgid" != "$_review_capture_pid" ]] ||
+       [[ -n "$parent_pgid" && "$capture_pgid" == "$parent_pgid" ]]; then
+        kill -KILL "$_review_capture_pid" 2>/dev/null || true
+        wait "$_review_capture_pid" 2>/dev/null || true
+        _review_capture_pid=""
+        _review_capture_pgid=""
+        log ERROR "Contextual code review cannot establish a dedicated process group; refusing provider dispatch"
+        return 1
+    fi
+    _review_capture_pgid="$capture_pgid"
+    printf 'ready\n' > "$start_gate"
+}
+
+_tangle_review_stop_capture_group() {
+    local capture_pgid="${1:-}"
+    local current_pgid=""
+    [[ "$capture_pgid" =~ ^[1-9][0-9]*$ ]] || return 0
+    current_pgid=$(_tangle_review_read_pgid "$$") || current_pgid=""
+    [[ -n "$current_pgid" && "$capture_pgid" == "$current_pgid" ]] && return 1
+    kill -STOP -- "-$capture_pgid" 2>/dev/null || true
+}
+
+_tangle_review_kill_capture_group() {
+    local capture_pgid="${1:-}"
+    local current_pgid=""
+    [[ "$capture_pgid" =~ ^[1-9][0-9]*$ ]] || return 0
+    current_pgid=$(_tangle_review_read_pgid "$$") || current_pgid=""
+    [[ -n "$current_pgid" && "$capture_pgid" == "$current_pgid" ]] && return 1
+    kill -TERM -- "-$capture_pgid" 2>/dev/null || true
+    kill -CONT -- "-$capture_pgid" 2>/dev/null || true
+    /bin/sleep 0.05
+    kill -KILL -- "-$capture_pgid" 2>/dev/null || true
+}
+
+_tangle_review_kill_scoped_ledger_groups() {
+    local artifact_id="${1:-}"
+    local ledger_pid ledger_agent ledger_task
+    [[ -n "$artifact_id" && -n "${PID_FILE:-}" && -f "$PID_FILE" ]] || return 0
+    # Cooperative workers that start a new session remain cancellable because
+    # spawn_agent records their group leader here. An unregistered process that
+    # calls setsid and reparents itself cannot be discovered portably on macOS;
+    # the enclosing review still exits fail-closed and accepts no findings.
+    while IFS=: read -r ledger_pid ledger_agent ledger_task; do
+        case "$ledger_task" in
+            review-*"-${artifact_id}"|review-*"-${artifact_id}-"*)
+                review_kill_process_tree_frozen "$ledger_pid"
+                wait "$ledger_pid" 2>/dev/null || true
+                ;;
+        esac
+    done < "$PID_FILE"
+}
+
+_tangle_review_findings_collision() {
+    local artifact_id="$1"
+    local results_dir="${RESULTS_DIR:-${HOME}/.claude-octopus/results}"
+    find "$results_dir" -maxdepth 1 \
+        -name "review-findings-*-${artifact_id}.json" -print -quit 2>/dev/null | grep -q .
+}
+
+_tangle_review_claim_artifact() {
+    local artifact_id="$1"
+    local claim_dir="$2"
+    if ! mkdir -m 0700 "$claim_dir" 2>/dev/null; then
+        log ERROR "Contextual code review artifact identity is already claimed"
+        return 1
+    fi
+    if _tangle_review_findings_collision "$artifact_id"; then
+        rmdir "$claim_dir" 2>/dev/null || true
+        log ERROR "Contextual code review artifact identity collides with pre-existing findings"
+        return 1
+    fi
+}
+
+_tangle_review_handle_signal() {
+    local signal="$1"
+    shift
+    local signal_status=143
+    local saved_trap="${_review_term_trap:-}"
+    if [[ "$signal" == "INT" ]]; then
+        signal_status=130
+        saved_trap="${_review_int_trap:-}"
+    fi
+
+    local capture_pid="${_review_capture_pid:-}"
+    _tangle_review_stop_capture_group "${_review_capture_pgid:-}" || true
+    if [[ "$capture_pid" =~ ^[1-9][0-9]*$ ]]; then
+        # Close the fork-to-ledger window while the capture group is frozen.
+        review_kill_descendants_frozen "$capture_pid" || true
+    fi
+    _tangle_review_kill_scoped_ledger_groups "${artifact_id:-}" || true
+    _tangle_review_kill_capture_group "${_review_capture_pgid:-}" || true
+    if [[ "$capture_pid" =~ ^[1-9][0-9]*$ ]]; then
+        if [[ ! "${_review_capture_pgid:-}" =~ ^[1-9][0-9]*$ ]]; then
+            # The child PID is known before its group is recorded. Do not wait
+            # for the unopened gate if cancellation lands in that short window.
+            kill -KILL "$capture_pid" 2>/dev/null || true
+        fi
+        wait "$capture_pid" 2>/dev/null || true
+    fi
+    _tangle_review_cleanup_invocation "${marker:-}" "${review_log:-}" \
+        "${review_start_gate:-}" "${_review_claim_dir:-}" "${_review_retry_claim_dir:-}"
+    _tangle_review_restore_traps \
+        "${_review_exit_trap:-}" "${_review_int_trap:-}" "${_review_term_trap:-}"
+
+    if [[ -n "$saved_trap" ]]; then
+        _tangle_review_invoke_saved_trap "$signal" "$saved_trap" "$@"
+    fi
+    exit "$signal_status"
+}
+
+_tangle_review_invoke_saved_exit_trap() {
+    local exit_status="$1"
+    local saved_trap="$2"
+    shift 2
+    [[ -n "$saved_trap" ]] || return 0
+    (
+        eval "$saved_trap"
+        exit "$exit_status"
+    ) || true
+}
+
+_tangle_review_handle_exit() {
+    local exit_status="$1"
+    shift
+    local saved_trap="${_review_exit_trap:-}"
+    local capture_pid="${_review_capture_pid:-}"
+    trap - EXIT INT TERM
+    _tangle_review_stop_capture_group "${_review_capture_pgid:-}" || true
+    if [[ "$capture_pid" =~ ^[1-9][0-9]*$ ]]; then
+        review_kill_descendants_frozen "$capture_pid" || true
+    fi
+    _tangle_review_kill_scoped_ledger_groups "${artifact_id:-}" || true
+    _tangle_review_kill_capture_group "${_review_capture_pgid:-}" || true
+    if [[ "$capture_pid" =~ ^[1-9][0-9]*$ ]]; then
+        if [[ ! "${_review_capture_pgid:-}" =~ ^[1-9][0-9]*$ ]]; then
+            kill -KILL "$capture_pid" 2>/dev/null || true
+        fi
+        wait "$capture_pid" 2>/dev/null || true
+    fi
+    _tangle_review_cleanup_invocation "${marker:-}" "${review_log:-}" \
+        "${review_start_gate:-}" "${_review_claim_dir:-}" "${_review_retry_claim_dir:-}"
+    _tangle_review_invoke_saved_exit_trap "$exit_status" "$saved_trap" "$@"
+    return "$exit_status"
+}
+
+# Materialize exactly what Tangle intends to review. The snapshot is immutable and
+# independent of the transient Git index state, so staged-only changes cannot vanish.
+tangle_build_review_diff_snapshot() {
+    local task_group="$1"
+    local round_label="${2:-initial}"
+    local results_dir="${RESULTS_DIR:-${HOME}/.claude-octopus/results}"
+    local snapshot_name snapshot_path snapshot_tmp snapshot_tmp_dir repo_root temp_root_physical status_text hash_value
+    local results_dir_physical exclude_path=""
+
+    if [[ -z "$task_group" || "$task_group" == "." || "$task_group" == ".." ||
+          "$task_group" == *[![:alnum:]_.-]* || "$task_group" == *..* ||
+          -z "$round_label" || "$round_label" == "." || "$round_label" == ".." ||
+          "$round_label" == *[![:alnum:]_.-]* || "$round_label" == *..* ]]; then
+        log ERROR "tangle review snapshot labels contain unsafe path characters"
+        return 1
+    fi
+
+    mkdir -p "$results_dir" || return 1
+    snapshot_name="tangle-review-input-${task_group}-${round_label}-$(date +%s)-$$.diff"
+    snapshot_path="${results_dir}/${snapshot_name}"
+    if [[ -L "$results_dir" || -e "$snapshot_path" || -L "$snapshot_path" ]]; then
+        log ERROR "tangle review snapshot path is unsafe"
+        return 1
+    fi
+
+    # Keep the scratch file out of the repository so an unignored RESULTS_DIR
+    # cannot make the scratch file part of the all-changes review input.
+    snapshot_tmp_dir="${TMPDIR:-/tmp}"
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    if [[ -n "$repo_root" ]]; then
+        repo_root=$(cd "$repo_root" 2>/dev/null && pwd -P) || return 1
+        results_dir_physical=$(cd "$results_dir" 2>/dev/null && pwd -P) || return 1
+        case "$results_dir_physical" in
+            "$repo_root")
+                log ERROR "repository root cannot be used as the tangle review results directory"
+                return 1
+                ;;
+            "$repo_root"/*) exclude_path="${results_dir_physical#"$repo_root"/}" ;;
+        esac
+        temp_root_physical=$(cd "$snapshot_tmp_dir" 2>/dev/null && pwd -P) || temp_root_physical=""
+        case "$temp_root_physical" in
+            "$repo_root"|"$repo_root"/*) snapshot_tmp_dir="/tmp" ;;
+        esac
+    fi
+    snapshot_tmp=$(mktemp "${snapshot_tmp_dir%/}/octopus-tangle-review-snapshot.XXXXXX") || return 1
+    if [[ -L "$snapshot_tmp" || ! -f "$snapshot_tmp" ]]; then
+        rm -f "$snapshot_tmp" 2>/dev/null || true
+        log ERROR "tangle review snapshot temporary path is unsafe"
+        return 1
+    fi
+
+    (
+        trap 'rm -f "$snapshot_tmp" 2>/dev/null || true' EXIT INT TERM
+
+        if ! review_collect_diff all-changes "$exclude_path" > "$snapshot_tmp"; then
+            return 1
+        fi
+        if [[ -n "$exclude_path" ]]; then
+            status_text=$(git status --porcelain --untracked-files=all -- ":(top)" ":(top,exclude,literal)${exclude_path}" 2>/dev/null || true)
+        else
+            status_text=$(git status --porcelain --untracked-files=all 2>/dev/null || true)
+        fi
+        if [[ ! -s "$snapshot_tmp" && -n "$status_text" ]]; then
+            # One bounded regeneration handles transient index/worktree races. If the
+            # invariant still fails, stop instead of asking reviewers to inspect nothing.
+            review_collect_diff all-changes "$exclude_path" > "$snapshot_tmp" 2>/dev/null || true
+            if [[ ! -s "$snapshot_tmp" ]]; then
+                log ERROR "tangle review snapshot invariant failed: git status is dirty but all-changes diff is empty"
+                return 1
+            fi
+        fi
+        if [[ ! -s "$snapshot_tmp" ]]; then
+            log WARN "No changes found to review"
+            return 2
+        fi
+
+        hash_value=""
+        if command -v sha256sum >/dev/null 2>&1; then
+            hash_value=$(sha256sum "$snapshot_tmp" 2>/dev/null | awk '{print $1}' || true)
+        fi
+        if [[ -z "$hash_value" ]] && command -v shasum >/dev/null 2>&1; then
+            hash_value=$(shasum -a 256 "$snapshot_tmp" 2>/dev/null | awk '{print $1}' || true)
+        fi
+        if [[ -z "$hash_value" ]]; then
+            log ERROR "unable to compute SHA-256 for tangle review snapshot"
+            return 1
+        fi
+
+        mv -f "$snapshot_tmp" "$snapshot_path" || return 1
+        if ! chmod 0444 "$snapshot_path" 2>/dev/null; then
+            rm -f "$snapshot_path" 2>/dev/null || true
+            log ERROR "unable to make tangle review snapshot immutable"
+            return 1
+        fi
+        trap - EXIT INT TERM
+        log INFO "Tangle review snapshot: ${snapshot_path} (sha256=${hash_value})"
+        printf '%s\n' "$snapshot_path"
+    )
+}
+
+_tangle_review_cleanup_invocation() {
+    local marker="${1:-}"
+    local review_log="${2:-}"
+    local review_start_gate="${3:-}"
+    local review_claim_dir="${4:-}"
+    local review_retry_claim_dir="${5:-}"
+    [[ -z "$marker" ]] || rm -f "$marker" 2>/dev/null || true
+    [[ -z "$review_start_gate" ]] || rm -f "$review_start_gate" 2>/dev/null || true
+    if [[ -n "$review_log" ]]; then
+        rm -f "$review_log" "${review_log}.pipes/stdout" \
+            "${review_log}.pipes/stderr" 2>/dev/null || true
+        rmdir "${review_log}.pipes" 2>/dev/null || true
+    fi
+    [[ -z "$review_claim_dir" ]] || rmdir "$review_claim_dir" 2>/dev/null || true
+    [[ -z "$review_retry_claim_dir" ]] || rmdir "$review_retry_claim_dir" 2>/dev/null || true
+}
+
 tangle_run_context_code_review() {
     local task_group="$1"
     local context_file="$2"
     local round_label="${3:-initial}"
-    local marker findings_file review_profile review_rc
+    local marker artifact_id findings_file review_profile review_rc review_target retry_target no_changes_count
+    local review_log="" review_start_gate="" _review_claim_dir="" _review_retry_claim_dir=""
+    local _review_claim_candidate="" _review_retry_claim_candidate=""
+    local explicit_review_target="${OCTOPUS_TANGLE_REVIEW_TARGET:-}"
+    local _review_exit_trap _review_int_trap _review_term_trap _review_traps_installed=0
+    local _review_capture_pid="" _review_capture_pgid="" _review_failure_rc=1
     TANGLE_REVIEW_FINDINGS_FILE=""
 
     if ! declare -F review_run >/dev/null 2>&1; then
         log ERROR "tangle review gate cannot run: review_run is unavailable"
         return 1
     fi
+    if ! declare -F review_terminate_process_tree >/dev/null 2>&1 \
+       || ! declare -F review_kill_descendants_frozen >/dev/null 2>&1 \
+       || ! declare -F review_kill_process_tree_frozen >/dev/null 2>&1; then
+        log ERROR "tangle review gate cannot run: review process cleanup is unavailable"
+        return 1
+    fi
 
-    marker=$(mktemp "${TMPDIR:-/tmp}/octopus-tangle-review-marker.XXXXXX")
-    touch "$marker"
-    local _marker_cleanup_trap
-    _marker_cleanup_trap=$(trap -p RETURN || true)
-    trap 'rm -f "${marker:-}" 2>/dev/null || true' RETURN
+    marker=$(mktemp "${TMPDIR:-/tmp}/octopus-tangle-review-marker.XXXXXX") || return 1
+    artifact_id="${marker##*/}"
+    mkdir -p "${RESULTS_DIR:-${HOME}/.claude-octopus/results}" || {
+        _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+            "$_review_claim_dir" "$_review_retry_claim_dir"
+        return 1
+    }
+    _review_claim_candidate="${RESULTS_DIR:-${HOME}/.claude-octopus/results}/.tangle-review-claim-${artifact_id}"
+    _tangle_review_claim_artifact "$artifact_id" "$_review_claim_candidate" || {
+        _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+            "$_review_claim_dir" "$_review_retry_claim_dir"
+        return 1
+    }
+    _review_claim_dir="$_review_claim_candidate"
+
+    if [[ -n "$explicit_review_target" ]]; then
+        review_target="$explicit_review_target"
+    else
+        review_target=$(tangle_build_review_diff_snapshot "$task_group" "$round_label") || {
+            _review_failure_rc=$?
+            _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+                "$_review_claim_dir" "$_review_retry_claim_dir"
+            return "$_review_failure_rc"
+        }
+    fi
 
     review_profile=$(jq -n \
-        --arg target "${OCTOPUS_TANGLE_REVIEW_TARGET:-working-tree}" \
+        --arg target "$review_target" \
         --arg contextFile "$context_file" \
         --arg contextLabel "Octopus tangle develop review context (${round_label})" \
+        --arg artifactId "$artifact_id" \
         --arg provenance "octopus-tangle" \
         --arg autonomy "${OCTOPUS_TANGLE_REVIEW_AUTONOMY:-autonomous}" \
         --arg publish "${OCTOPUS_TANGLE_REVIEW_PUBLISH:-never}" \
         --arg history "${OCTOPUS_TANGLE_REVIEW_HISTORY:-fresh}" \
-        '{target:$target, contextFile:$contextFile, contextLabel:$contextLabel, focus:["correctness","security","architecture","tdd","plan-conformance"], provenance:$provenance, autonomy:$autonomy, publish:$publish, history:$history}')
+        '{target:$target, contextFile:$contextFile, contextLabel:$contextLabel, artifactId:$artifactId, focus:["correctness","security","architecture","tdd","plan-conformance"], provenance:$provenance, autonomy:$autonomy, publish:$publish, history:$history}') || {
+        _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+            "$_review_claim_dir" "$_review_retry_claim_dir"
+        return 1
+    }
 
     log INFO "Step 4: Contextual code review (${round_label})..."
-    review_run "$review_profile"
-    review_rc=$?
+    review_log=$(mktemp "${TMPDIR:-/tmp}/octopus-tangle-review-output.XXXXXX") || {
+        _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+            "$_review_claim_dir" "$_review_retry_claim_dir"
+        return 1
+    }
+    review_start_gate=$(mktemp "${TMPDIR:-/tmp}/octopus-tangle-review-start.XXXXXX") || {
+        _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+            "$_review_claim_dir" "$_review_retry_claim_dir"
+        return 1
+    }
+    _review_exit_trap=$(trap -p EXIT || true)
+    _review_int_trap=$(trap -p INT || true)
+    _review_term_trap=$(trap -p TERM || true)
+    trap '_tangle_review_handle_exit "$?" "$@"' EXIT
+    trap '_tangle_review_handle_signal INT "$@"' INT
+    trap '_tangle_review_handle_signal TERM "$@"' TERM
+    _review_traps_installed=1
 
-    findings_file=""
-    local _findings_candidate _findings_mtime _best_findings_mtime=0
-    while IFS= read -r _findings_candidate; do
-        [[ -f "$_findings_candidate" ]] || continue
-        [[ "$_findings_candidate" -nt "$marker" ]] || continue
-        _findings_mtime=$(stat -c '%Y' "$_findings_candidate" 2>/dev/null || stat -f '%m' "$_findings_candidate" 2>/dev/null || echo 0)
-        [[ "$_findings_mtime" =~ ^[0-9]+$ ]] || _findings_mtime=0
-        if [[ "$_findings_mtime" -ge "$_best_findings_mtime" ]]; then
-            _best_findings_mtime="$_findings_mtime"
-            findings_file="$_findings_candidate"
+    if ! _tangle_review_start_capture "$review_profile" "$review_log" "$review_start_gate"; then
+        rm -f "$review_log" "$review_start_gate" 2>/dev/null || true
+        _tangle_review_restore_traps "$_review_exit_trap" "$_review_int_trap" "$_review_term_trap"
+        _review_traps_installed=0
+        _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+            "$_review_claim_dir" "$_review_retry_claim_dir"
+        return 1
+    fi
+    review_rc=0
+    wait "$_review_capture_pid" || review_rc=$?
+    _review_capture_pid=""
+    _review_capture_pgid=""
+    rm -f "$review_start_gate" 2>/dev/null || true
+    no_changes_count=$(grep -ci "No changes found to review" "$review_log" 2>/dev/null || true)
+    no_changes_count=${no_changes_count%%$'\n'*}
+    no_changes_count=${no_changes_count:-0}
+
+    if [[ "$review_rc" -ne 0 && -z "$explicit_review_target" ]] &&
+       [[ "$no_changes_count" -gt 0 ]] &&
+       [[ -n "$(git status --porcelain --untracked-files=all 2>/dev/null || true)" ]]; then
+        log WARN "Contextual reviewer reported no changes despite a dirty repository; regenerating immutable review snapshot once"
+        retry_target=$(tangle_build_review_diff_snapshot "$task_group" "${round_label}-retry1") || {
+            rm -f "$review_log" 2>/dev/null || true
+            _tangle_review_restore_traps "$_review_exit_trap" "$_review_int_trap" "$_review_term_trap"
+            _review_traps_installed=0
+            _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+                "$_review_claim_dir" "$_review_retry_claim_dir"
+            return 1
+        }
+        artifact_id="${artifact_id}-retry1"
+        _review_retry_claim_candidate="${RESULTS_DIR:-${HOME}/.claude-octopus/results}/.tangle-review-claim-${artifact_id}"
+        _tangle_review_claim_artifact "$artifact_id" "$_review_retry_claim_candidate" || {
+            _tangle_review_restore_traps "$_review_exit_trap" "$_review_int_trap" "$_review_term_trap"
+            _review_traps_installed=0
+            _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+                "$_review_claim_dir" "$_review_retry_claim_dir"
+            return 1
+        }
+        _review_retry_claim_dir="$_review_retry_claim_candidate"
+        review_profile=$(printf '%s' "$review_profile" | jq -c \
+            --arg target "$retry_target" --arg artifactId "$artifact_id" \
+            '.target=$target | .artifactId=$artifactId')
+        : > "$review_log"
+        review_start_gate=$(mktemp "${TMPDIR:-/tmp}/octopus-tangle-review-start.XXXXXX") || {
+            _tangle_review_restore_traps "$_review_exit_trap" "$_review_int_trap" "$_review_term_trap"
+            _review_traps_installed=0
+            _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+                "$_review_claim_dir" "$_review_retry_claim_dir"
+            return 1
+        }
+        if ! _tangle_review_start_capture "$review_profile" "$review_log" "$review_start_gate"; then
+            rm -f "$review_start_gate" 2>/dev/null || true
+            _tangle_review_restore_traps "$_review_exit_trap" "$_review_int_trap" "$_review_term_trap"
+            _review_traps_installed=0
+            _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+                "$_review_claim_dir" "$_review_retry_claim_dir"
+            return 1
         fi
-    done < <(find "${RESULTS_DIR:-${HOME}/.claude-octopus/results}" -maxdepth 1 -type f -name 'review-findings-*.json' 2>/dev/null || true)
-    rm -f "$marker" 2>/dev/null || true
-    trap - RETURN
-    if [[ -n "$_marker_cleanup_trap" ]]; then
-        eval "$_marker_cleanup_trap"
+        review_rc=0
+        wait "$_review_capture_pid" || review_rc=$?
+        _review_capture_pid=""
+        _review_capture_pgid=""
+        rm -f "$review_start_gate" 2>/dev/null || true
     fi
 
+    findings_file=""
+    local _findings_candidate
+    while IFS= read -r _findings_candidate; do
+        [[ -f "$_findings_candidate" ]] || continue
+        case "${_findings_candidate##*/}" in
+            review-findings-*-"${artifact_id}".json)
+                if [[ -n "$findings_file" ]]; then
+                    log ERROR "Contextual code review produced multiple findings files for one invocation"
+                    findings_file=""
+                    break
+                fi
+                findings_file="$_findings_candidate"
+                ;;
+        esac
+    done < <(find "${RESULTS_DIR:-${HOME}/.claude-octopus/results}" -maxdepth 1 -type f -name 'review-findings-*.json' 2>/dev/null || true)
+    _tangle_review_cleanup_invocation "$marker" "$review_log" "$review_start_gate" \
+        "$_review_claim_dir" "$_review_retry_claim_dir"
+    if [[ "$_review_traps_installed" -eq 1 ]]; then
+        _tangle_review_restore_traps "$_review_exit_trap" "$_review_int_trap" "$_review_term_trap"
+    fi
     if [[ -z "$findings_file" || ! -f "$findings_file" ]]; then
         log ERROR "Contextual code review did not produce a findings file"
         return 1

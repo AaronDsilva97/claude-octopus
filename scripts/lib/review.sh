@@ -1169,34 +1169,104 @@ review_local_synthesis_json() {
     fi
 }
 
-# review_collect_working_tree_diff: collects tracked and untracked working-tree changes.
-review_collect_working_tree_diff() {
+# review_collect_untracked_diff: collects untracked, non-ignored files as unified diffs.
+review_collect_untracked_diff() {
+    local exclude_path="${1:-}"
     local diff_content=""
     local path=""
     local file_diff=""
-    diff_content=$(git diff 2>/dev/null || true)
-
+    local repo_root=""
+    local -a ls_args=(--full-name --others --exclude-standard -z -- ":(top)")
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    [[ -n "$repo_root" ]] || return 0
+    if [[ -n "$exclude_path" ]]; then
+        ls_args+=(":(top,exclude,literal)${exclude_path}")
+    fi
     while IFS= read -r -d '' path; do
-        file_diff=$(git diff --no-index -- /dev/null "$path" 2>/dev/null || true)
+        file_diff=$(git -C "$repo_root" diff --no-index -- /dev/null "$path" 2>/dev/null || true)
         if [[ -n "$file_diff" ]]; then
             [[ -n "$diff_content" ]] && diff_content+=$'\n'
             diff_content+="$file_diff"
         fi
-    done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
+    done < <(git -C "$repo_root" ls-files "${ls_args[@]}" 2>/dev/null)
+    printf '%s' "$diff_content"
+}
 
+# review_collect_working_tree_diff: collects unstaged tracked changes plus untracked files.
+review_collect_working_tree_diff() {
+    local diff_content=""
+    local untracked_content=""
+    diff_content=$(git diff 2>/dev/null || true)
+    untracked_content=$(review_collect_untracked_diff)
+    if [[ -n "$untracked_content" ]]; then
+        [[ -n "$diff_content" ]] && diff_content+=$'\n'
+        diff_content+="$untracked_content"
+    fi
+    printf '%s' "$diff_content"
+}
+
+# review_collect_unborn_worktree_diff: collects the effective worktree of a repository
+# with no commits yet. Every tracked or untracked non-ignored file is an addition relative
+# to the empty repository, and current worktree content wins over transient index state.
+review_collect_unborn_worktree_diff() {
+    local exclude_path="${1:-}"
+    local diff_content=""
+    local path=""
+    local file_diff=""
+    local repo_root=""
+    local -a ls_args=(--full-name --cached --others --exclude-standard -z -- ":(top)")
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    [[ -n "$repo_root" ]] || return 0
+    if [[ -n "$exclude_path" ]]; then
+        ls_args+=(":(top,exclude,literal)${exclude_path}")
+    fi
+    while IFS= read -r -d '' path; do
+        [[ -f "$repo_root/$path" || -L "$repo_root/$path" ]] || continue
+        file_diff=$(git -C "$repo_root" diff --no-index -- /dev/null "$path" 2>/dev/null || true)
+        if [[ -n "$file_diff" ]]; then
+            [[ -n "$diff_content" ]] && diff_content+=$'\n'
+            diff_content+="$file_diff"
+        fi
+    done < <(git -C "$repo_root" ls-files "${ls_args[@]}" 2>/dev/null)
+    printf '%s' "$diff_content"
+}
+
+# review_collect_all_changes_diff: collects the effective tracked worktree against HEAD
+# plus untracked files. Unlike working-tree, this includes staged-only changes too.
+# An unborn repository is compared to the empty repository instead of assuming HEAD exists.
+review_collect_all_changes_diff() {
+    local exclude_path="${1:-}"
+    local diff_content=""
+    local untracked_content=""
+    if git rev-parse --verify HEAD >/dev/null 2>&1; then
+        if [[ -n "$exclude_path" ]]; then
+            diff_content=$(git diff HEAD -- ":(top)" ":(top,exclude,literal)${exclude_path}" 2>/dev/null || true)
+        else
+            diff_content=$(git diff HEAD 2>/dev/null || true)
+        fi
+        untracked_content=$(review_collect_untracked_diff "$exclude_path")
+        if [[ -n "$untracked_content" ]]; then
+            [[ -n "$diff_content" ]] && diff_content+=$'\n'
+            diff_content+="$untracked_content"
+        fi
+    else
+        diff_content=$(review_collect_unborn_worktree_diff "$exclude_path")
+    fi
     printf '%s' "$diff_content"
 }
 
 # review_collect_diff: resolves a review target to unified diff content.
-# Targets can be built-in scopes (staged, working-tree), a PR number, a git
-# pathspec, or an already-generated .diff/.patch file.
+# Targets can be built-in scopes (staged, working-tree, all-changes), a PR number,
+# a git pathspec, or an already-generated .diff/.patch file.
 review_collect_diff() {
     local target="$1"
+    local exclude_path="${2:-}"
     local diff_content=""
 
     case "$target" in
         staged)       diff_content=$(git diff --cached 2>/dev/null || true) ;;
         working-tree) diff_content=$(review_collect_working_tree_diff) ;;
+        all-changes)  diff_content=$(review_collect_all_changes_diff "$exclude_path") ;;
         [0-9]*)       diff_content=$(gh pr diff "$target" 2>/dev/null || true) ;;
         *)
             if [[ -f "$target" ]] && [[ -r "$target" ]] && head -n 20 "$target" 2>/dev/null | grep -Ec "^(diff --git|--- |\+\+\+ |@@ )" >/dev/null; then
@@ -1487,7 +1557,7 @@ review_run() {
     local profile_json="${1:-"{}"}"
 
     # Parse profile fields (with defaults)
-    local target focus provenance autonomy publish debate history context_file context_text context_label
+    local target focus provenance autonomy publish debate history context_file context_text context_label artifact_id
     target=$(echo "$profile_json"       | jq -r '.target       // "staged"')
     focus=$(echo "$profile_json"        | jq -r '.focus        // ["correctness","security","architecture","tdd"]  | join(",")')
     provenance=$(echo "$profile_json"   | jq -r '.provenance   // "unknown"')
@@ -1498,6 +1568,7 @@ review_run() {
     context_file=$(echo "$profile_json" | jq -r '.contextFile  // .context_file  // empty')
     context_text=$(echo "$profile_json" | jq -r '.contextText  // .context_text  // empty')
     context_label=$(echo "$profile_json"| jq -r '.contextLabel // .context_label // "Review context / task contract"')
+    artifact_id=$(echo "$profile_json"  | jq -r '.artifactId   // .artifact_id   // empty')
     if [[ "$target" == "fresh" ]]; then
         target="working-tree"
         history="fresh"
@@ -1525,10 +1596,22 @@ review_run() {
         echo "codex|not-installed|Install: npm i -g @openai/codex" >> "$provider_status_file"
     fi
 
-    local timestamp="$_ts"
+    # Include the caller-provided identity in every cooperative worker task ID.
+    # Cancellation can then reap only the workers owned by this review invocation.
+    local timestamp="$_ts${artifact_id:+-${artifact_id}}"
     local results_dir="${RESULTS_DIR:-$HOME/.claude-octopus/results}"
     # Sync RESULTS_DIR global so spawn_agent writes to the same directory
     RESULTS_DIR="$results_dir"
+    if [[ ${#artifact_id} -gt 96 ]]; then
+        log ERROR "review_run: artifactId exceeds 96 characters"
+        rm -f "$provider_status_file"
+        return 1
+    fi
+    if [[ "$artifact_id" == *[![:alnum:]_.-]* ]]; then
+        log ERROR "review_run: artifactId contains unsafe filename characters"
+        rm -f "$provider_status_file"
+        return 1
+    fi
     local findings_file="$results_dir/review-findings-${timestamp}.json"
     mkdir -p "$results_dir"
 
