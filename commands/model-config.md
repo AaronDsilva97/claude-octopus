@@ -195,7 +195,7 @@ session is not usable here; run `kimi` with the same `KIMI_CODE_HOME` and enter
 After selection, apply the change:
 
 ```bash
-${HOME}/.claude-octopus/plugin/scripts/orchestrate.sh set-model <provider> <model>
+${HOME}/.claude-octopus/plugin/scripts/helpers/octo-model-config.sh set <provider> <model>
 ```
 
 Then confirm: `✓ Set <provider> default → <model>`

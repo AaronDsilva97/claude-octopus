@@ -174,6 +174,46 @@ else
     test_fail "TERM-handling probe hid its timeout: rc=$rc elapsed=${elapsed}s"
 fi
 
+test_case "caller interruption cleans the supervised probe process group"
+interrupt_child_pid_file="$TEST_TMP_DIR/interrupted-child.pid"
+interrupt_probe="$TEST_TMP_DIR/interrupted-probe.sh"
+interrupt_runner="$TEST_TMP_DIR/interrupted-runner.sh"
+cat > "$interrupt_probe" <<'SH'
+#!/bin/sh
+trap '' TERM
+printf '%s\n' "$$" > "$OCTO_INTERRUPT_CHILD_PID_FILE"
+while :; do sleep 1; done
+SH
+cat > "$interrupt_runner" <<'SH'
+#!/usr/bin/env bash
+log() { :; }
+source "$OCTO_BOUNDED_PROBE_LIB"
+_octo_run_bare_probe_with_timeout 30 28 2 "$OCTO_INTERRUPT_PROBE"
+SH
+chmod +x "$interrupt_probe" "$interrupt_runner"
+OCTO_BOUNDED_PROBE_LIB="$PROJECT_ROOT/scripts/lib/bounded-probe.sh" \
+OCTO_INTERRUPT_PROBE="$interrupt_probe" \
+OCTO_INTERRUPT_CHILD_PID_FILE="$interrupt_child_pid_file" \
+    "$interrupt_runner" >/dev/null 2>&1 &
+interrupt_runner_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [[ -s "$interrupt_child_pid_file" ]] && break
+    sleep 0.05
+done
+interrupt_child_pid="$(cat "$interrupt_child_pid_file" 2>/dev/null || true)"
+kill -TERM "$interrupt_runner_pid" 2>/dev/null || true
+interrupt_rc=0
+wait "$interrupt_runner_pid" 2>/dev/null || interrupt_rc=$?
+sleep 0.1
+if [[ "$interrupt_child_pid" =~ ^[1-9][0-9]*$ ]] && \
+   ! kill -0 "$interrupt_child_pid" 2>/dev/null && \
+   [[ "$interrupt_rc" -eq 143 ]]; then
+    test_pass
+else
+    [[ "$interrupt_child_pid" =~ ^[1-9][0-9]*$ ]] && kill -KILL "$interrupt_child_pid" 2>/dev/null || true
+    test_fail "interrupted probe survived or returned the wrong status: rc=$interrupt_rc pid=${interrupt_child_pid:-missing}"
+fi
+
 test_case "non-live suite runner suppresses provider probes without changing live suites"
 runner="$PROJECT_ROOT/tests/run-all-tests.sh"
 if grep -Fq 'if [[ "$test_file" == "$SCRIPT_DIR/live/"* ]]' "$runner" &&

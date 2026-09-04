@@ -36,6 +36,7 @@ OCTOPUS_FABLE5_NO_RETRY	covered-by	test-fable5-mode.sh
 OCTOPUS_FABLE5_ROUTING	covered-by	test-fable5-escalation.sh
 OCTOPUS_IDE_	placeholder	doc template fragment, not a real variable
 OCTOPUS_JOB_ID	skip	opaque correlation id passed through to logs; no behavioural delta
+OCTOPUS_KIMI_MODEL	covered-by	test-kimi-provider.sh
 OCTOPUS_LEGACY_ROLES	covered-by	test-agy-research-defaults.sh
 OCTOPUS_MAX_COST_USD	skip	aborts a run mid-dispatch; needs a live provider to reach the check
 OCTOPUS_OLLAMA_ALLOW_PULL	covered-by	test-codex-pull-guard.sh

@@ -80,7 +80,7 @@ Role defaults follow the accepted [frontier model routing strategy](./MODEL-ROUT
 | **OrcaRouter** | Policy-enforced gateway routing | Governed fallback dispatch and independent model perspectives |
 | **Ollama** *(optional)* | Zero-cost, offline, privacy | Brainstorming, fallback, air-gapped environments |
 | **Qwen** *(optional)* | Qwen3-Coder via API-key or Coding-Plan auth, Chinese language support | Research and code review when Qwen credentials are configured |
-| **Kimi Code** *(optional)* | Independent coding-agent execution with config-scoped credentials | Implementation and review through the standalone Kimi Code CLI |
+| **Kimi Code** *(optional)* | Independent coding-agent execution with config-scoped credentials | Write-capable implementation through the standalone Kimi Code CLI; read-only roles are rejected because print mode auto-approves tools |
 
 ---
 

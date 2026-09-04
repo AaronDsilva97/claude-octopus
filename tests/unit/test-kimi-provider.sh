@@ -8,7 +8,8 @@
 #      and offers a full-env opt-in.
 #   4. providers.json kimi model resolves and kimi-exec.sh emits --model;
 #      "default" emits no --model.
-#   5. kimi_execute propagates a non-zero exit even with stdout.
+#   5. kimi_execute propagates a non-zero exit even with stdout and isolates its
+#      direct-call environment.
 #   6. the Kimi request timeout still works without GNU/BSD timeout.
 #   7. stderr-only authentication failures receive actionable guidance without
 #      contaminating successful response output.
@@ -148,10 +149,9 @@ MOCK
     done
 }
 
-# A mock that enforces the real CLI's argument contract, so a permissive mock
-# cannot green-light an invocation kimi would reject. Mirrors Kimi Code 0.40.1:
-#   -p/--prompt is single-turn and cannot be combined with --auto
-#     ("error: Cannot combine --prompt with --auto.")
+# A mock that enforces the current CLI's argument contract, so a permissive mock
+# cannot green-light an invocation Kimi would reject. --quiet provides the
+# non-interactive, final-message-only print contract.
 #   unknown flags are rejected ("error: unknown option '<flag>'")
 _kimi_strict_mock_bin() {
     local dir="$1"
@@ -167,7 +167,7 @@ while [[ $i -lt ${#args[@]} ]]; do
         --auto)             have_auto=1 ;;
         --output-format)    i=$((i+2)); continue ;;
         -m|--model)         i=$((i+2)); continue ;;
-        -y|--yolo|--plan)   ;;
+        -y|--yolo|--plan|--quiet) ;;
         *) echo "error: unknown option '${args[$i]}'" >&2; exit 1 ;;
     esac
     i=$((i+1))
@@ -201,6 +201,29 @@ test_kimi_dispatch_wires_model() {
         test_pass
     else
         test_fail "kimi arm should encode the resolved model before passing it to the shim"
+    fi
+}
+
+test_kimi_rejects_read_only_roles() {
+    test_case "Kimi dispatch rejects read-only roles but permits implementation"
+    local review_rc=0 research_rc=0 implementation_cmd=""
+    (
+        get_agent_model() { printf '%s\n' default; }
+        get_agent_command kimi review code-reviewer 10 >/dev/null 2>&1
+    ) || review_rc=$?
+    (
+        get_agent_model() { printf '%s\n' default; }
+        get_agent_command kimi-research probe researcher 10 >/dev/null 2>&1
+    ) || research_rc=$?
+    implementation_cmd="$({
+        get_agent_model() { printf '%s\n' default; }
+        get_agent_command kimi tangle implementer 10
+    } 2>/dev/null)"
+    if [[ "$review_rc" -ne 0 && "$research_rc" -ne 0 && \
+          "$implementation_cmd" == *"scripts/helpers/kimi-exec.sh"* ]]; then
+        test_pass
+    else
+        test_fail "expected read-only rejection and implementation command, got review=$review_rc research=$research_rc implementation='$implementation_cmd'"
     fi
 }
 
@@ -1774,6 +1797,22 @@ test_kimi_exit_propagation() {
     fi
 }
 
+test_kimi_direct_env_isolation() {
+    test_case "kimi_execute removes unrelated parent secrets by default"
+    local tmp_bin old_path output rc=0
+    tmp_bin="$TEST_TMP_DIR/kimi-bin-direct-env"
+    _kimi_mock_bin "$tmp_bin" 'printf "%s\n" "${UNRELATED_KIMI_SECRET-unset}"'
+    old_path="$PATH"; PATH="$tmp_bin:$PATH"
+    source "$PROJECT_ROOT/scripts/lib/kimi.sh" 2>/dev/null || true
+    output="$(UNRELATED_KIMI_SECRET=must-not-cross kimi_execute kimi "probe" 2>/dev/null)" || rc=$?
+    PATH="$old_path"
+    if [[ "$rc" -eq 0 && "$output" == "unset" ]]; then
+        test_pass
+    else
+        test_fail "expected isolated direct execution, got rc=$rc output='$output'"
+    fi
+}
+
 test_kimi_stderr_auth_classification() {
     test_case "kimi_execute classifies stderr-only auth failures"
     local tmp_bin old_path output rc=0
@@ -1837,7 +1876,7 @@ command() {
     fi
     builtin command "$@"
 }
-OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
+OCTOPUS_ALLOW_FULL_KIMI_ENV=true OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
 EOF
     chmod +x "$harness"
 
@@ -1898,7 +1937,7 @@ command() {
 trap 'printf "TERM\n" >> "$TRAP_HITS"' TERM
 trap -p TERM > "$TRAP_BEFORE"
 set +e
-OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
+OCTOPUS_ALLOW_FULL_KIMI_ENV=true OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
 rc=$?
 set -e
 trap -p TERM > "$TRAP_AFTER"
@@ -1988,7 +2027,7 @@ rm -f "$FAKE_TIMEOUT_USED"
     done
     [[ -s "$KIMI_STARTED" ]] && kill -"$SIGNAL_NAME" "$$"
 ) &
-OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
+OCTOPUS_ALLOW_FULL_KIMI_ENV=true OCTOPUS_KIMI_TIMEOUT=30 kimi_execute kimi "probe" >/dev/null 2>&1
 EOF
             chmod +x "$harness"
 
@@ -2045,7 +2084,7 @@ test_kimi_portable_timeout() {
 
     started_ms="$("$KIMI_TEST_NODE" -e 'process.stdout.write(String(process.hrtime.bigint() / 1000000n))')"
     rc=0
-    OCTOPUS_KIMI_TIMEOUT=1 kimi_execute kimi "probe" >/dev/null 2>&1 || rc=$?
+    OCTOPUS_ALLOW_FULL_KIMI_ENV=true OCTOPUS_KIMI_TIMEOUT=1 kimi_execute kimi "probe" >/dev/null 2>&1 || rc=$?
     elapsed_ms=$(( $("$KIMI_TEST_NODE" -e 'process.stdout.write(String(process.hrtime.bigint() / 1000000n))') - started_ms ))
 
     unset -f command
@@ -2372,6 +2411,7 @@ test_kimi_configured_provider_resolution() {
 
 test_kimi_dispatch_shim
 test_kimi_dispatch_wires_model
+test_kimi_rejects_read_only_roles
 test_kimi_env_isolation
 test_kimi_config_credentials
 test_kimi_native_runtime_config_bridge
@@ -2409,6 +2449,7 @@ test_kimi_config_runtime_model
 test_kimi_default_no_model
 test_kimi_shim_requires_prompt
 test_kimi_exit_propagation
+test_kimi_direct_env_isolation
 test_kimi_stderr_auth_classification
 test_kimi_success_stderr_is_not_response
 test_kimi_interruption_cleans_private_captures

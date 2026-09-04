@@ -7,62 +7,58 @@ test_suite "Caller process-group preservation"
 log() { :; }
 source "$PROJECT_ROOT/scripts/lib/heartbeat.sh"
 
-timeout_bin=""
-if command -v gtimeout >/dev/null 2>&1; then
-    timeout_bin=gtimeout
-elif command -v timeout >/dev/null 2>&1; then
-    timeout_bin=timeout
-fi
-
-test_case "run_with_timeout preserves caller process group when requested"
-if [[ -n "$timeout_bin" ]]; then
-    parent_pgid="$(ps -o pgid= -p $$ | tr -d ' ')"
-    child_pgid="$(OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP=true run_with_timeout 5 sh -c 'ps -o pgid= -p $$ | tr -d " "')"
-    if [[ "$child_pgid" == "$parent_pgid" ]]; then
-        test_pass
-    else
-        test_fail "expected child PGID $parent_pgid, got $child_pgid"
-    fi
+test_case "preserve mode isolates the provider from the caller process group"
+parent_pgid="$(ps -o pgid= -p $$ | tr -d ' ')"
+child_pgid="$(OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP=true run_with_timeout 5 sh -c 'ps -o pgid= -p $$ | tr -d " "')"
+if [[ -n "$child_pgid" && "$child_pgid" != "$parent_pgid" ]]; then
+    test_pass
 else
-    test_skip "GNU timeout/gtimeout not available on this platform"
+    test_fail "provider was not isolated from caller PGID $parent_pgid: child=$child_pgid"
 fi
 
 test_case "preserve mode cleans up timed-out descendants"
-if [[ -n "$timeout_bin" ]]; then
-    tmpdir="$TEST_TMP_DIR/preserve-timeout"
-    mkdir -p "$tmpdir"
-    pidfile="$tmpdir/child.pid"
-    if (
-        export "OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP=true"
-        run_with_timeout 1 sh -c 'sleep 30 & echo "$!" > "$1"; wait' sh "$pidfile" >/dev/null 2>&1
-    ); then
-        status=0
-    else
-        status=$?
-    fi
-    child_pid="$(cat "$pidfile" 2>/dev/null || true)"
-    sleep 0.3
-    child_stat="$(ps -o stat= -p "$child_pid" 2>/dev/null | tr -d "[:space:]" || true)"
-    if [[ -n "$child_stat" && "$child_stat" != Z* ]]; then
-        kill -KILL "$child_pid" 2>/dev/null || true
-        test_fail "descendant survived preserve-mode timeout: $child_pid (stat=$child_stat)"
-    elif [[ "$status" -eq 124 || "$status" -eq 143 || "$status" -eq 137 ]]; then
-        test_pass
-    else
-        test_fail "unexpected timeout status: $status"
-    fi
+tmpdir="$TEST_TMP_DIR/preserve-timeout"
+mkdir -p "$tmpdir"
+pidfile="$tmpdir/child.pid"
+if (
+    export "OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP=true"
+    run_with_timeout 1 sh -c 'sleep 30 & echo "$!" > "$1"; wait' sh "$pidfile" >/dev/null 2>&1
+); then
+    status=0
 else
-    test_skip "GNU timeout/gtimeout not available on this platform"
+    status=$?
 fi
-
-test_case "production and tests prefer gtimeout before timeout"
-if grep -q '_run_with_timeout_preserving_process_group gtimeout' "$PROJECT_ROOT/scripts/lib/heartbeat.sh" \
-   && grep -q '_run_with_timeout_preserving_process_group timeout' "$PROJECT_ROOT/scripts/lib/heartbeat.sh" \
-   && grep -q 'command -v gtimeout' "$0" \
-   && grep -q 'command -v timeout' "$0"; then
+child_pid="$(cat "$pidfile" 2>/dev/null || true)"
+sleep 0.3
+child_stat="$(ps -o stat= -p "$child_pid" 2>/dev/null | tr -d "[:space:]" || true)"
+if [[ -n "$child_stat" && "$child_stat" != Z* ]]; then
+    kill -KILL "$child_pid" 2>/dev/null || true
+    test_fail "descendant survived preserve-mode timeout: $child_pid (stat=$child_stat)"
+elif [[ "$status" -eq 124 ]]; then
     test_pass
 else
-    test_fail "gtimeout/timeout preserve-mode paths are not covered"
+    test_fail "unexpected timeout status: $status"
+fi
+
+test_case "preserve mode never delegates containment to GNU timeout"
+fake_bin="$TEST_TMP_DIR/fake-timeout-bin"
+timeout_marker="$TEST_TMP_DIR/system-timeout-used"
+mkdir -p "$fake_bin"
+for timeout_name in gtimeout timeout; do
+    cat > "$fake_bin/$timeout_name" <<'SH'
+#!/bin/sh
+: > "$OCTO_TIMEOUT_MARKER"
+exit 99
+SH
+    chmod +x "$fake_bin/$timeout_name"
+done
+if PATH="$fake_bin:$PATH" OCTO_TIMEOUT_MARKER="$timeout_marker" \
+   OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP=true \
+   run_with_timeout 5 sh -c 'exit 0' >/dev/null 2>&1 && \
+   [[ ! -e "$timeout_marker" ]]; then
+    test_pass
+else
+    test_fail "preserve mode invoked an external timeout implementation"
 fi
 
 test_summary

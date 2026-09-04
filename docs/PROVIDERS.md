@@ -44,15 +44,26 @@ Kimi Code exercises all seven wiring points: `kimi` identity/runtime rows in
 model alias resolution through `OCTOPUS_KIMI_MODEL`; an isolated environment
 that preserves `KIMI_CODE_HOME` and the documented `KIMI_MODEL_*` override
 family; config-aware detection and health checks; and
-real sync/background dispatch regressions. Its readiness contract follows
-`default_model` in `$KIMI_CODE_HOME/config.toml` (default
-`~/.kimi-code/config.toml`). It resolves that model's provider in Kimi's order:
-the model's `provider_id`, the model's `provider`, then top-level
-`default_provider`. Models without a provider can instead define a flat
-`base_url` and `protocol`. Model-level `api_key` or OAuth takes precedence over
-provider-level `api_key`, provider-local `env` credentials, or OAuth. A
-complete `KIMI_MODEL_NAME` plus `KIMI_MODEL_API_KEY` override is also accepted.
-Bare `KIMI_API_KEY` in the parent shell is not Kimi Code authentication.
+real sync/background dispatch regressions. Its readiness contract uses the
+explicit `OCTOPUS_KIMI_MODEL` alias when set, or `default_model` from
+`$KIMI_CODE_HOME/config.toml` (default `~/.kimi-code/config.toml`) otherwise.
+The selected name must resolve to a complete model alias in Kimi's model table.
+It resolves that model's provider in Kimi's order: the model's `provider_id`,
+the model's `provider`, then top-level `default_provider`. Models without a
+provider can instead define a flat `base_url` and `protocol`. Model-level
+`api_key` or OAuth takes precedence over provider-level `api_key`,
+provider-local `env` credentials, or OAuth. A complete `KIMI_MODEL_NAME` plus
+`KIMI_MODEL_API_KEY` override is also accepted. Bare `KIMI_API_KEY` in the
+parent shell is not Kimi Code authentication.
+
+Current Kimi Code print mode is non-interactive and auto-approves tool calls;
+the CLI does not expose a tool permission allowlist. Octopus therefore admits
+Kimi only for write-capable implementation roles and rejects it for research,
+review, and other read-only roles. Use a provider with an enforceable sandbox
+for those seats. Direct `kimi_execute` calls use the same environment allowlist
+as normal dispatch unless `OCTOPUS_ALLOW_FULL_KIMI_ENV=true` is explicitly set.
+The integration uses the current `--quiet` headless contract; update Kimi Code
+if that option is unavailable.
 
 Readiness validates the complete TOML document with Kimi Code's own runtime and
 built-in `doctor` command, then uses `provider list --json` for provider and

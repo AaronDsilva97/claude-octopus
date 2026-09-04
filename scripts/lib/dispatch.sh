@@ -182,6 +182,23 @@ octo_dispatch_command_model() {
     printf '%s\n' "${resolved:-$fallback}"
 }
 
+# Role-based tool policy is needed during command construction, including when
+# dispatch.sh is sourced without the monolithic orchestrator.
+get_tool_policy() {
+    local role="${1:-}"
+    case "$role" in
+        researcher|ai-engineer|business-analyst|research-synthesizer|ux-researcher)
+            echo "read_search" ;;
+        implementer|tdd-orchestrator|debugger|python-pro|typescript-pro|frontend-developer)
+            echo "full" ;;
+        code-reviewer|security-auditor|performance-engineer|test-automator)
+            echo "read_exec" ;;
+        synthesizer|orchestrator|context-manager|docs-architect|exec-communicator|academic-writer|product-writer)
+            echo "read_communicate" ;;
+        *) echo "full" ;;
+    esac
+}
+
 get_agent_command() {
     local agent_type="$1"
     local phase="${2:-}"
@@ -511,6 +528,16 @@ get_agent_command() {
             fi
             ;;
         kimi|kimi-research)  # Moonshot Kimi Code CLI — headless single-turn via helpers/kimi-exec.sh
+            # Kimi's non-interactive print mode auto-approves tool calls and has
+            # no CLI permission allowlist. Prompt-only tool policies therefore
+            # cannot make a review or research seat read-only.
+            local kimi_persona_role="${role:-}"
+            [[ -z "$kimi_persona_role" ]] || kimi_persona_role="$(octo_persona_role "$kimi_persona_role")"
+            if [[ "$agent_type" == "kimi-research" || "$phase" == "review" ]] || \
+               { [[ -n "$kimi_persona_role" ]] && [[ "$(get_tool_policy "$kimi_persona_role")" != "full" ]]; }; then
+                log ERROR "Kimi Code cannot enforce a read-only tool policy; choose a sandboxed provider for role '${role:-unknown}'"
+                return 1
+            fi
             # Model wiring mirrors grok: get_agent_model reads providers.json +
             # OCTOPUS_KIMI_MODEL. Kimi aliases may contain whitespace, while all
             # command consumers split this legacy command string into argv. Hex

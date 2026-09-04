@@ -810,28 +810,6 @@ _PROVIDER_CONFIG_MIGRATED="${_PROVIDER_CONFIG_MIGRATED:-false}"
 # Role-based tool access restrictions enforced via prompt injection.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-get_tool_policy() {
-    local role="$1"
-
-    case "$role" in
-        researcher|ai-engineer|business-analyst|research-synthesizer|ux-researcher)
-            echo "read_search"
-            ;;
-        implementer|tdd-orchestrator|debugger|python-pro|typescript-pro|frontend-developer)
-            echo "full"
-            ;;
-        code-reviewer|security-auditor|performance-engineer|test-automator)
-            echo "read_exec"
-            ;;
-        synthesizer|orchestrator|context-manager|docs-architect|exec-communicator|academic-writer|product-writer)
-            echo "read_communicate"
-            ;;
-        *)
-            echo "full"
-            ;;
-    esac
-}
-
 # [EXTRACTED to lib/dispatch.sh in v9.7.7]
 
 # ═══════════════════════════════════════════════════════════════════════════════

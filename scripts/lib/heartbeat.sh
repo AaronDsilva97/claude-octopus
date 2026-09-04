@@ -134,118 +134,6 @@ cleanup_heartbeat() {
 }
 
 
-# Run an external command under GNU timeout while preserving the caller process
-# group. timeout --foreground intentionally stops managing a separate command
-# process group, so this wrapper owns descendant cleanup on TERM/INT/HUP without
-# ever signalling the caller's PGID.
-_run_with_timeout_preserving_process_group() {
-    local timeout_bin="$1"
-    local timeout_secs="$2"
-    shift 2
-
-    "$timeout_bin" --foreground "$timeout_secs" bash -c '
-        set +e
-        _octo_collect_descendants() {
-            local parent="$1" child
-            while IFS= read -r child; do
-                child="${child//[[:space:]]/}"
-                [[ -n "$child" ]] || continue
-                _octo_collect_descendants "$child"
-                _octo_descendants+=("$child")
-            done < <(ps -eo pid=,ppid= | while read -r pid ppid; do [[ "$ppid" == "$parent" ]] && echo "$pid"; done)
-        }
-        _octo_cleanup_descendants() {
-            _octo_descendants=()
-            _octo_collect_descendants "$child_pid"
-            if ((${#_octo_descendants[@]})); then
-                kill -TERM "${_octo_descendants[@]}" 2>/dev/null || true
-            fi
-            kill -TERM "$child_pid" 2>/dev/null || true
-
-            # Match timeout -k 10 semantics: give the provider subtree the full
-            # 10-second TERM grace period before escalating remaining processes.
-            _octo_grace_deadline=$((SECONDS + 10))
-            while (( SECONDS < _octo_grace_deadline )); do
-                _octo_any_alive=false
-                kill -0 "$child_pid" 2>/dev/null && _octo_any_alive=true
-                for _octo_pid in "${_octo_descendants[@]}"; do
-                    if kill -0 "$_octo_pid" 2>/dev/null; then
-                        _octo_any_alive=true
-                        break
-                    fi
-                done
-                [[ "$_octo_any_alive" == "false" ]] && break
-                sleep 0.1
-            done
-
-            _octo_descendants=()
-            _octo_collect_descendants "$child_pid"
-            if ((${#_octo_descendants[@]})); then
-                kill -KILL "${_octo_descendants[@]}" 2>/dev/null || true
-            fi
-            kill -KILL "$child_pid" 2>/dev/null || true
-            wait "$child_pid" 2>/dev/null || true
-        }
-        _octo_on_signal() {
-            trap - TERM INT HUP
-            _octo_cleanup_descendants
-            exit 143
-        }
-        trap _octo_on_signal TERM INT HUP
-        "$@" <&0 &
-        child_pid=$!
-        wait "$child_pid"
-        status=$?
-        trap - TERM INT HUP
-        exit "$status"
-    ' bash "$@"
-}
-
-# Snapshot a process tree before signalling it. A parent can exit and reparent
-# its descendants immediately after TERM, so discovering children after the
-# root is gone is too late for reliable cleanup.
-_octo_timeout_process_tree_depth_first() {
-    local root_pid="$1" include_without_metadata="${2:-false}" child_pid process_started
-    while IFS= read -r child_pid; do
-        child_pid="${child_pid//[[:space:]]/}"
-        [[ "$child_pid" =~ ^[1-9][0-9]*$ ]] || continue
-        _octo_timeout_process_tree_depth_first "$child_pid" false
-    done < <(ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$root_pid" '$2 == parent { print $1 }')
-    # The direct root PID comes from `$!`, so it remains actionable even when a
-    # restricted harness denies process enumeration. Start metadata is an
-    # additional PID-reuse guard when available, not a prerequisite to signal
-    # the process we just launched. Descendants remain metadata-gated.
-    if process_started="$(ps -o lstart= -p "$root_pid" 2>/dev/null)" && [[ -n "$process_started" ]]; then
-        printf '%s\t%s\n' "$root_pid" "$process_started"
-    elif [[ "$include_without_metadata" == "true" ]]; then
-        printf '%s\t\n' "$root_pid"
-    fi
-}
-
-_octo_timeout_pid_is_running() {
-    local pid="$1" expected_started="${2:-}" process_stat process_started
-    kill -0 "$pid" 2>/dev/null || return 1
-    if process_stat="$(ps -o stat= -p "$pid" 2>/dev/null)"; then
-        [[ "$process_stat" != *Z* ]] || return 1
-    elif [[ -n "$expected_started" ]]; then
-        # If a snapshot had start metadata, never signal without proving that
-        # the PID still identifies the same process.
-        return 1
-    fi
-    [[ -z "$expected_started" ]] && return 0
-    process_started="$(ps -o lstart= -p "$pid" 2>/dev/null)" || return 1
-    [[ "$process_started" == "$expected_started" ]]
-}
-
-_octo_timeout_signal_snapshot() {
-    local signal_name="$1" process_tree="$2" target_pid process_started
-    while IFS=$'\t' read -r target_pid process_started; do
-        [[ "$target_pid" =~ ^[1-9][0-9]*$ && "$target_pid" != "1" ]] || continue
-        _octo_timeout_pid_is_running "$target_pid" "$process_started" || continue
-        kill -"$signal_name" "$target_pid" 2>/dev/null || true
-    done <<< "$process_tree"
-}
-
 _octo_timeout_signal_status() {
     case "$1" in
         HUP)  printf '%s\n' 129 ;;
@@ -293,23 +181,24 @@ _octo_timeout_job_is_running() {
 
 _octo_timeout_stop_process_group() {
     local process_group="$1" initial_signal="$2" allow_term_grace="$3"
-    local grace_deadline
+    local grace_deadline kill_grace="${OCTOPUS_TIMEOUT_KILL_GRACE:-10}"
     [[ "$process_group" =~ ^[1-9][0-9]*$ && "$process_group" != "1" ]] || return 0
+    [[ "$kill_grace" =~ ^[0-9]+$ && "$kill_grace" -le 10 ]] || kill_grace=10
 
     kill -"$initial_signal" -- "-$process_group" 2>/dev/null || true
-    if [[ "$allow_term_grace" == "true" ]]; then
+    if [[ "$allow_term_grace" == "true" && "$kill_grace" -gt 0 ]]; then
         # Match timeout -k 10: allow the provider group ten seconds to perform
         # normal TERM cleanup before forcing out resistant descendants.
         # Bound the grace by Bash's built-in wall clock. Counting external sleep
         # processes can stretch a nominal ten-second grace on a busy macOS runner.
-        grace_deadline=$((SECONDS + 10))
+        grace_deadline=$((SECONDS + kill_grace))
         while (( SECONDS < grace_deadline )); do
             _octo_timeout_process_group_exists "$process_group" || break
             sleep 0.1
         done
     else
         # An interrupted caller is already unwinding. Give ordinary handlers a
-        # scheduling turn, then guarantee that no provider descendant survives.
+        # scheduling turn, then force out the remaining provider process group.
         sleep 0.1
     fi
     kill -KILL -- "-$process_group" 2>/dev/null || true
@@ -364,7 +253,17 @@ _octo_timeout_supervisor() {
     # PPID is the supervisor's real PID even in Bash 3.2 subshells.
     /bin/sh -c 'sleep "$1"; kill -USR1 "$PPID"' octo-timer "$timeout_secs" &
     timer_pid=$!
+    # The jobs retain their private groups after monitor mode is disabled, and
+    # Bash no longer prints asynchronous "Done" notices into provider output.
+    set +m
 
+    # Keep the process-group leader as an unreaped child until the command job
+    # finishes. This lets us terminate any background descendants under the
+    # still-owned PGID before wait releases that identity for reuse.
+    while _octo_timeout_job_is_running "$provider_pid"; do
+        /bin/sleep 0.02
+    done
+    kill -KILL -- "-$provider_pid" 2>/dev/null || true
     if wait "$provider_pid" 2>/dev/null; then
         provider_status=0
     else
@@ -412,6 +311,13 @@ run_with_timeout() {
     local timeout_secs="$1"
     shift
 
+    # Preserving the caller's process group requires our private-process-group
+    # supervisor. GNU timeout --foreground does not provide containment, and a
+    # process-table reconstruction is both racy and capable of delaying cleanup.
+    if [[ "${OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP:-false}" == "true" ]]; then
+        force_portable_supervisor=true
+    fi
+
     local exit_code
     local _octo_cmd_label="${1:-unknown}"
 
@@ -448,19 +354,11 @@ run_with_timeout() {
     # qwen probe hung ~10min instead of dying at the per-agent cap.
     if [[ "$force_portable_supervisor" == "false" && "$_cmd_is_function" == "false" ]] &&
        command -v gtimeout &>/dev/null; then
-        if [[ "${OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP:-false}" == "true" ]]; then
-            _run_with_timeout_preserving_process_group gtimeout "$timeout_secs" "$@"
-        else
-            gtimeout -k 10 "$timeout_secs" "$@"
-        fi
+        gtimeout -k 10 "$timeout_secs" "$@"
         exit_code=$?
     elif [[ "$force_portable_supervisor" == "false" && "$_cmd_is_function" == "false" ]] &&
          command -v timeout &>/dev/null; then
-        if [[ "${OCTOPUS_PRESERVE_CALLER_PROCESS_GROUP:-false}" == "true" ]]; then
-            _run_with_timeout_preserving_process_group timeout "$timeout_secs" "$@"
-        else
-            timeout -k 10 "$timeout_secs" "$@"
-        fi
+        timeout -k 10 "$timeout_secs" "$@"
         exit_code=$?
     else
         # The Bash 3.2 fallback runs a supervisor asynchronously so this shell

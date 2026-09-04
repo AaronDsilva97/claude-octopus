@@ -4,10 +4,8 @@
 # stdin and re-pass it. Model via OCTOPUS_KIMI_MODEL (default: kimi's own default
 # from ~/.kimi-code/config.toml).
 #
-# Do NOT add --auto here: kimi rejects it outright with
-#   error: Cannot combine --prompt with --auto.
-# -p is already a single-turn non-interactive run, so there is no prompt to
-# auto-approve.
+# Current Kimi Code requires --print for non-interactive output and auto-approves
+# tools in that mode. dispatch.sh therefore rejects Kimi for read-only roles.
 set -euo pipefail
 
 _kimi_exec_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,7 +38,7 @@ elif [[ "${OCTOPUS_KIMI_MODEL+x}" == x ]]; then
 else
     model="default"
 fi
-cmd=(kimi -p "$prompt" --output-format text)
+cmd=(kimi -p "$prompt" --quiet)
 if [[ -n "$model" && "$model" != "default" ]]; then
     cmd+=(--model "$model")
 fi

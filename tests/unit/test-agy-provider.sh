@@ -1028,7 +1028,7 @@ test_agy_doctor_catalog_timeout_is_bounded() {
     local timeout_upper_ms=$((probe_timeout_secs * 1000 + 14000))
     local output="" started_ms elapsed_ms doctor_rc=0
     local parent_pid="" child_pid="" parent_alive="no" child_alive="no"
-    local timeout_runner="" timeout_runner_path="" expected_timeout_rc=0
+    local timeout_runner="" timeout_runner_path="" expected_timeout_rc=124
     local poll_attempt=0
     mkdir -p "$tmp_bin" "$tmp_home"
     cat > "$tmp_bin/agy" <<'MOCK_AGY'
@@ -1061,25 +1061,18 @@ _octo_run_bare_probe_with_timeout() {
 }
 UNBOUNDED_BASH_ENV
 
-    # The fixture PATH selects GNU timeout on Ubuntu and the Perl fallback on
-    # macOS. Measure an external runner's hard-kill status instead of assuming
-    # that every timeout implementation reports it alike.
+    # Record the available launcher for diagnostics. The shared bounded-probe
+    # contract normalizes every watchdog timeout to 124 on all platforms.
     if timeout_runner_path="$(PATH="$doctor_path" command -v gtimeout 2>/dev/null)"; then
         timeout_runner="gtimeout:$timeout_runner_path"
     elif timeout_runner_path="$(PATH="$doctor_path" command -v timeout 2>/dev/null)"; then
         timeout_runner="timeout:$timeout_runner_path"
     elif PATH="$doctor_path" command -v setsid >/dev/null 2>&1; then
         timeout_runner="portable-setsid"
-        expected_timeout_rc=137
     elif PATH="$doctor_path" command -v perl >/dev/null 2>&1; then
         timeout_runner="portable-perl"
-        expected_timeout_rc=137
     else
         timeout_runner="unavailable"
-    fi
-    if [[ -n "$timeout_runner_path" ]]; then
-        /bin/bash -c '"$1" -s KILL 1 /bin/sleep 20 >/dev/null 2>&1' \
-            _ "$timeout_runner_path" >/dev/null 2>&1 || expected_timeout_rc=$?
     fi
 
     started_ms="$(python3 -c 'import time; print(int(time.monotonic() * 1000))')"
@@ -1124,7 +1117,7 @@ UNBOUNDED_BASH_ENV
     if [[ "$doctor_rc" -eq 0 && -e "$started_marker" && ! -e "$completed_marker" && \
           -n "$parent_pid" && -n "$child_pid" && \
           "$parent_alive" == "no" && "$child_alive" == "no" && \
-          ( "$expected_timeout_rc" -eq 124 || "$expected_timeout_rc" -eq 137 ) && \
+          "$expected_timeout_rc" -eq 124 && \
           "$elapsed_ms" -lt "$timeout_upper_ms" ]] && \
        jq -e --arg timeout_exit "exit $expected_timeout_rc" '
            .summary.exit_code == 0 and
@@ -1440,7 +1433,7 @@ test_agy_slash_command_visibility() {
        grep -q 'Antigravity CLI' "$PROJECT_ROOT/.claude/skills/skill-debate/SKILL.md" && \
        grep -q 'Antigravity CLI' "$PROJECT_ROOT/docs/COMMAND-REFERENCE.md" && \
        grep -q 'Antigravity CLI' "$PROJECT_ROOT/SECURITY.md" && \
-       grep -q 'up to 10 external AI integrations' "$PROJECT_ROOT/PRODUCT.md" && \
+       grep -q 'up to 11 external AI integrations' "$PROJECT_ROOT/PRODUCT.md" && \
        grep -q 'Four providers can cost nothing extra' "$PROJECT_ROOT/PRODUCT.md" && \
        grep -q 'codex agy' "$PROJECT_ROOT/tests/test-fleet-diversity.sh" && \
        grep -q 'codex, agy' "$PROJECT_ROOT/tests/unit/test-research-fanout-static.sh"; then

@@ -4,10 +4,9 @@
 # (orchestrate.sh already sets `set -eo pipefail`).
 # Auth: selected-provider credentials in $KIMI_CODE_HOME/config.toml (default
 # ~/.kimi-code/config.toml), including file-backed OAuth from `kimi login`.
-# Headless: kimi -p "<prompt>" --output-format text  (single-turn, prints+exits).
-# NB: --auto is mutually exclusive with -p ("Cannot combine --prompt with --auto").
-# Config errors (no model / unknown alias) exit 1, so the exit-code check below
-# is the whole contract — no stdout scanning needed. Verified on Kimi Code 0.40.1.
+# Headless: current Kimi Code uses -p with --quiet. Quiet mode implies print
+# mode, text output, and final-message-only output. It auto-approves tool calls,
+# so routing must limit this provider to write-capable roles.
 
 _kimi_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${_kimi_lib_dir}/bounded-probe.sh" 2>/dev/null || true
@@ -194,8 +193,19 @@ kimi_execute(){
     command -v kimi &>/dev/null || { _kimi_log ERROR "kimi: CLI not found"; return 1; }
     local timeout="${OCTOPUS_KIMI_TIMEOUT:-150}"
     local model="${OCTOPUS_KIMI_MODEL:-default}"
-    local -a cmd=(kimi -p "$prompt" --output-format text)
+    local -a cmd=(kimi -p "$prompt" --quiet)
+    local -a execution_cmd
+    declare -f octopus_build_kimi_provider_env >/dev/null 2>&1 || {
+        _kimi_log ERROR "kimi: environment isolation unavailable"
+        return 1
+    }
+    octopus_build_kimi_provider_env
     [[ -n "$model" && "$model" != "default" ]] && cmd+=(--model "$model")
+    if [[ ${#KIMI_PROVIDER_ENV_ARRAY[@]} -gt 0 ]]; then
+        execution_cmd=("${KIMI_PROVIDER_ENV_ARRAY[@]}" "${cmd[@]}")
+    else
+        execution_cmd=("${cmd[@]}")
+    fi
     # Normal dispatch is already bounded by spawn.sh. Direct callers can source
     # kimi.sh on its own, so load that same portable watchdog on demand rather
     # than maintaining a second provider-specific timeout implementation.
@@ -245,7 +255,7 @@ kimi_execute(){
     # Kimi owns private capture files, so its shell must remain able to process
     # INT/TERM while the provider is running. The asynchronous supervisor keeps
     # that contract even on hosts where GNU timeout is installed.
-    run_with_timeout --portable-supervisor "$timeout" "${cmd[@]}" >"$response_file" 2>"$error_file" && exit_code=0 || exit_code=$?
+    run_with_timeout --portable-supervisor "$timeout" "${execution_cmd[@]}" >"$response_file" 2>"$error_file" && exit_code=0 || exit_code=$?
     if [[ "$_kimi_interrupted_status" -ne 0 ]]; then
         _kimi_cleanup_captures
         _kimi_restore_execute_traps "$_kimi_previous_int_trap" "$_kimi_previous_term_trap" "$_kimi_previous_hup_trap"
