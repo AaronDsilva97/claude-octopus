@@ -122,17 +122,18 @@ else
 fi
 
 test_case "fleet rejects an installed but unauthenticated Codex seat"
+unauth_status=0
 unauth_fleet=$(
     env \
         "HOME=$FAKE_HOME" \
         "PATH=$FAKE_BIN:/usr/bin:/bin" \
         "OCTO_ALLOWED_PROVIDERS=codex" \
         "$BUILD_FLEET" review standard fixture 2>/dev/null
-)
-if ! grep -q '^codex|' <<<"$unauth_fleet"; then
+) || unauth_status=$?
+if [[ "$unauth_status" -eq 1 ]] && ! grep -q '^codex|' <<<"$unauth_fleet"; then
     test_pass
 else
-    test_fail "fleet bypassed the banner auth gate: $unauth_fleet"
+    test_fail "fleet auth gate returned status $unauth_status and output: $unauth_fleet"
 fi
 
 mkdir -p "$FAKE_HOME/.codex"
