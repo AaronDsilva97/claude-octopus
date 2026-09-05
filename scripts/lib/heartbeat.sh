@@ -340,6 +340,9 @@ _octo_timeout_normalize_seconds() {
     while [[ "${#value}" -gt 1 && "${value#0}" != "$value" ]]; do
         value="${value#0}"
     done
+    # Equal-length normalized decimal strings compare by magnitude lexically;
+    # arithmetic here could overflow on the Bash 3.2 platforms this guards.
+    # shellcheck disable=SC2071
     if [[ "${#value}" -gt "${#max_seconds}" ]] ||
        { [[ "${#value}" -eq "${#max_seconds}" ]] && [[ "$value" > "$max_seconds" ]]; }; then
         return 1
